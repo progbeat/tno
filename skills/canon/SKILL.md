@@ -15,8 +15,7 @@ Before editing, reviewing, or refactoring a file:
 2. Use repository-relative paths as canon keys; they are shorter and stable
    across machines.
 3. Run `canon r <relative-path>` for each file.
-4. Treat "canon not found" as no prior constraints.
-5. If canon conflicts with the user request or current code, surface the conflict
+4. If canon conflicts with the user request or current code, surface the conflict
    before editing.
 
 Do this before applying patches or running formatters that rewrite files.
