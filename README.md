@@ -1,5 +1,8 @@
 # canon
 
+[![CI](https://github.com/progbeat/canon/actions/workflows/ci.yml/badge.svg)](https://github.com/progbeat/canon/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 `canon` (`Thread Canon`) is a Codex plugin/skill for preserving
 thread-scoped decisions and invariants during coding work.
 
