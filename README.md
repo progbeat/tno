@@ -40,13 +40,19 @@ When the Codex session file cannot be found, `canon` falls back to:
 ${CANON_HOME:-~/.canon}/codex/<CODEX_THREAD_ID>/
 ```
 
-## Install Runtime
+## Install
 
 ```sh
-cargo install --git https://github.com/progbeat/canon --root ~/.local --force
+curl -fsSL https://raw.githubusercontent.com/progbeat/canon/main/scripts/install.sh | sh
 ```
 
-This installs `canon` to `~/.local/bin/canon`.
+This installs:
+
+- the `canon` CLI to `~/.local/bin/canon`
+- the plugin bundle to `~/.codex/plugins/canon`
+- the skill to `~/.codex/skills/canon/SKILL.md`
+
+Restart Codex after installing so the skill list is refreshed.
 
 For local runtime development from a checkout:
 
@@ -54,11 +60,10 @@ For local runtime development from a checkout:
 cargo install --path . --root ~/.local --force
 ```
 
-For local skill development without plugin installation:
+For local plugin development from a checkout:
 
 ```sh
-mkdir -p ~/.codex/skills/canon
-cp skills/canon/SKILL.md ~/.codex/skills/canon/SKILL.md
+sh scripts/install.sh
 ```
 
 ## CLI Runtime
