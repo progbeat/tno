@@ -40,6 +40,12 @@ After a durable decision is accepted or discovered, append a short canon entry:
 canon a <relative-path> "<decision>"
 ```
 
+For multiline entries or text that is awkward to quote, pipe stdin:
+
+```sh
+printf '%s\n' "<decision>" | canon a <relative-path>
+```
+
 Use repository-relative file paths as keys for file-specific canon. Use `.` for
 general thread decisions that do not belong to one file. Use topic keys such as
 `decision:<topic>` only when a named topic is clearer than `.`.

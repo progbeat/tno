@@ -55,12 +55,12 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
         }
         "w" | "write" => {
             let key = require_key(&args, 1)?;
-            let text = collect_text(&args, 2)?;
+            let text = collect_text_or_stdin(&args, 2)?;
             write_note(&config, key, &text)?;
         }
         "a" | "append" => {
             let key = require_key(&args, 1)?;
-            let text = collect_text(&args, 2)?;
+            let text = collect_text_or_stdin(&args, 2)?;
             append_note(&config, key, &text)?;
         }
         "d" | "del" | "delete" | "rm" => {
@@ -179,14 +179,22 @@ fn arg_to_string(arg: &OsString) -> Result<String, String> {
 }
 
 fn collect_text(args: &[OsString], start: usize) -> Result<String, String> {
-    if args.len() <= start {
-        return Err("missing text".to_string());
-    }
     let mut parts = Vec::new();
     for arg in &args[start..] {
         parts.push(arg.to_str().ok_or("text must be valid UTF-8".to_string())?);
     }
     Ok(parts.join(" "))
+}
+
+fn collect_text_or_stdin(args: &[OsString], start: usize) -> Result<String, String> {
+    if args.len() > start {
+        return collect_text(args, start);
+    }
+    let mut text = String::new();
+    std::io::stdin()
+        .read_to_string(&mut text)
+        .map_err(|err| format!("failed to read stdin: {}", err))?;
+    Ok(text)
 }
 
 fn ensure_dir(path: &Path) -> Result<(), String> {
@@ -441,7 +449,7 @@ fn encode_60_bits(value: u64) -> String {
 fn print_help() {
     println!(
         "canon - thread-scoped decisions and invariants\n\n\
-Usage:\n  canon | canon pwd\n  canon p|path <key>\n  canon r|read <key>\n  canon w|write <key> <text>\n  canon a|append <key> <text>\n  canon d|del|delete|rm <key>\n  canon rg|g <pattern> [rg args...]\n"
+Usage:\n  canon | canon pwd\n  canon p|path <key>\n  canon r|read <key>\n  canon w|write <key> [text]\n  canon a|append <key> [text]\n  canon d|del|delete|rm <key>\n  canon rg|g <pattern> [rg args...]\n"
     );
 }
 

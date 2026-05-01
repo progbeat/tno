@@ -84,6 +84,12 @@ canon a src/lib.rs "Keep validation order."
 canon d src/lib.rs
 ```
 
+`write` and `append` also read from stdin when text is omitted:
+
+```sh
+printf '%s\n' "Keep validation order." | canon a src/lib.rs
+```
+
 Search canon using ripgrep:
 
 ```sh
