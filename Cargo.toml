@@ -1,0 +1,9 @@
+[package]
+name = "tno"
+version = "0.1.0"
+edition = "2021"
+description = "Thread-scoped markdown notes for coding agents"
+license = "MIT"
+repository = "https://github.com/progbeat/tno"
+
+[dependencies]
