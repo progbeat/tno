@@ -41,10 +41,16 @@ ${CANON_HOME:-~/.canon}/codex/<CODEX_THREAD_ID>/
 ## Install Runtime
 
 ```sh
-cargo install --path . --root ~/.local --force
+cargo install --git https://github.com/progbeat/canon --root ~/.local --force
 ```
 
 This installs `canon` to `~/.local/bin/canon`.
+
+For local runtime development from a checkout:
+
+```sh
+cargo install --path . --root ~/.local --force
+```
 
 For local skill development without plugin installation:
 
