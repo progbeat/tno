@@ -1,5 +1,5 @@
 ---
-name: thread-canon
+name: canon
 description: Use for coding edits/reviews to read canon before changes and record durable decisions/invariants.
 ---
 

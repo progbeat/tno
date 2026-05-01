@@ -6,7 +6,7 @@ thread-scoped decisions and invariants during coding work.
 The repo contains:
 
 - a Codex plugin manifest: `.codex-plugin/plugin.json`
-- a Codex skill: `skills/thread-canon/SKILL.md`
+- a Codex skill: `skills/canon/SKILL.md`
 - a small Rust CLI runtime: `canon`
 
 The skill teaches agents to read accepted context before editing files, search
@@ -49,8 +49,8 @@ This installs `canon` to `~/.local/bin/canon`.
 For local skill development without plugin installation:
 
 ```sh
-mkdir -p ~/.codex/skills/thread-canon
-cp skills/thread-canon/SKILL.md ~/.codex/skills/thread-canon/SKILL.md
+mkdir -p ~/.codex/skills/canon
+cp skills/canon/SKILL.md ~/.codex/skills/canon/SKILL.md
 ```
 
 ## CLI Runtime
