@@ -77,8 +77,10 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
             if first.starts_with('-') {
                 return Err(format!("unknown option: {}", first));
             }
-            let note = ensure_note(&config, &first)?;
-            println!("{}", note.path.display());
+            return Err(format!(
+                "unknown command: {} (use `canon p <key>` to print a note path)",
+                first
+            ));
         }
     }
 
@@ -439,7 +441,7 @@ fn encode_60_bits(value: u64) -> String {
 fn print_help() {
     println!(
         "canon - thread-scoped decisions and invariants\n\n\
-Usage:\n  canon | canon pwd\n  canon <key>\n  canon p|path <key>\n  canon r|read <key>\n  canon w|write <key> <text>\n  canon a|append <key> <text>\n  canon d|del|delete|rm <key>\n  canon rg|g <pattern> [rg args...]\n"
+Usage:\n  canon | canon pwd\n  canon p|path <key>\n  canon r|read <key>\n  canon w|write <key> <text>\n  canon a|append <key> <text>\n  canon d|del|delete|rm <key>\n  canon rg|g <pattern> [rg args...]\n"
     );
 }
 
@@ -494,7 +496,7 @@ mod tests {
 
     #[test]
     fn hash_is_ten_base64url_chars() {
-        let hash = hash_key("swap/src/swap/main.py");
+        let hash = hash_key("src/lib.rs");
         assert_eq!(hash.len(), 10);
         assert!(hash
             .chars()
@@ -593,6 +595,7 @@ mod tests {
             run(vec!["read".into(), "file.rs".into()]).unwrap();
             run(vec!["d".into(), "file.rs".into()]).unwrap();
             assert!(run(vec!["-r".into()]).is_err());
+            assert!(run(vec!["file.rs".into()]).is_err());
         });
     }
 }

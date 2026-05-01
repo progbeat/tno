@@ -65,17 +65,17 @@ canon pwd
 Get or create the canon file path for a key:
 
 ```sh
-canon swap/src/swap/main.py
-canon p swap/src/swap/main.py
+canon p src/lib.rs
+canon path src/lib.rs
 ```
 
 Read, write, append, delete:
 
 ```sh
-canon r swap/src/swap/main.py
-canon w swap/src/swap/main.py "Current known constraints."
-canon a swap/src/swap/main.py "Keep validation order."
-canon d swap/src/swap/main.py
+canon r src/lib.rs
+canon w src/lib.rs "Current known constraints."
+canon a src/lib.rs "Keep validation order."
+canon d src/lib.rs
 ```
 
 Search canon using ripgrep:
