@@ -20,8 +20,6 @@ Before editing, reviewing, or refactoring a file:
    before editing.
 
 Do this before applying patches or running formatters that rewrite files.
-If `canon` is unavailable or fails unexpectedly, say so briefly and continue
-without canon unless the user asks you to stop.
 
 ## Searching Canon
 
