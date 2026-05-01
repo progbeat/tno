@@ -49,7 +49,7 @@ Record only durable context:
 - user decisions
 - invariants and constraints
 - non-obvious tradeoffs
-- pitfalls that could cause a wrong future edit
+- pitfalls that could cause a wrong later edit
 
 Do not record routine command output, obvious facts, transient TODOs, or
 scratch reasoning.

@@ -31,14 +31,19 @@ fn main() {
 fn run(args: Vec<OsString>) -> Result<(), String> {
     let config = Config::from_env()?;
 
-    if args.is_empty() || (args.len() == 1 && args[0] == "-r") {
-        ensure_dir(&config.root)?;
-        println!("{}", config.root.display());
+    if args.is_empty() {
+        print_root(&config)?;
         return Ok(());
     }
 
     let first = arg_to_string(&args[0])?;
     match first.as_str() {
+        "pwd" => {
+            if args.len() != 1 {
+                return Err("pwd does not accept arguments".to_string());
+            }
+            print_root(&config)?;
+        }
         "p" | "path" => {
             let key = require_key(&args, 1)?;
             let note = ensure_note(&config, key)?;
@@ -69,11 +74,20 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
             print_help();
         }
         _ => {
+            if first.starts_with('-') {
+                return Err(format!("unknown option: {}", first));
+            }
             let note = ensure_note(&config, &first)?;
             println!("{}", note.path.display());
         }
     }
 
+    Ok(())
+}
+
+fn print_root(config: &Config) -> Result<(), String> {
+    ensure_dir(&config.root)?;
+    println!("{}", config.root.display());
     Ok(())
 }
 
@@ -425,7 +439,7 @@ fn encode_60_bits(value: u64) -> String {
 fn print_help() {
     println!(
         "canon - thread-scoped decisions and invariants\n\n\
-Usage:\n  canon | canon -r\n  canon <key>\n  canon p|path <key>\n  canon r|read <key>\n  canon w|write <key> <text>\n  canon a|append <key> <text>\n  canon d|del|delete|rm <key>\n  canon rg|g <pattern> [rg args...]\n"
+Usage:\n  canon | canon pwd\n  canon <key>\n  canon p|path <key>\n  canon r|read <key>\n  canon w|write <key> <text>\n  canon a|append <key> <text>\n  canon d|del|delete|rm <key>\n  canon rg|g <pattern> [rg args...]\n"
     );
 }
 
@@ -570,12 +584,15 @@ mod tests {
     #[test]
     fn aliases_work() {
         with_env("aliases", |_| {
+            run(vec![]).unwrap();
+            run(vec!["pwd".into()]).unwrap();
             run(vec!["p".into(), "file.rs".into()]).unwrap();
             run(vec!["path".into(), "file.rs".into()]).unwrap();
             run(vec!["w".into(), "file.rs".into(), "body".into()]).unwrap();
             run(vec!["a".into(), "file.rs".into(), "more".into()]).unwrap();
             run(vec!["read".into(), "file.rs".into()]).unwrap();
             run(vec!["d".into(), "file.rs".into()]).unwrap();
+            assert!(run(vec!["-r".into()]).is_err());
         });
     }
 }

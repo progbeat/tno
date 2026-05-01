@@ -59,7 +59,7 @@ Print the current thread canon root:
 
 ```sh
 canon
-canon -r
+canon pwd
 ```
 
 Get or create the canon file path for a key:
@@ -93,6 +93,3 @@ Long aliases are also available: `path`, `read`, `write`, `append`, `delete`,
 - `CODEX_THREAD_ID` is required in v1.
 - `CANON_HOME` optionally overrides the base directory and disables Codex
   session-file sidecar discovery.
-
-Future versions may add `CANON_SESSION_ID` or other provider-specific session
-sources without changing the canon file format.
