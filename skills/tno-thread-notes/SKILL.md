@@ -7,12 +7,6 @@ description: Use for coding edits/reviews to read file notes before changes and 
 
 Use `tno` as thread-scoped margin notes for coding work.
 
-## Availability
-
-Before relying on notes, run `command -v tno` if availability is uncertain. If
-`tno` is missing, tell the user and continue without notes unless they ask you
-to stop.
-
 ## Before File Changes
 
 Before editing, reviewing, or refactoring a file:
@@ -24,6 +18,8 @@ Before editing, reviewing, or refactoring a file:
    before editing.
 
 Do this before applying patches or running formatters that rewrite files.
+If `tno` is unavailable or fails unexpectedly, say so briefly and continue
+without notes unless the user asks you to stop.
 
 ## Searching Notes
 
