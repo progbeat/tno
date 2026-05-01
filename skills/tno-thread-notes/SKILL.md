@@ -12,9 +12,11 @@ Use `tno` as thread-scoped margin notes for coding work.
 Before editing, reviewing, or refactoring a file:
 
 1. Identify the files likely to be touched.
-2. Run `tno r <path>` for each file.
-3. Treat "note not found" as no prior constraints.
-4. If notes conflict with the user request or current code, surface the conflict
+2. Use repository-relative paths as note keys; they are shorter and stable
+   across machines.
+3. Run `tno r <relative-path>` for each file.
+4. Treat "note not found" as no prior constraints.
+5. If notes conflict with the user request or current code, surface the conflict
    before editing.
 
 Do this before applying patches or running formatters that rewrite files.
@@ -37,11 +39,12 @@ tools.
 After a durable decision is accepted or discovered, append a short note:
 
 ```sh
-tno a <file> "<decision>"
+tno a <relative-path> "<decision>"
 ```
 
-Use file paths as keys for file-specific notes. Use topic keys such as
-`decision:<topic>` for cross-file decisions.
+Use repository-relative file paths as keys for file-specific notes. Use `.` for
+general thread decisions that do not belong to one file. Use topic keys such as
+`decision:<topic>` only when a named topic is clearer than `.`.
 
 Record only durable context:
 
