@@ -1,8 +1,32 @@
 # canon
 
-`canon` (`Thread Canon`) is a tiny CLI for thread-scoped decisions and invariants.
+`canon` (`Thread Canon`) is a Codex plugin/skill for preserving
+thread-scoped decisions and invariants during coding work.
 
-It is Codex-first in v1: canon is scoped by `CODEX_THREAD_ID`.
+The repo contains:
+
+- a Codex plugin manifest: `.codex-plugin/plugin.json`
+- a Codex skill: `skills/thread-canon/SKILL.md`
+- a small Rust CLI runtime: `canon`
+
+The skill teaches agents to read accepted context before editing files, search
+existing canon during exploration, and append durable decisions after they are
+accepted. The CLI is the storage/runtime layer the skill uses.
+
+## Agent Protocol
+
+- Before editing or reviewing a file, inspect `canon r <relative-path>`.
+- For broad context, search existing canon with `canon rg <term>`.
+- After accepted decisions, record them with `canon a <relative-path> "<decision>"`.
+- For general thread decisions, use `.` as the key.
+- For named cross-file decisions, use keys such as `decision:<topic>`.
+
+Use repository-relative paths as keys because they are shorter and stable across
+machines.
+
+## Storage
+
+V1 is Codex-first: canon is scoped by `CODEX_THREAD_ID`.
 
 ```text
 <codex-session-file>.canon/
@@ -14,7 +38,7 @@ When the Codex session file cannot be found, `canon` falls back to:
 ${CANON_HOME:-~/.canon}/codex/<CODEX_THREAD_ID>/
 ```
 
-## Install
+## Install Runtime
 
 ```sh
 cargo install --path . --root ~/.local --force
@@ -22,7 +46,14 @@ cargo install --path . --root ~/.local --force
 
 This installs `canon` to `~/.local/bin/canon`.
 
-## Usage
+For local skill development without plugin installation:
+
+```sh
+mkdir -p ~/.codex/skills/thread-canon
+cp skills/thread-canon/SKILL.md ~/.codex/skills/thread-canon/SKILL.md
+```
+
+## CLI Runtime
 
 Print the current thread canon root:
 
@@ -56,13 +87,6 @@ canon rg validation -n
 
 Long aliases are also available: `path`, `read`, `write`, `append`, `delete`,
 `del`, and `rm`. `canon g` remains available as a short alias for `canon rg`.
-
-## Codex Guidance
-
-- Before editing or reviewing a file, inspect `canon r <file>` when present.
-- For broad context, use `canon rg <term>`.
-- After user-confirmed decisions, use `canon a <file> "<decision>"`.
-- For cross-file decisions, use keys such as `decision:<topic>`.
 
 ## Environment
 
