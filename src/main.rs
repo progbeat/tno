@@ -62,7 +62,7 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
             let key = require_key(&args, 1)?;
             delete_note(&config, key)?;
         }
-        "g" | "rg" => {
+        "rg" | "g" => {
             run_rg(&config, &args[1..])?;
         }
         "-h" | "--help" | "help" => {
@@ -425,7 +425,7 @@ fn encode_60_bits(value: u64) -> String {
 fn print_help() {
     println!(
         "tno - thread-scoped notes\n\n\
-Usage:\n  tno | tno -r\n  tno <key>\n  tno p|path <key>\n  tno r|read <key>\n  tno w|write <key> <text>\n  tno a|append <key> <text>\n  tno d|del|delete|rm <key>\n  tno g|rg <pattern> [rg args...]\n"
+Usage:\n  tno | tno -r\n  tno <key>\n  tno p|path <key>\n  tno r|read <key>\n  tno w|write <key> <text>\n  tno a|append <key> <text>\n  tno d|del|delete|rm <key>\n  tno rg|g <pattern> [rg args...]\n"
     );
 }
 

@@ -1,0 +1,39 @@
+{
+  "name": "tno",
+  "version": "0.1.0",
+  "description": "Thread-scoped markdown notes for coding agents, backed by the tno CLI.",
+  "author": {
+    "name": "Roman Rizvanov",
+    "email": "progbeat@gmail.com",
+    "url": "https://github.com/progbeat"
+  },
+  "homepage": "https://github.com/progbeat/tno",
+  "repository": "https://github.com/progbeat/tno",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "notes",
+    "thread",
+    "memory",
+    "cli"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Thread Notes",
+    "shortDescription": "Use tno notes before edits and record durable decisions.",
+    "longDescription": "Thread Notes teaches Codex to use the tno CLI as thread-scoped margin notes: read file notes before editing, search prior decisions with ripgrep, and append durable decisions after they are accepted.",
+    "developerName": "Roman Rizvanov",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/progbeat/tno",
+    "defaultPrompt": [
+      "Use thread notes while editing this repo",
+      "Record this decision in tno"
+    ],
+    "brandColor": "#2563EB",
+    "screenshots": []
+  }
+}

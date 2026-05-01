@@ -50,17 +50,17 @@ tno d swap/src/swap/main.py
 Search notes using ripgrep:
 
 ```sh
-tno g validation
+tno rg validation
 tno rg validation -n
 ```
 
 Long aliases are also available: `path`, `read`, `write`, `append`, `delete`,
-`del`, `rm`, and `rg`.
+`del`, and `rm`. `tno g` remains available as a short alias for `tno rg`.
 
 ## Codex Guidance
 
 - Before editing or reviewing a file, inspect `tno r <file>` when present.
-- For broad context, use `tno g <term>`.
+- For broad context, use `tno rg <term>`.
 - After user-confirmed decisions, use `tno a <file> "<decision>"`.
 - For cross-file decisions, use keys such as `decision:<topic>`.
 
