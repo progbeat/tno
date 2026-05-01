@@ -1,17 +1,17 @@
-# tno
+# canon
 
-`tno` (`Thread NOtes`) is a tiny CLI for thread-scoped markdown notes.
+`canon` (`Thread Canon`) is a tiny CLI for thread-scoped decisions and invariants.
 
-It is Codex-first in v1: notes are scoped by `CODEX_THREAD_ID`.
+It is Codex-first in v1: canon is scoped by `CODEX_THREAD_ID`.
 
 ```text
-<codex-session-file>.tno/
+<codex-session-file>.canon/
 ```
 
-When the Codex session file cannot be found, `tno` falls back to:
+When the Codex session file cannot be found, `canon` falls back to:
 
 ```text
-${TNO_HOME:-~/.thread-notes}/codex/<CODEX_THREAD_ID>/
+${CANON_HOME:-~/.canon}/codex/<CODEX_THREAD_ID>/
 ```
 
 ## Install
@@ -20,55 +20,55 @@ ${TNO_HOME:-~/.thread-notes}/codex/<CODEX_THREAD_ID>/
 cargo install --path . --root ~/.local --force
 ```
 
-This installs `tno` to `~/.local/bin/tno`.
+This installs `canon` to `~/.local/bin/canon`.
 
 ## Usage
 
-Print the current thread notes root:
+Print the current thread canon root:
 
 ```sh
-tno
-tno -r
+canon
+canon -r
 ```
 
-Get or create the note path for a key:
+Get or create the canon file path for a key:
 
 ```sh
-tno swap/src/swap/main.py
-tno p swap/src/swap/main.py
+canon swap/src/swap/main.py
+canon p swap/src/swap/main.py
 ```
 
 Read, write, append, delete:
 
 ```sh
-tno r swap/src/swap/main.py
-tno w swap/src/swap/main.py "Current known constraints."
-tno a swap/src/swap/main.py "Keep validation order."
-tno d swap/src/swap/main.py
+canon r swap/src/swap/main.py
+canon w swap/src/swap/main.py "Current known constraints."
+canon a swap/src/swap/main.py "Keep validation order."
+canon d swap/src/swap/main.py
 ```
 
-Search notes using ripgrep:
+Search canon using ripgrep:
 
 ```sh
-tno rg validation
-tno rg validation -n
+canon rg validation
+canon rg validation -n
 ```
 
 Long aliases are also available: `path`, `read`, `write`, `append`, `delete`,
-`del`, and `rm`. `tno g` remains available as a short alias for `tno rg`.
+`del`, and `rm`. `canon g` remains available as a short alias for `canon rg`.
 
 ## Codex Guidance
 
-- Before editing or reviewing a file, inspect `tno r <file>` when present.
-- For broad context, use `tno rg <term>`.
-- After user-confirmed decisions, use `tno a <file> "<decision>"`.
+- Before editing or reviewing a file, inspect `canon r <file>` when present.
+- For broad context, use `canon rg <term>`.
+- After user-confirmed decisions, use `canon a <file> "<decision>"`.
 - For cross-file decisions, use keys such as `decision:<topic>`.
 
 ## Environment
 
 - `CODEX_THREAD_ID` is required in v1.
-- `TNO_HOME` optionally overrides the base directory and disables Codex
+- `CANON_HOME` optionally overrides the base directory and disables Codex
   session-file sidecar discovery.
 
-Future versions may add `TNO_SESSION_ID` or other provider-specific session
-sources without changing the note file format.
+Future versions may add `CANON_SESSION_ID` or other provider-specific session
+sources without changing the canon file format.

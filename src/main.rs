@@ -23,7 +23,7 @@ struct Note {
 
 fn main() {
     if let Err(err) = run(env::args_os().skip(1).collect()) {
-        eprintln!("tno: {}", err);
+        eprintln!("canon: {}", err);
         process::exit(1);
     }
 }
@@ -88,7 +88,7 @@ impl Config {
             return Err("CODEX_THREAD_ID must be a single path segment".to_string());
         }
 
-        if let Some(value) = env::var_os("TNO_HOME") {
+        if let Some(value) = env::var_os("CANON_HOME") {
             if !value.is_empty() {
                 return Ok(Config {
                     root: PathBuf::from(value).join("codex").join(thread_id),
@@ -98,14 +98,14 @@ impl Config {
 
         if let Some(session_file) = find_codex_session_file(&thread_id)? {
             let mut root = session_file;
-            root.set_extension("tno");
+            root.set_extension("canon");
             return Ok(Config { root });
         }
 
         let home = env::var_os("HOME").ok_or("HOME is not set")?;
         Ok(Config {
             root: PathBuf::from(home)
-                .join(".thread-notes")
+                .join(".canon")
                 .join("codex")
                 .join(thread_id),
         })
@@ -204,7 +204,7 @@ fn note_for_key(config: &Config, key: &str) -> Note {
 fn read_note(config: &Config, key: &str) -> Result<(), String> {
     let note = note_for_key(config, key);
     if !note.path.exists() {
-        return Err(format!("note not found for key: {}", key));
+        return Err(format!("canon not found for key: {}", key));
     }
     verify_note_key(&note.path, key)?;
     let mut file = fs::File::open(&note.path)
@@ -273,7 +273,7 @@ fn initial_content(key: &str, hash: &str) -> String {
 
 fn header(key: &str, hash: &str) -> String {
     format!(
-        "<!-- tno key=\"{}\" hash=\"{}\" -->\n# {}\n",
+        "<!-- canon key=\"{}\" hash=\"{}\" -->\n# {}\n",
         escape_attr(key),
         hash,
         key
@@ -291,7 +291,7 @@ fn normalize_body(text: &str) -> String {
 fn verify_note_key(path: &Path, expected_key: &str) -> Result<(), String> {
     let first = first_line(path)?;
     let actual_key = parse_key_from_header(&first)
-        .ok_or_else(|| format!("missing tno metadata in {}", path.display()))?;
+        .ok_or_else(|| format!("missing canon metadata in {}", path.display()))?;
     if actual_key != expected_key {
         return Err(format!(
             "hash collision or stale file: {} belongs to key {:?}, not {:?}",
@@ -310,7 +310,7 @@ fn first_line(path: &Path) -> Result<String, String> {
 }
 
 fn parse_key_from_header(line: &str) -> Option<String> {
-    let prefix = "<!-- tno key=\"";
+    let prefix = "<!-- canon key=\"";
     let rest = line.strip_prefix(prefix)?;
     let mut out = String::new();
     let mut chars = rest.chars();
@@ -424,8 +424,8 @@ fn encode_60_bits(value: u64) -> String {
 
 fn print_help() {
     println!(
-        "tno - thread-scoped notes\n\n\
-Usage:\n  tno | tno -r\n  tno <key>\n  tno p|path <key>\n  tno r|read <key>\n  tno w|write <key> <text>\n  tno a|append <key> <text>\n  tno d|del|delete|rm <key>\n  tno rg|g <pattern> [rg args...]\n"
+        "canon - thread-scoped decisions and invariants\n\n\
+Usage:\n  canon | canon -r\n  canon <key>\n  canon p|path <key>\n  canon r|read <key>\n  canon w|write <key> <text>\n  canon a|append <key> <text>\n  canon d|del|delete|rm <key>\n  canon rg|g <pattern> [rg args...]\n"
     );
 }
 
@@ -438,7 +438,7 @@ mod tests {
 
     fn temp_home(name: &str) -> PathBuf {
         let mut path = env::temp_dir();
-        path.push(format!("tno-test-{}-{}", name, process::id()));
+        path.push(format!("canon-test-{}-{}", name, process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         path
@@ -450,10 +450,10 @@ mod tests {
     {
         let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home(name);
-        env::set_var("TNO_HOME", &home);
+        env::set_var("CANON_HOME", &home);
         env::set_var("CODEX_THREAD_ID", "thread-test");
         f(home.clone());
-        env::remove_var("TNO_HOME");
+        env::remove_var("CANON_HOME");
         env::remove_var("CODEX_THREAD_ID");
         let _ = fs::remove_dir_all(home);
     }
@@ -469,7 +469,7 @@ mod tests {
         fs::create_dir_all(&session_dir).unwrap();
         let session_file = session_dir.join("rollout-2026-05-01T00-00-00-thread-test.jsonl");
         fs::write(&session_file, "{}\n").unwrap();
-        env::remove_var("TNO_HOME");
+        env::remove_var("CANON_HOME");
         env::set_var("CODEX_HOME", &codex_home);
         env::set_var("CODEX_THREAD_ID", "thread-test");
         f(session_file.clone());
@@ -491,14 +491,14 @@ mod tests {
     fn missing_thread_id_fails() {
         let _guard = ENV_LOCK.lock().unwrap();
         env::remove_var("CODEX_THREAD_ID");
-        env::set_var("TNO_HOME", temp_home("missing-thread"));
+        env::set_var("CANON_HOME", temp_home("missing-thread"));
         let result = Config::from_env();
         assert!(result.is_err());
-        env::remove_var("TNO_HOME");
+        env::remove_var("CANON_HOME");
     }
 
     #[test]
-    fn tno_home_overrides_default_root() {
+    fn canon_home_overrides_default_root() {
         with_env("home-override", |home| {
             let config = Config::from_env().unwrap();
             assert_eq!(config.root, home.join("codex").join("thread-test"));
@@ -510,7 +510,7 @@ mod tests {
         with_codex_home("sidecar", |session_file| {
             let config = Config::from_env().unwrap();
             let mut expected = session_file;
-            expected.set_extension("tno");
+            expected.set_extension("canon");
             assert_eq!(config.root, expected);
         });
     }
@@ -534,7 +534,7 @@ mod tests {
             append_note(&config, "src/main.rs", "decision").unwrap();
             let note = note_for_key(&config, "src/main.rs");
             let content = fs::read_to_string(note.path).unwrap();
-            assert!(content.starts_with("<!-- tno key=\"src/main.rs\" hash=\""));
+            assert!(content.starts_with("<!-- canon key=\"src/main.rs\" hash=\""));
             assert!(content.contains("\nbody\n"));
             assert!(content.contains("decision"));
         });

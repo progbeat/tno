@@ -1,37 +1,37 @@
 {
-  "name": "tno",
+  "name": "canon",
   "version": "0.1.0",
-  "description": "Thread-scoped notes for coding agents.",
+  "description": "Thread-scoped canon for coding agents.",
   "author": {
     "name": "Roman Rizvanov",
     "email": "progbeat@gmail.com",
     "url": "https://github.com/progbeat"
   },
-  "homepage": "https://github.com/progbeat/tno",
-  "repository": "https://github.com/progbeat/tno",
+  "homepage": "https://github.com/progbeat/canon",
+  "repository": "https://github.com/progbeat/canon",
   "license": "MIT",
   "keywords": [
     "codex",
-    "notes",
+    "canon",
     "thread",
     "memory",
     "cli"
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Thread Notes",
-    "shortDescription": "Read file notes before edits; record decisions after.",
-    "longDescription": "Thread Notes teaches Codex to use tno: read file notes before editing, search prior decisions with ripgrep, and append durable accepted decisions.",
+    "displayName": "Thread Canon",
+    "shortDescription": "Read canon before edits; record durable decisions.",
+    "longDescription": "Thread Canon teaches Codex to use canon: read file canon before editing, search accepted decisions with ripgrep, and append durable decisions.",
     "developerName": "Roman Rizvanov",
     "category": "Productivity",
     "capabilities": [
       "Read",
       "Write"
     ],
-    "websiteURL": "https://github.com/progbeat/tno",
+    "websiteURL": "https://github.com/progbeat/canon",
     "defaultPrompt": [
-      "Use thread notes while editing this repo",
-      "Record this decision in tno"
+      "Use thread canon while editing this repo",
+      "Record this decision in canon"
     ],
     "brandColor": "#2563EB",
     "screenshots": []
