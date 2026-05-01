@@ -22,7 +22,6 @@ accepted. The CLI is the storage/runtime layer the skill uses.
 - For broad context, search existing canon with `canon rg <term>`.
 - After accepted decisions, record them with `canon a <relative-path> "<decision>"`.
 - For general thread decisions, use `.` as the key.
-- For named cross-file decisions, use keys such as `decision:<topic>`.
 
 Use repository-relative paths as keys because they are shorter and stable across
 machines.

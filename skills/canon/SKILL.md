@@ -46,8 +46,7 @@ printf '%s\n' "<decision>" | canon a <relative-path>
 ```
 
 Use repository-relative file paths as keys for file-specific canon. Use `.` for
-general thread decisions that do not belong to one file. Use topic keys such as
-`decision:<topic>` only when a named topic is clearer than `.`.
+general thread decisions that do not belong to one file.
 
 Record only durable context:
 
