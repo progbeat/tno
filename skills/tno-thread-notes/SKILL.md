@@ -1,6 +1,6 @@
 ---
 name: tno-thread-notes
-description: Use when writing, editing, reviewing, or refactoring code so Codex checks thread-scoped file notes before changing files and records durable user decisions, invariants, constraints, tradeoffs, and pitfalls with the tno CLI.
+description: Use for coding edits/reviews to read file notes before changes and record durable decisions with tno.
 ---
 
 # Thread Notes

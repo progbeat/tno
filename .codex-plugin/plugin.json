@@ -1,7 +1,7 @@
 {
   "name": "tno",
   "version": "0.1.0",
-  "description": "Thread-scoped markdown notes for coding agents, backed by the tno CLI.",
+  "description": "Thread-scoped notes for coding agents.",
   "author": {
     "name": "Roman Rizvanov",
     "email": "progbeat@gmail.com",
@@ -20,8 +20,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Thread Notes",
-    "shortDescription": "Use tno notes before edits and record durable decisions.",
-    "longDescription": "Thread Notes teaches Codex to use the tno CLI as thread-scoped margin notes: read file notes before editing, search prior decisions with ripgrep, and append durable decisions after they are accepted.",
+    "shortDescription": "Read file notes before edits; record decisions after.",
+    "longDescription": "Thread Notes teaches Codex to use tno: read file notes before editing, search prior decisions with ripgrep, and append durable accepted decisions.",
     "developerName": "Roman Rizvanov",
     "category": "Productivity",
     "capabilities": [
