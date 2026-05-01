@@ -43,16 +43,17 @@ ${CANON_HOME:-~/.canon}/codex/<CODEX_THREAD_ID>/
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/progbeat/canon/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/progbeat/canon/main/scripts/install.sh | bash
 ```
 
-This installs:
+This installs the runtime and registers the repository as a local Codex plugin:
 
 - the `canon` CLI to `~/.local/bin/canon`
-- the plugin bundle to `~/.codex/plugins/canon`
-- the skill to `~/.codex/skills/canon/SKILL.md`
+- the plugin source checkout to `~/.codex/plugins/canon-source`
+- a local plugin entry in `~/.agents/plugins/marketplace.json`
+- a seeded Codex plugin cache under `~/.codex/plugins/cache/codex-plugins/canon`
 
-Restart Codex after installing so the skill list is refreshed.
+Restart Codex, open Plugins > Local Plugins, then install `canon`.
 
 For local runtime development from a checkout:
 
@@ -63,7 +64,7 @@ cargo install --path . --root ~/.local --force
 For local plugin development from a checkout:
 
 ```sh
-sh scripts/install.sh
+bash scripts/install.sh --local
 ```
 
 ## CLI Runtime
