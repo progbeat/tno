@@ -3,7 +3,7 @@ name: canon
 description: Use for coding edits/reviews to read canon before changes and record durable decisions/invariants.
 ---
 
-# Thread Canon
+# canon
 
 Use `canon` as thread-scoped accepted decisions and invariants for coding work.
 

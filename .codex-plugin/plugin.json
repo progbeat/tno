@@ -19,9 +19,9 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Thread Canon",
+    "displayName": "canon",
     "shortDescription": "Read canon before edits; record durable decisions.",
-    "longDescription": "Thread Canon teaches Codex to use canon: read file canon before editing, search accepted decisions with ripgrep, and append durable decisions.",
+    "longDescription": "canon teaches Codex to read canon before editing, search accepted decisions with ripgrep, and append durable decisions.",
     "developerName": "Roman Rizvanov",
     "category": "Productivity",
     "capabilities": [
@@ -30,7 +30,7 @@
     ],
     "websiteURL": "https://github.com/progbeat/canon",
     "defaultPrompt": [
-      "Use thread canon while editing this repo",
+      "Use canon while editing this repo",
       "Record this decision in canon"
     ],
     "brandColor": "#2563EB",
