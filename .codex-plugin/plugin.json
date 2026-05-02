@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "canon",
     "shortDescription": "Read canon before edits; record accepted decisions.",
-    "longDescription": "canon teaches Codex to read canon before editing, search accepted decisions and constraints with ripgrep, and append accepted decisions.",
+    "longDescription": "canon teaches Codex to preserve goals, accepted decisions, and constraints across context compaction by reading canon before edits and appending accepted anchors.",
     "developerName": "Roman Rizvanov",
     "category": "Productivity",
     "capabilities": [

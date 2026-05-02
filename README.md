@@ -3,13 +3,27 @@
 [![CI](https://github.com/progbeat/canon/actions/workflows/ci.yml/badge.svg)](https://github.com/progbeat/canon/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Codex plugin for preserving accepted decisions, constraints, and goals across
-long coding threads and context compaction.
+Codex plugin for preserving accepted decisions, constraints, and goals when
+long coding threads are compacted.
 
 `canon` gives agents a thread-scoped canon of the original goal, accepted
 decisions, constraints, invariants, and pitfalls they must keep honoring after
 compaction. It is not project documentation; durable specifications belong in
 the repository.
+
+---
+
+## Problem
+
+Long Codex threads eventually get compacted. After compaction, an agent may lose
+the reasoning that led to earlier decisions: the original goal becomes fuzzy,
+accepted constraints disappear, and a later edit can accidentally undo a correct
+fix made earlier in the same thread.
+
+`canon` keeps those behavior-shaping anchors outside the compressed
+conversation, but still scoped to the current thread. Before changing a file,
+the agent reads the relevant canon entries; after an accepted decision, it
+records the anchor that future edits must keep honoring.
 
 ---
 

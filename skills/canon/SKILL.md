@@ -1,6 +1,6 @@
 ---
 name: canon
-description: Use for coding edits/reviews to preserve task goals, accepted decisions, and constraints across context compaction.
+description: Use for coding edits/reviews to preserve goals, accepted decisions, and constraints when long threads are compacted.
 ---
 
 # canon
@@ -8,6 +8,10 @@ description: Use for coding edits/reviews to preserve task goals, accepted decis
 Use `canon` as a thread-scoped canon for coding work. It preserves the original
 goal, accepted decisions, constraints, invariants, and pitfalls that must keep
 guiding the agent after context compaction.
+
+Compaction can erase why earlier choices were made. Without canon, a later edit
+may drift from the user's original goal, forget an accepted constraint, or undo a
+correct fix from earlier in the same thread.
 
 ## Before File Changes
 
