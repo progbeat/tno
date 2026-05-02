@@ -3,13 +3,13 @@
 [![CI](https://github.com/progbeat/canon/actions/workflows/ci.yml/badge.svg)](https://github.com/progbeat/canon/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Codex plugin for preserving task memory across long coding threads and context
-compaction.
+Codex plugin for preserving accepted decisions, constraints, and goals across
+long coding threads and context compaction.
 
-`canon` gives agents a small thread-scoped record for the original goal,
-accepted decisions, constraints, invariants, and pitfalls they must keep
-honoring after compaction. It is not project documentation; durable
-specifications belong in the repository.
+`canon` gives agents a thread-scoped canon of the original goal, accepted
+decisions, constraints, invariants, and pitfalls they must keep honoring after
+compaction. It is not project documentation; durable specifications belong in
+the repository.
 
 ---
 

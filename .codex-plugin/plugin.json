@@ -14,14 +14,14 @@
     "codex",
     "canon",
     "thread",
-    "memory",
+    "constraints",
     "cli"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "canon",
-    "shortDescription": "Read canon before edits; record durable decisions.",
-    "longDescription": "canon teaches Codex to read canon before editing, search accepted decisions with ripgrep, and append durable decisions.",
+    "shortDescription": "Read canon before edits; record accepted decisions.",
+    "longDescription": "canon teaches Codex to read canon before editing, search accepted decisions and constraints with ripgrep, and append accepted decisions.",
     "developerName": "Roman Rizvanov",
     "category": "Productivity",
     "capabilities": [

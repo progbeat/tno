@@ -5,9 +5,9 @@ description: Use for coding edits/reviews to preserve task goals, accepted decis
 
 # canon
 
-Use `canon` as thread-scoped task memory for coding work. It preserves the
-original goal, accepted decisions, constraints, invariants, and pitfalls that
-must keep guiding the agent after context compaction.
+Use `canon` as a thread-scoped canon for coding work. It preserves the original
+goal, accepted decisions, constraints, invariants, and pitfalls that must keep
+guiding the agent after context compaction.
 
 ## Before File Changes
 
