@@ -3,11 +3,13 @@
 [![CI](https://github.com/progbeat/canon/actions/workflows/ci.yml/badge.svg)](https://github.com/progbeat/canon/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Codex plugin for preserving thread-scoped decisions and invariants during
-coding work.
+Codex plugin for preserving task memory across long coding threads and context
+compaction.
 
-`canon` gives agents a small session-scoped record they can read before edits,
-search during exploration, and append to after durable decisions are accepted.
+`canon` gives agents a small thread-scoped record for the original goal,
+accepted decisions, constraints, invariants, and pitfalls they must keep
+honoring after compaction. It is not project documentation; durable
+specifications belong in the repository.
 
 ---
 
@@ -37,9 +39,10 @@ The installer:
 | Before editing a file | `canon r <relative-path>` |
 | Search existing context | `canon rg <term>` |
 | Record a file decision | `canon a <relative-path> "<decision>"` |
-| Record a general decision | `canon a . "<decision>"` |
+| Record the task goal or a general constraint | `canon a . "<decision>"` |
 
-Use repository-relative file paths as keys. Use `.` for general thread decisions.
+Use repository-relative file paths as keys. Use `.` for the original goal and
+general task constraints.
 
 ---
 
@@ -87,16 +90,17 @@ Long aliases: `path`, `read`, `write`, `append`, `delete`, `del`, and `rm`.
 
 ## Storage
 
-V1 is Codex-first: canon is scoped by `CODEX_THREAD_ID`.
+V1 is Codex-first: canon is scoped by `CODEX_THREAD_ID` and temp-backed by
+default.
 
 ```text
-<codex-session-file>.canon/
+${TMPDIR:-/tmp}/canon/codex/<CODEX_THREAD_ID>/
 ```
 
-When the Codex session file cannot be found, `canon` falls back to:
+Use `CANON_HOME` when longer-lived storage is explicitly needed:
 
 ```text
-${CANON_HOME:-~/.canon}/codex/<CODEX_THREAD_ID>/
+${CANON_HOME}/codex/<CODEX_THREAD_ID>/
 ```
 
 ---

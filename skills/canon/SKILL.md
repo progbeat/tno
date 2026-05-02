@@ -1,11 +1,13 @@
 ---
 name: canon
-description: Use for coding edits/reviews to read canon before changes and record durable decisions/invariants.
+description: Use for coding edits/reviews to preserve task goals, accepted decisions, and constraints across context compaction.
 ---
 
 # canon
 
-Use `canon` as thread-scoped accepted decisions and invariants for coding work.
+Use `canon` as thread-scoped task memory for coding work. It preserves the
+original goal, accepted decisions, constraints, invariants, and pitfalls that
+must keep guiding the agent after context compaction.
 
 ## Before File Changes
 
@@ -33,7 +35,8 @@ tools.
 
 ## Recording Decisions
 
-After a durable decision is accepted or discovered, append a short canon entry:
+After a task goal, constraint, invariant, pitfall, or accepted decision is
+established, append a short canon entry:
 
 ```sh
 canon a <relative-path> "<decision>"
@@ -46,14 +49,15 @@ printf '%s\n' "<decision>" | canon a <relative-path>
 ```
 
 Use repository-relative file paths as keys for file-specific canon. Use `.` for
-general thread decisions that do not belong to one file.
+the original goal and general task constraints that do not belong to one file.
 
-Record only durable context:
+Record only behavior-shaping task context:
 
 - user decisions
+- original task goals
 - invariants and constraints
 - non-obvious tradeoffs
 - pitfalls that could cause a wrong later edit
 
-Do not record routine command output, obvious facts, transient TODOs, or
-scratch reasoning.
+Do not record routine command output, obvious facts, transient TODOs, scratch
+reasoning, or durable project specifications that belong in the repository.

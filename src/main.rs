@@ -112,58 +112,15 @@ impl Config {
             }
         }
 
-        if let Some(session_file) = find_codex_session_file(&thread_id)? {
-            let mut root = session_file;
-            root.set_extension("canon");
-            return Ok(Config { root });
-        }
+        let temp_root = env::var_os("TMPDIR")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
 
-        let home = env::var_os("HOME").ok_or("HOME is not set")?;
         Ok(Config {
-            root: PathBuf::from(home)
-                .join(".canon")
-                .join("codex")
-                .join(thread_id),
+            root: temp_root.join("canon").join("codex").join(thread_id),
         })
     }
-}
-
-fn find_codex_session_file(thread_id: &str) -> Result<Option<PathBuf>, String> {
-    let codex_home = match env::var_os("CODEX_HOME") {
-        Some(value) if !value.is_empty() => PathBuf::from(value),
-        _ => {
-            let home = env::var_os("HOME").ok_or("HOME is not set")?;
-            PathBuf::from(home).join(".codex")
-        }
-    };
-    let sessions = codex_home.join("sessions");
-    if !sessions.exists() {
-        return Ok(None);
-    }
-    find_file_containing(&sessions, thread_id)
-}
-
-fn find_file_containing(root: &Path, needle: &str) -> Result<Option<PathBuf>, String> {
-    let entries =
-        fs::read_dir(root).map_err(|err| format!("failed to read {}: {}", root.display(), err))?;
-    for entry in entries {
-        let entry = entry.map_err(|err| format!("failed to read directory entry: {}", err))?;
-        let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|err| format!("failed to stat {}: {}", path.display(), err))?;
-        if file_type.is_dir() {
-            if let Some(found) = find_file_containing(&path, needle)? {
-                return Ok(Some(found));
-            }
-        } else if file_type.is_file() {
-            let name = entry.file_name();
-            if name.to_string_lossy().contains(needle) {
-                return Ok(Some(path));
-            }
-        }
-    }
-    Ok(None)
 }
 
 fn require_key<'a>(args: &'a [OsString], index: usize) -> Result<&'a str, String> {
@@ -482,24 +439,19 @@ mod tests {
         let _ = fs::remove_dir_all(home);
     }
 
-    fn with_codex_home<F>(name: &str, f: F)
+    fn with_tmpdir<F>(name: &str, f: F)
     where
         F: FnOnce(PathBuf),
     {
         let _guard = ENV_LOCK.lock().unwrap();
-        let home = temp_home(name);
-        let codex_home = home.join("codex-home");
-        let session_dir = codex_home.join("sessions/2026/05/01");
-        fs::create_dir_all(&session_dir).unwrap();
-        let session_file = session_dir.join("rollout-2026-05-01T00-00-00-thread-test.jsonl");
-        fs::write(&session_file, "{}\n").unwrap();
+        let temp = temp_home(name);
         env::remove_var("CANON_HOME");
-        env::set_var("CODEX_HOME", &codex_home);
+        env::set_var("TMPDIR", &temp);
         env::set_var("CODEX_THREAD_ID", "thread-test");
-        f(session_file.clone());
-        env::remove_var("CODEX_HOME");
+        f(temp.clone());
+        env::remove_var("TMPDIR");
         env::remove_var("CODEX_THREAD_ID");
-        let _ = fs::remove_dir_all(home);
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[test]
@@ -530,13 +482,25 @@ mod tests {
     }
 
     #[test]
-    fn codex_session_sidecar_is_default_root() {
-        with_codex_home("sidecar", |session_file| {
+    fn default_root_uses_tmpdir() {
+        with_tmpdir("tmpdir-root", |temp| {
             let config = Config::from_env().unwrap();
-            let mut expected = session_file;
-            expected.set_extension("canon");
-            assert_eq!(config.root, expected);
+            assert_eq!(
+                config.root,
+                temp.join("canon").join("codex").join("thread-test")
+            );
         });
+    }
+
+    #[test]
+    fn default_root_uses_slash_tmp_without_tmpdir() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        env::remove_var("CANON_HOME");
+        env::remove_var("TMPDIR");
+        env::set_var("CODEX_THREAD_ID", "thread-test");
+        let config = Config::from_env().unwrap();
+        assert_eq!(config.root, PathBuf::from("/tmp/canon/codex/thread-test"));
+        env::remove_var("CODEX_THREAD_ID");
     }
 
     #[test]
