@@ -1,0 +1,24 @@
+version: 1
+
+instructions: |
+  Answer using only the files available to you.
+  If the available files do not provide enough evidence, answer skip.
+  Do not guess.
+
+  Scoring policy:
+  - correct answer: +1
+  - incorrect answer: -1
+  - skip: 0
+
+agents:
+  project:
+    paths:
+      - "."
+    exclude:
+      - ".canon/**"
+      - ".git/**"
+      - "target/**"
+
+expectations:
+  - q: "Does this project satisfy the expectation described here?"
+    a: "yes"

@@ -98,7 +98,55 @@ canon rg validation -n
 
 Search canon with ripgrep. `canon g` is also available as a short alias for `canon rg`.
 
+```sh
+canon init
+canon check
+canon check 4 5 42
+```
+
+Create `.canon/check.yml`, run every project expectation, or rerun selected
+1-based expectations. `canon check` is a project-facing AI expectation linter:
+it asks configured evaluator agents to answer each expectation from allowed
+files, hides expected answers from them, and fails when observed answers do not
+exactly match.
+
 Long aliases: `path`, `read`, `write`, `append`, `delete`, `del`, and `rm`.
+
+---
+
+## Expectation Checks
+
+`canon init` creates a default `.canon/check.yml`:
+
+```yaml
+version: 1
+instructions: |
+  Answer using only the files available to you.
+  If the available files do not provide enough evidence, answer skip.
+  Do not guess.
+
+agents:
+  project:
+    paths:
+      - "."
+    exclude:
+      - ".canon/**"
+      - ".git/**"
+      - "target/**"
+
+expectations:
+  - q: "Does this project satisfy the expectation described here?"
+    a: "yes"
+```
+
+Each configured agent answers every selected expectation. Expected answers are
+single-line strings compared by exact equality. `skip` is incorrect unless the
+expected answer is exactly `skip`.
+
+`canon check` supplies the runtime response format, asks one expectation at a
+time, reuses the same Codex app-server session per agent, and reports the
+expectation number, agent name, prompt, expected answer, observed answer,
+evidence, and rerun command.
 
 ---
 
