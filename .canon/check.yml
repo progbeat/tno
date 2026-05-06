@@ -4,83 +4,80 @@ instructions: |
   Answer using only the files available to you.
   If the available files do not provide enough evidence, answer skip.
   Do not guess.
-
   Scoring policy:
   - correct answer: +1
   - incorrect answer: -1
   - skip: 0
 
 agents:
-  project:
+  Smith:
     paths:
       - "."
     exclude:
       - ".canon/**"
-      - ".git/**"
-      - "target/**"
 
 expectations:
-  - q: "Does canon init create .canon/check.yml?"
+  - q: "Does `canon init` create .canon/check.yml?"
     a: "yes"
 
-  - q: "Does canon init fail if .canon/check.yml already exists?"
+  - q: "Does `canon init` fail if .canon/check.yml already exists?"
     a: "yes"
 
-  - q: "Does canon init create .canon/check.yml from an embedded default template?"
+  - q: "Does `canon init` create .canon/check.yml from an embedded default template?"
     a: "yes"
 
   - q: "Are expected answers single-line strings compared by exact string equality?"
     a: "yes"
 
-  - q: "Does canon check hide expected answers from evaluator agents?"
+  - q: "Does `canon check` hide expected answers from evaluator agents?"
     a: "yes"
 
   - q: "Are evaluator agents configured with explicit accessible paths and excludes?"
     a: "yes"
 
-  - q: "Does canon check always exclude .canon/** from evaluator workspaces?"
+  - q: "Does `canon check` always exclude .canon/** from evaluator workspaces?"
     a: "yes"
 
-  - q: "Does canon check supply the runtime answer format during interrogation?"
+  - q: "Does `canon check` supply the runtime answer format during interrogation?"
     a: "yes"
 
-  - q: "Does canon check ask one expectation at a time?"
+  - q: "Does `canon check` ask one expectation at a time?"
     a: "yes"
 
-  - q: "Does canon check reuse the same Codex session for all selected expectations for a given agent?"
+  - q: "Does `canon check` reuse the same Codex session for all selected expectations for a given agent?"
     a: "yes"
 
-  - q: "Does canon check use codex app-server to communicate with agents?"
+  - q: "Does `canon check` use codex app-server to communicate with agents?"
     a: "yes"
 
-  - q: "Does canon check run all expectations when no numbers are provided?"
+  - q: "Does `canon check` run all expectations when no numbers are provided?"
     a: "yes"
 
-  - q: "Does canon check support rerunning selected expectations by 1-based numbers such as canon check 4 5 42?"
+  - q: "Does `canon check` support rerunning selected expectations by 1-based numbers such as canon check 4 5 42?"
     a: "yes"
 
-  - q: "Does canon check reject invalid, zero, duplicate, or out-of-range expectation numbers before starting evaluator agents?"
+  - q: "Does `canon check` reject invalid, zero, duplicate, or out-of-range expectation numbers before starting evaluator agents?"
     a: "yes"
 
-  - q: "Does canon check require every selected expectation to be answered correctly by every configured agent?"
+  - q: "Does `canon check` require every selected expectation to be answered correctly by every configured agent?"
     a: "yes"
 
-  - q: "Does canon check treat skip as incorrect unless the expected answer is exactly skip?"
+  - q: "Does `canon check` treat skip as incorrect unless the expected answer is exactly skip?"
     a: "yes"
 
-  - q: "Does canon check retry a malformed evaluator response once before failing?"
+  - q: "Does `canon check` retry a malformed evaluator response once before failing?"
     a: "yes"
 
-  - q: "Does canon check fail immediately when the evaluator response is malformed?"
+  - q: "Does `canon check` fail immediately when the evaluator response is malformed?"
     a: "no"
 
-  - q: "Does canon check retry once when evidence is empty, then warn without failing if the answer is correct?"
+  - q: "Does `canon check` retry once when evidence is empty, then warn without failing if the answer is correct?"
     a: "yes"
 
-  - q: "Does canon check fail solely because evidence remains empty after retry?"
+  - q: "Does `canon check` fail solely because evidence remains empty after retry?"
     a: "no"
 
-  - q: "Does the human report include expectation number, agent name, prompt, expected answer, observed answer, evidence, and a rerun hint?"
+  - q: "Does the report include expectation number, agent name, prompt, expected answer, observed answer, and evidence?"
     a: "yes"
 
   - q: "Does canon check fail when the current Git change set includes both .canon/** changes and non-.canon changes?"
