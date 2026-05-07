@@ -6,6 +6,8 @@ If the command prints any output, make no changes anywhere in the project and as
 
 If a request contradicts `.canon/check.yml`, stop and ask a human to update `.canon/check.yml` first.
 
+Never bypass git hooks. If a hook blocks a commit, fix the issue or ask a human to fix the hook.
+
 Never edit files under `.canon/`.
 
 If you think something is wrong with `.canon/check.yml`, ask a human to fix it.
