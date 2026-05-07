@@ -1,22 +1,23 @@
 version: 1
 
 instructions: |
-  Answer using only the files available to you.
-  If the available files do not provide enough evidence, answer skip.
-  Do not guess.
+  Use the following response policy:
+  Answer exactly `yes` or `no` only when there is sufficient evidence to support the answer.
+  Do not guess. If there is not enough evidence to answer `yes` or `no`, answer exactly `skip`.
   Scoring policy:
-  - correct answer: +1
-  - incorrect answer: -1
-  - skip: 0
+  * Correct answer: `+1`
+  * Incorrect answer: `-1`
+  * Skip: `0`
 
 agents:
   Smith:
     paths:
       - "."
-    exclude:
-      - ".canon/**"
 
 expectations:
+  - q: Is README.md consistent with the current state of the repository?
+    a: "yes"
+
   - q: "Does `canon init` create .canon/check.yml?"
     a: "yes"
 
