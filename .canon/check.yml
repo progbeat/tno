@@ -13,8 +13,9 @@ instructions: |
 
 agents:
   Smith:
-    paths:
-      - "."
+    ignore:
+      - "target/**"
+    plugins: []
 
 expectations:
   - q: Is README.md consistent with the current state of the repository?
@@ -38,10 +39,28 @@ expectations:
   - q: "Does `canon check` hide expected answers from evaluator agents?"
     a: "yes"
 
-  - q: "Are evaluator agents configured with explicit accessible paths and excludes?"
+  - q: "Are evaluator agents configured with explicit ignore patterns and plugin lists?"
     a: "yes"
 
-  - q: "Does `canon check` always exclude .canon/** from evaluator workspaces?"
+  - q: "Does each evaluator agent support an `ignore` list that defines additional files or directories the agent must not read?"
+    a: "yes"
+
+  - q: "Does each evaluator agent support a `plugins` list that defines which Codex plugins may be loaded for that agent?"
+    a: "yes"
+
+  - q: "Does `canon check` always add `.canon/**` to every evaluator agent's effective ignore patterns, even when it is not listed explicitly in the agent configuration?"
+    a: "yes"
+
+  - q: "Does `canon check` enforce ignored paths by configuring Codex filesystem permissions for codex app-server, rather than by copying files into a temporary evaluator workspace?"
+    a: "yes"
+
+  - q: "Does `canon check` deny evaluator-agent read access to `.canon/**` through Codex filesystem permissions?"
+    a: "yes"
+
+  - q: "Does `canon check` deny evaluator-agent read access to every configured `ignore` pattern through Codex filesystem permissions?"
+    a: "yes"
+
+  - q: "Does `canon check` avoid creating a filtered temporary workspace solely to hide `.canon/**` or other ignored files from evaluator agents?"
     a: "yes"
 
   - q: "Does `canon check` supply the runtime answer format during interrogation?"
@@ -106,6 +125,12 @@ expectations:
       with filenames matching `YYYYMMDD-HHMMSS.jsonl`, where each non-empty line is
       one complete valid JSON object representing one expectation-agent check result,
       `result` is exactly either `pass` or `fail`, and every record contains at least
-      these keys: `timestamp`, `number`, `result`, `agent`, `prompt`, `expected`,
-      `observed`, and `evidence`?
+      these keys in this exact order: `timestamp`, `number`, `result`, `agent`,
+      `prompt`, `expected`, `observed`, and `evidence`?
+    a: "yes"
+
+  - q: "Does `canon check` suppress codex app-server stderr noise, such as WARN messages from codex_core_skills::loader?"
+    a: "yes"
+
+  - q: "Does `canon check` start the codex app-server without loading any plugins unless explicitly configured?"
     a: "yes"
