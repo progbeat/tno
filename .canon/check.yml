@@ -1,24 +1,27 @@
 version: 1
 
-instructions: |
-  Use the following response policy:
-  Answer exactly `yes` or `no` only when there is sufficient evidence to support the answer.
-  Do not guess.
-  If there is not enough evidence to answer `yes` or `no`, answer exactly `skip`.
-  If question is malformed, answer exactly `malformed`.
-  Scoring policy:
-  * Correct answer: `+1`
-  * Incorrect answer: `-1`
-  * Skip: `0`
-
-agents:
-  Smith:
-    ignore:
-      - "target/**"
-    plugins: []
+agent:
+  instructions: |
+    Use the following response policy:
+    Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
+    If the question asks you to choose from lettered options, answer exactly with the option letter only, such as `a` or `b`.
+    Do not guess.
+    If there is not enough evidence to answer a valid question, answer exactly `idk`.
+    If the question is malformed, answer exactly `malformed`.
+    Scoring policy:
+    * Correct answer: +1
+    * Incorrect answer: -1
+    * `idk`: 0
+    * `malformed`: N/A, human review required
+  ignore:
+    - "target/**"
+  plugins: []
 
 expectations:
   - q: Can you read .canon/check.yml?
+    a: "no"
+
+  - q: Can you read .git/canon logs or cache files?
     a: "no"
 
   - q: Is README.md consistent with the current state of the repository?
@@ -36,34 +39,31 @@ expectations:
   - q: "Does `canon init` create .canon/check.yml from an embedded default template?"
     a: "yes"
 
+  - q: "Does `.canon/check.yml` configure exactly one evaluator agent through a single `agent` section instead of multiple named agents?"
+    a: "yes"
+
+  - q: "Does the single evaluator agent configuration include `instructions`, `ignore`, and `plugins`?"
+    a: "yes"
+
   - q: "Are expected answers single-line strings compared by exact string equality?"
     a: "yes"
 
-  - q: "Does `canon check` hide expected answers from evaluator agents?"
+  - q: "Does `canon check` hide expected answers from the evaluator agent?"
     a: "yes"
 
-  - q: "Are evaluator agents configured with explicit ignore patterns and plugin lists?"
-    a: "yes"
-
-  - q: "Does each evaluator agent support an `ignore` list that defines additional files or directories the agent must not read?"
-    a: "yes"
-
-  - q: "Does each evaluator agent support a `plugins` list that defines which Codex plugins may be loaded for that agent?"
-    a: "yes"
-
-  - q: "Does `canon check` always add `.canon/**` to every evaluator agent's effective ignore patterns, even when it is not listed explicitly in the agent configuration?"
-    a: "yes"
-
-  - q: "Does `canon check` enforce ignored paths by configuring Codex filesystem permissions for codex app-server, rather than by copying files into a temporary evaluator workspace?"
+  - q: "Does `canon check` always add `.canon/**` to the evaluator agent's effective ignore patterns?"
     a: "yes"
 
   - q: "Does `canon check` deny evaluator-agent read access to `.canon/**` through Codex filesystem permissions?"
     a: "yes"
 
+  - q: "Does `canon check` deny evaluator-agent read access to `.git/**` through Codex filesystem permissions?"
+    a: "yes"
+
   - q: "Does `canon check` deny evaluator-agent read access to every configured `ignore` pattern through Codex filesystem permissions?"
     a: "yes"
 
-  - q: "Does `canon check` avoid creating a filtered temporary workspace solely to hide `.canon/**` or other ignored files from evaluator agents?"
+  - q: "Does `canon check` enforce ignored paths by configuring Codex filesystem permissions for codex app-server?"
     a: "yes"
 
   - q: "Does `canon check` supply the runtime answer format during interrogation?"
@@ -72,10 +72,64 @@ expectations:
   - q: "Does `canon check` ask one expectation at a time?"
     a: "yes"
 
-  - q: "Does `canon check` reuse the same Codex session for all selected expectations for a given agent?"
+  - q: "Does `canon check` reuse the same Codex session for all selected expectations?"
     a: "yes"
 
-  - q: "Does `canon check` use codex app-server to communicate with agents?"
+  - q: "Does `canon check` use codex app-server to communicate with the evaluator agent?"
+    a: "yes"
+
+  - q: "Does `canon check` evaluate the staged Git snapshot by default rather than unstaged or untracked working tree changes?"
+    a: "yes"
+
+  - q: "Does `canon check` preserve unstaged and untracked working tree changes after the check finishes or fails?"
+    a: "yes"
+
+  - q: "Does `canon check` use `git write-tree` as the staged Git tree hash for the current check?"
+    a: "yes"
+
+  - q: "Does `canon check` write check logs to the Git directory path returned by `git rev-parse --git-path canon/${HASH}.jsonl`, where `HASH` is the staged Git tree hash?"
+    a: "yes"
+
+  - q: "Does `canon check` write check logs to `.canon/logs/`?"
+    a: "no"
+
+  - q: "Does each staged Git tree use exactly one JSONL check-log file regardless of selected expectation numbers, --fail-fast, --ignore-cache, or canon gate?"
+    a: "yes"
+
+  - q: "Does every `canon check` JSONL record include a `hash` field?"
+    a: "yes"
+
+  - q: "Is `hash` a 120-bit base64url string without padding, encoded as exactly 20 characters?"
+    a: "yes"
+
+  - q: "Is `hash` derived from the current expectation content, including both the prompt and expected answer?"
+    a: "yes"
+
+  - q: "Does `canon check` reuse an existing check-log record only when both the expectation number and `hash` match the current expectation?"
+    a: "yes"
+
+  - q: "Does `canon check` reuse the latest valid existing check-log record for each selected expectation number before asking the evaluator agent?"
+    a: "yes"
+
+  - q: "Does `canon check` append new check-log records to the staged tree's JSONL file instead of rewriting the whole file?"
+    a: "yes"
+
+  - q: "Does `canon check --ignore-cache` force evaluator interrogation even when reusable check-log records already exist?"
+    a: "yes"
+
+  - q: "Does `canon gate` validate existing cached records without asking the evaluator agent any questions?"
+    a: "yes"
+
+  - q: "Does `canon gate` fail when any expectation lacks a valid cached passing record for the current staged Git snapshot?"
+    a: "yes"
+
+  - q: "Does `canon gate` print an actionable message asking the user to run `canon check` when cached passing records are missing?"
+    a: "yes"
+
+  - q: "Which command does the pre-commit hook run? a) canon gate b) canon check"
+    a: "a"
+
+  - q: "Does the pre-commit hook fail quickly and ask the user to run `canon check` when `canon gate` reports missing cached passing records?"
     a: "yes"
 
   - q: "Does `canon check` run all expectations when no numbers are provided?"
@@ -84,13 +138,13 @@ expectations:
   - q: "Does `canon check` support rerunning selected expectations by 1-based numbers such as canon check 4 5 42?"
     a: "yes"
 
-  - q: "Does `canon check` reject invalid, zero, duplicate, or out-of-range expectation numbers before starting evaluator agents?"
+  - q: "Does `canon check` reject invalid, zero, duplicate, or out-of-range expectation numbers before starting the evaluator agent?"
     a: "yes"
 
-  - q: "Does `canon check` require every selected expectation to be answered correctly by every configured agent?"
+  - q: "Does `canon check` require every selected expectation to be answered correctly by the evaluator agent?"
     a: "yes"
 
-  - q: "Does `canon check` treat skip as incorrect unless the expected answer is exactly skip?"
+  - q: "Does `canon check` treat idk as an ordinary exact-match answer string rather than as a special protocol value?"
     a: "yes"
 
   - q: "Does `canon check` retry a malformed evaluator response once before failing?"
@@ -105,28 +159,27 @@ expectations:
   - q: "Does `canon check` fail solely because evidence remains empty after retry?"
     a: "no"
 
-  - q: "Does `canon check` fail when the current Git change set includes both .canon/** changes and non-.canon changes?"
+  - q: "Does `canon check` fail when the current staged Git change set includes both .canon/** changes and non-.canon changes?"
     a: "yes"
 
-  - q: "Are old logs in .canon/logs removed when the total size exceeds 100MB or the number of logs exceeds 10?"
+  - q: "Are old logs in `.git/canon/*.jsonl` removed when the total size exceeds 100MB or the number of logs exceeds 10?"
     a: "yes"
 
-  - q: "If evaluator agent answers that the question is `malformed`, is human review required to fix the expectation or prompt?"
+  - q: "If the evaluator agent answers that the question is `malformed`, is human review required to fix the expectation or prompt?"
     a: "yes"
 
   - q: "Does `canon init` add /.canon/logs/ to .gitignore?"
     a: "no"
 
-  - q: "Are timestamps in logs UTC?"
+  - q: "Are timestamps in check-log records UTC?"
     a: "yes"
 
   - q: |
-      Does `canon check` write interrogation logs to `.canon/logs/` as JSON Lines files
-      with filenames matching `YYYYMMDD-HHMMSS.jsonl`, where each non-empty line is
-      one complete valid JSON object representing one expectation-agent check result,
-      `result` is exactly either `pass` or `fail`, and every record contains at least
-      these keys in this exact order: `timestamp`, `number`, `result`, `agent`,
-      `prompt`, `expected`, `observed`, and `evidence`?
+      Does `canon check` write check logs as JSON Lines files where each non-empty
+      line is one complete valid JSON object representing one expectation check
+      result, `result` is exactly either `pass` or `fail`, and every record contains
+      at least these keys in this exact order: `timestamp`, `number`,
+      `hash`, `result`, `prompt`, `expected`, `observed`, and `evidence`?
     a: "yes"
 
   - q: "Does `canon check` suppress codex app-server stderr noise, such as WARN messages from codex_core_skills::loader?"
@@ -144,17 +197,20 @@ expectations:
   - q: "Does `canon check` continue checking remaining expectations when a failure occurs without --fail-fast?"
     a: "yes"
 
-  - q: "Does `canon check` write each log record to the JSONL file immediately after it is produced, without buffering?"
+  - q: "Does `canon check` write each new check-log record immediately after it is produced, without waiting for the full run to finish?"
     a: "yes"
 
-  - q: "Does `canon check` flush the log file after each expectation-agent check record is written?"
+  - q: "Does `canon check` flush the check-log file after each new expectation check record is written?"
     a: "yes"
 
-  - q: "Does `canon check` allow real-time log observation via `tail -f .canon/logs/YYYYMMDD-HHMMSS.jsonl` during interrogation?"
+  - q: "Does `canon check` print JSON Lines to stdout, with one complete result object per selected expectation?"
     a: "yes"
 
-  - q: "Does `canon check` print just one line per expectation as `<number>. OK` or `<number>. FAIL`?"
+  - q: "Does each stdout JSON object include the expectation number, hash, result, prompt, expected answer, observed answer, evidence, and whether the result came from cache?"
     a: "yes"
 
-  - q: "Does each log record's `timestamp` reflect the time when that specific log record is produced after the evaluator response and check result are available?"
+  - q: "Does each check-log record's `timestamp` reflect the time when that specific log record is produced after the evaluator response and check result are available?"
     a: "yes"
+
+  - q: "Are there any obsolete, unused, stray, or dead-end project files or code paths that are safe to remove without changing the intended functionality?"
+    a: "no"
