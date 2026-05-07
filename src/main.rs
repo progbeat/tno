@@ -15,7 +15,15 @@ const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 const B64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const CHECK_PATH: &str = ".canon/check.yml";
+const CHECK_LOG_DIR: &str = ".canon/logs";
+const CHECK_LOG_MAX_BYTES: u64 = 100 * 1024 * 1024;
+const CHECK_LOG_MAX_FILES: usize = 10;
 const DEFAULT_CHECK_TEMPLATE: &str = include_str!("../templates/check.yml");
+const GIT_HOOKS_PATH: &str = ".githooks";
+const PRE_COMMIT_HOOK_PATH: &str = ".githooks/pre-commit";
+const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../templates/pre-commit");
+const MALFORMED_REVIEW_WARNING: &str =
+    "human review required: evaluator marked the expectation question as malformed";
 
 #[derive(Debug)]
 struct Config {
@@ -109,6 +117,9 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
                 return Err("init does not accept arguments".to_string());
             }
             return run_init(Path::new("."));
+        }
+        "hook" => {
+            return run_hook_command(Path::new("."), &args[1..]);
         }
         "check" => {
             return run_check_command(Path::new("."), &args[1..]);
@@ -489,11 +500,173 @@ fn run_init(root: &Path) -> Result<(), String> {
     if check_path.exists() {
         return Err(format!("{} already exists", CHECK_PATH));
     }
+
     if let Some(parent) = check_path.parent() {
         ensure_dir(parent)?;
     }
     fs::write(&check_path, DEFAULT_CHECK_TEMPLATE)
-        .map_err(|err| format!("failed to write {}: {}", check_path.display(), err))
+        .map_err(|err| format!("failed to write {}: {}", check_path.display(), err))?;
+    println!("Created {}", CHECK_PATH);
+    Ok(())
+}
+
+fn run_hook_command(root: &Path, args: &[OsString]) -> Result<(), String> {
+    if args.len() != 1 {
+        return Err("usage: canon hook install".to_string());
+    }
+    let action = arg_to_string(&args[0])?;
+    match action.as_str() {
+        "install" => run_hook_install(root),
+        _ => Err(format!("unknown hook command: {}", action)),
+    }
+}
+
+fn run_hook_install(root: &Path) -> Result<(), String> {
+    preflight_pre_commit_hook(root)?;
+    preflight_git_hooks_path(root)?;
+    install_pre_commit_hook(root)
+}
+
+fn preflight_pre_commit_hook(root: &Path) -> Result<(), String> {
+    let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
+    if !hook_path.exists() {
+        return Ok(());
+    }
+
+    let existing = fs::read_to_string(&hook_path)
+        .map_err(|err| format!("failed to read {}: {}", hook_path.display(), err))?;
+    if existing != DEFAULT_PRE_COMMIT_HOOK {
+        return Err(format!(
+            "{} already exists with different content",
+            PRE_COMMIT_HOOK_PATH
+        ));
+    }
+    Ok(())
+}
+
+fn preflight_git_hooks_path(root: &Path) -> Result<(), String> {
+    if let Some(existing) = current_git_hooks_path(root)? {
+        if existing != GIT_HOOKS_PATH {
+            return Err(format!(
+                "git core.hooksPath is already set to {}; set it to {} manually if desired",
+                existing, GIT_HOOKS_PATH
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn install_pre_commit_hook(root: &Path) -> Result<(), String> {
+    let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
+    if let Some(parent) = hook_path.parent() {
+        ensure_dir(parent)?;
+    }
+    if !hook_path.exists() {
+        fs::write(&hook_path, DEFAULT_PRE_COMMIT_HOOK)
+            .map_err(|err| format!("failed to write {}: {}", hook_path.display(), err))?;
+        println!("Created {}", PRE_COMMIT_HOOK_PATH);
+    }
+    make_executable(&hook_path)?;
+    configure_git_hooks_path(root)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)
+        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+fn configure_git_hooks_path(root: &Path) -> Result<(), String> {
+    if !is_git_worktree(root)? {
+        println!(
+            "Git worktree not detected; {} was created but core.hooksPath was not set.",
+            PRE_COMMIT_HOOK_PATH
+        );
+        return Ok(());
+    }
+
+    if current_git_hooks_path(root)?.as_deref() == Some(GIT_HOOKS_PATH) {
+        println!("Git core.hooksPath already = {}", GIT_HOOKS_PATH);
+        return Ok(());
+    }
+
+    set_git_hooks_path(root)?;
+    println!("Configured git core.hooksPath = {}", GIT_HOOKS_PATH);
+    Ok(())
+}
+
+fn current_git_hooks_path(root: &Path) -> Result<Option<String>, String> {
+    if !is_git_worktree(root)? {
+        return Ok(None);
+    }
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("config")
+        .arg("--local")
+        .arg("--get")
+        .arg("core.hooksPath")
+        .output()
+        .map_err(|err| format!("failed to run git config: {}", err))?;
+    if output.status.success() {
+        return Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ));
+    }
+    if output.status.code() == Some(1) {
+        return Ok(None);
+    }
+    Err(format!(
+        "failed to read git core.hooksPath: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
+fn set_git_hooks_path(root: &Path) -> Result<(), String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("config")
+        .arg("--local")
+        .arg("core.hooksPath")
+        .arg(GIT_HOOKS_PATH)
+        .output()
+        .map_err(|err| format!("failed to run git config: {}", err))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "failed to set git core.hooksPath: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
+fn is_git_worktree(root: &Path) -> Result<bool, String> {
+    let output = match Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("rev-parse")
+        .arg("--is-inside-work-tree")
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(format!("failed to run git rev-parse: {}", err)),
+    };
+    Ok(output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true")
 }
 
 fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), String> {
@@ -503,6 +676,7 @@ fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), String> {
     let mut runner = AppServerRunner::new()?;
     let records = run_check_with_runner(root, &config, &selected, &mut runner)?;
     print_check_report(&records);
+    write_check_log(root, &records)?;
     if records.iter().all(|record| record.passed) {
         Ok(())
     } else {
@@ -686,10 +860,14 @@ fn run_check_with_runner<R: EvaluatorRunner>(
         for expectation in selected {
             let prompt = question_prompt(&config.instructions, &expectation.q);
             let response = ask_with_repairs(runner, &session_id, &prompt)?;
-            let passed = response.answer == expectation.a
+            let needs_human_review = response.answer == "malformed";
+            let passed = !needs_human_review
+                && response.answer == expectation.a
                 && (response.answer == "skip" && expectation.a == "skip"
                     || response.answer != "skip");
-            let warning = if response.evidence.trim().is_empty() {
+            let warning = if needs_human_review {
+                Some(MALFORMED_REVIEW_WARNING.to_string())
+            } else if response.evidence.trim().is_empty() {
                 Some("evidence is empty after retry".to_string())
             } else {
                 None
@@ -786,6 +964,138 @@ fn print_check_report(records: &[CheckRecord]) {
         println!("Rerun: canon check {}", record.number);
         println!();
     }
+}
+
+fn write_check_log(root: &Path, records: &[CheckRecord]) -> Result<PathBuf, String> {
+    let log_dir = root.join(CHECK_LOG_DIR);
+    ensure_dir(&log_dir)?;
+    let seconds = unix_timestamp()?;
+    let filename_timestamp = format_log_filename_timestamp(seconds);
+    let record_timestamp = format_log_record_timestamp(seconds);
+    let path = log_dir.join(format!("{}.jsonl", filename_timestamp));
+    fs::write(&path, render_check_log(records, &record_timestamp))
+        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+    prune_check_logs(&log_dir, CHECK_LOG_MAX_BYTES, CHECK_LOG_MAX_FILES)?;
+    Ok(path)
+}
+
+fn render_check_log(records: &[CheckRecord], timestamp: &str) -> String {
+    let mut output = String::new();
+    for record in records {
+        let mut value = json!({
+            "timestamp": timestamp,
+            "number": record.number,
+            "result": if record.passed { "pass" } else { "fail" },
+            "agent": record.agent,
+            "prompt": record.prompt,
+            "expected": record.expected,
+            "observed": record.observed,
+            "evidence": record.evidence,
+        });
+        if let Some(warning) = &record.warning {
+            value["warning"] = Value::String(warning.clone());
+        }
+        output.push_str(&serde_json::to_string(&value).expect("check log record is serializable"));
+        output.push('\n');
+    }
+    output
+}
+
+#[derive(Debug)]
+struct CheckLogFile {
+    path: PathBuf,
+    name: String,
+    size: u64,
+}
+
+fn prune_check_logs(log_dir: &Path, max_bytes: u64, max_files: usize) -> Result<(), String> {
+    let mut logs = check_log_files(log_dir)?;
+    logs.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut total_size = logs.iter().map(|log| log.size).sum::<u64>();
+
+    while !logs.is_empty() && (logs.len() > max_files || (total_size > max_bytes && logs.len() > 1))
+    {
+        let oldest = logs.remove(0);
+        total_size = total_size.saturating_sub(oldest.size);
+        fs::remove_file(&oldest.path)
+            .map_err(|err| format!("failed to remove {}: {}", oldest.path.display(), err))?;
+    }
+
+    Ok(())
+}
+
+fn check_log_files(log_dir: &Path) -> Result<Vec<CheckLogFile>, String> {
+    if !log_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut logs = Vec::new();
+    for entry in fs::read_dir(log_dir)
+        .map_err(|err| format!("failed to read {}: {}", log_dir.display(), err))?
+    {
+        let entry = entry.map_err(|err| format!("failed to read log entry: {}", err))?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let metadata = entry
+            .metadata()
+            .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("log filename must be valid UTF-8: {}", path.display()))?
+            .to_string();
+        logs.push(CheckLogFile {
+            path,
+            name,
+            size: metadata.len(),
+        });
+    }
+    Ok(logs)
+}
+
+fn format_log_filename_timestamp(seconds: u64) -> String {
+    let (year, month, day, hour, minute, second) = utc_parts_from_unix_seconds(seconds);
+    format!(
+        "{:04}{:02}{:02}-{:02}{:02}{:02}",
+        year, month, day, hour, minute, second
+    )
+}
+
+fn format_log_record_timestamp(seconds: u64) -> String {
+    let (year, month, day, hour, minute, second) = utc_parts_from_unix_seconds(seconds);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hour, minute, second
+    )
+}
+
+fn utc_parts_from_unix_seconds(seconds: u64) -> (i64, u32, u32, u64, u64, u64) {
+    let days = (seconds / 86_400) as i64;
+    let seconds_of_day = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    (year, month, day, hour, minute, second)
+}
+
+fn civil_from_days(days_since_unix_epoch: i64) -> (i64, u32, u32) {
+    let days = days_since_unix_epoch + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    let year = year_of_era + era * 400 + if month <= 2 { 1 } else { 0 };
+    (year, month as u32, day as u32)
 }
 
 fn create_agent_workspace(root: &Path, agent: &AgentConfig) -> Result<TempDir, String> {
@@ -1099,7 +1409,7 @@ fn print_help() {
         "canon - thread-scoped decisions and invariants\n\n\
 Usage:\n  canon | canon pwd\n  canon p|path <key>\n  canon r|read <key>\n  canon w|write <key> [text]\n  canon a|append <key> [text]\n  canon d|del|delete|rm <key>\n  canon rg|g <pattern> [rg args...]\n"
             .to_string()
-            + "  canon init\n  canon check [expectation numbers...]\n"
+            + "  canon init\n  canon hook install\n  canon check [expectation numbers...]\n"
     );
 }
 
@@ -1337,6 +1647,8 @@ expectations:
             fs::read_to_string(&check_path).unwrap(),
             DEFAULT_CHECK_TEMPLATE
         );
+        assert!(!root.join(".gitignore").exists());
+        assert!(!root.join(PRE_COMMIT_HOOK_PATH).exists());
         assert!(run_init(&root).is_err());
         let _ = fs::remove_dir_all(root);
     }
@@ -1348,6 +1660,44 @@ expectations:
         let root = temp_home("init-no-thread");
         run_init(&root).unwrap();
         assert!(root.join(CHECK_PATH).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hook_install_creates_reusable_pre_commit_hook() {
+        let root = temp_home("hook-install");
+        run_hook_install(&root).unwrap();
+        let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
+        assert!(!root.join(CHECK_PATH).exists());
+        assert!(!root.join(".gitignore").exists());
+        assert_eq!(
+            fs::read_to_string(&hook_path).unwrap(),
+            DEFAULT_PRE_COMMIT_HOOK
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(
+                fs::metadata(&hook_path).unwrap().permissions().mode() & 0o111,
+                0
+            );
+        }
+
+        run_hook_install(&root).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hook_install_refuses_different_existing_pre_commit_hook() {
+        let root = temp_home("hook-install-existing");
+        let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
+        fs::create_dir_all(hook_path.parent().unwrap()).unwrap();
+        fs::write(&hook_path, "custom hook").unwrap();
+
+        let err = run_hook_install(&root).unwrap_err();
+        assert!(err.contains("already exists with different content"));
+        assert!(!root.join(CHECK_PATH).exists());
+        assert!(!root.join(".gitignore").exists());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1484,6 +1834,99 @@ expectations:
         assert!(records[0].warning.is_some());
         assert_eq!(runner.prompts.len(), 2);
         assert!(runner.prompts[1].contains("no evidence"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn check_runner_requires_human_review_for_malformed_answer() {
+        let root = temp_home("check-malformed-answer");
+        fs::write(root.join("README.md"), "hello").unwrap();
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let selected = select_expectations(&config, &["1".into()]).unwrap();
+        let mut runner = FakeRunner::new(&["ANSWER: malformed\nEVIDENCE:\nquestion is malformed"]);
+        let records = run_check_with_runner(&root, &config, &selected, &mut runner).unwrap();
+        assert!(!records[0].passed);
+        assert_eq!(
+            records[0].warning.as_deref(),
+            Some(MALFORMED_REVIEW_WARNING)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn log_timestamp_uses_yyyymmdd_hhmmss_format() {
+        assert_eq!(format_log_filename_timestamp(0), "19700101-000000");
+        assert_eq!(format_log_filename_timestamp(86_399), "19700101-235959");
+        assert_eq!(format_log_filename_timestamp(86_400), "19700102-000000");
+        assert_eq!(format_log_record_timestamp(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn check_log_is_written_and_old_logs_are_pruned() {
+        let root = temp_home("check-log");
+        let log_dir = root.join(CHECK_LOG_DIR);
+        fs::create_dir_all(&log_dir).unwrap();
+        for day in 1..=CHECK_LOG_MAX_FILES {
+            fs::write(
+                log_dir.join(format!("200001{:02}-000000.jsonl", day)),
+                "old",
+            )
+            .unwrap();
+        }
+
+        let records = vec![CheckRecord {
+            number: 1,
+            agent: "Smith".to_string(),
+            prompt: "Question?".to_string(),
+            expected: "yes".to_string(),
+            observed: "yes".to_string(),
+            evidence: "README.md has evidence".to_string(),
+            warning: None,
+            passed: true,
+        }];
+        let path = write_check_log(&root, &records).unwrap();
+        let filename = path.file_name().unwrap().to_str().unwrap();
+        assert_eq!(filename.len(), "YYYYMMDD-HHMMSS.jsonl".len());
+        assert_eq!(&filename[8..9], "-");
+        assert!(filename.ends_with(".jsonl"));
+        assert!(filename[..8].chars().all(|ch| ch.is_ascii_digit()));
+        assert!(filename[9..15].chars().all(|ch| ch.is_ascii_digit()));
+        let content = fs::read_to_string(&path).unwrap();
+        let lines = content.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 1);
+        let json: Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(json["result"], "pass");
+        assert_eq!(json["number"], 1);
+        assert_eq!(json["agent"], "Smith");
+        assert_eq!(json["prompt"], "Question?");
+        assert_eq!(json["expected"], "yes");
+        assert_eq!(json["observed"], "yes");
+        assert_eq!(json["evidence"], "README.md has evidence");
+        let timestamp = json["timestamp"].as_str().unwrap();
+        assert_eq!(timestamp.len(), "YYYY-MM-DDTHH:MM:SSZ".len());
+        assert!(timestamp.ends_with('Z'));
+        assert_eq!(
+            check_log_files(&log_dir).unwrap().len(),
+            CHECK_LOG_MAX_FILES
+        );
+        assert!(!log_dir.join("20000101-000000.jsonl").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn check_log_pruning_uses_total_size_limit() {
+        let root = temp_home("check-log-size");
+        let log_dir = root.join(CHECK_LOG_DIR);
+        fs::create_dir_all(&log_dir).unwrap();
+        fs::write(log_dir.join("20000101-000000.jsonl"), "12345").unwrap();
+        fs::write(log_dir.join("20000102-000000.jsonl"), "12345").unwrap();
+        fs::write(log_dir.join("20000103-000000.jsonl"), "12345").unwrap();
+
+        prune_check_logs(&log_dir, 10, 10).unwrap();
+
+        assert!(!log_dir.join("20000101-000000.jsonl").exists());
+        assert!(log_dir.join("20000102-000000.jsonl").exists());
+        assert!(log_dir.join("20000103-000000.jsonl").exists());
         let _ = fs::remove_dir_all(root);
     }
 

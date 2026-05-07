@@ -1,0 +1,43 @@
+#!/usr/bin/env sh
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+canon_bin="${CANON_BIN:-}"
+if [ -z "$canon_bin" ]; then
+  if [ -x "$repo_root/target/debug/canon" ] &&
+    [ -f "$repo_root/.codex-plugin/plugin.json" ] &&
+    grep -q '"name"[[:space:]]*:[[:space:]]*"canon"' "$repo_root/.codex-plugin/plugin.json"; then
+    canon_bin="$repo_root/target/debug/canon"
+  elif command -v canon >/dev/null 2>&1; then
+    canon_bin="$(command -v canon)"
+  fi
+fi
+
+if [ -z "$canon_bin" ]; then
+  echo "canon pre-commit: canon is not on PATH" >&2
+  echo "Install canon first: https://github.com/progbeat/canon#quick-start" >&2
+  exit 1
+fi
+
+if [ ! -x "$canon_bin" ]; then
+  echo "canon pre-commit: canon binary is not executable: $canon_bin" >&2
+  exit 1
+fi
+
+if ! "$canon_bin" help 2>/dev/null | grep -q "canon check"; then
+  echo "canon pre-commit: $canon_bin does not support 'canon check'" >&2
+  echo "Update canon first: https://github.com/progbeat/canon#quick-start" >&2
+  exit 1
+fi
+
+if [ -n "$(git status --porcelain -- .canon/)" ]; then
+  echo "canon pre-commit: .canon/ has uncommitted changes" >&2
+  git status --porcelain -- .canon/ >&2
+  echo "Clean .canon/ before committing." >&2
+  exit 1
+fi
+
+echo "canon pre-commit: running canon check"
+"$canon_bin" check

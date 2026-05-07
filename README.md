@@ -44,6 +44,18 @@ The installer:
 | Local plugin registry | `~/.agents/plugins/marketplace.json` |
 | Plugin cache | `~/.codex/plugins/cache/codex-plugins/canon` |
 
+To create project checks and run `canon check` automatically before commits:
+
+```sh
+canon init
+canon hook install
+```
+
+`canon init` creates `.canon/check.yml` from the embedded default template and
+fails if that file already exists. `canon hook install` installs or reuses
+`.githooks/pre-commit` and sets the local Git `core.hooksPath` to `.githooks`.
+Projects that keep check logs out of Git should ignore `.canon/logs/`.
+
 ---
 
 ## What It Does
@@ -100,15 +112,16 @@ Search canon with ripgrep. `canon g` is also available as a short alias for `can
 
 ```sh
 canon init
+canon hook install
 canon check
 canon check 4 5 42
 ```
 
-Create `.canon/check.yml`, run every project expectation, or rerun selected
-1-based expectations. `canon check` is a project-facing AI expectation linter:
-it asks configured evaluator agents to answer each expectation from allowed
-files, hides expected answers from them, and fails when observed answers do not
-exactly match.
+Create `.canon/check.yml`, install the pre-commit hook, run every project
+expectation, or rerun selected 1-based expectations. `canon check` is a
+project-facing AI expectation linter: it asks configured evaluator agents to
+answer each expectation from allowed files, hides expected answers from them,
+and fails when observed answers do not exactly match.
 
 Long aliases: `path`, `read`, `write`, `append`, `delete`, `del`, and `rm`.
 
@@ -147,6 +160,17 @@ expected answer is exactly `skip`.
 time, reuses the same Codex app-server session per agent, and reports the
 expectation number, agent name, prompt, expected answer, observed answer,
 evidence, and rerun command.
+
+Each run also stores the interrogation report in
+`.canon/logs/YYYYMMDD-HHMMSS.jsonl`. Every non-empty line is one JSON object for
+one expectation-agent result with `timestamp`, `number`, `result`, `agent`,
+`prompt`, `expected`, `observed`, and `evidence`. `result` is exactly `pass` or
+`fail`, and timestamps are UTC. After writing a log, `canon check` removes old
+`.jsonl` files until at most 10 logs remain and their total size is at most
+100MB, unless the newest log alone exceeds that size.
+
+If an evaluator answers `malformed`, `canon check` fails that expectation and
+prints a human-review warning so a person can fix the expectation or prompt.
 
 ---
 
