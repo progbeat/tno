@@ -1,22 +1,26 @@
 version: 1
 
-instructions: |
-  Use the following response policy:
-  Answer exactly `yes` or `no` only when there is sufficient evidence to support the answer.
-  Do not guess.
-  If there is not enough evidence to answer `yes` or `no`, answer exactly `skip`.
-  If question is malformed, answer exactly `malformed`.
-
-  Scoring policy:
-  * Correct answer: `+1`
-  * Incorrect answer: `-1`
-  * Skip: `0`
-
-agents:
-  project:
-    ignore:
-      - "target/**"
-    plugins: []
+agent:
+  instructions: |
+    Use the following response policy:
+    Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
+    If the question asks you to choose from lettered options, answer exactly with the option letter only, such as `a` or `b`.
+    Do not guess.
+    If there is not enough evidence to answer a valid question, answer exactly `idk`.
+    If the question is malformed, answer exactly `malformed`.
+    Scoring policy:
+    * Correct answer: +5
+    * Incorrect answer: -5
+    * `idk`: 0
+    * `malformed`: N/A, human review required
+    Scope policy:
+    * Prefer the smallest file scope that still contains enough evidence.
+    * Propose a narrower scope only when the evidence remains sufficient inside it.
+    * Successful scope narrowing: +1
+    * Failed scope narrowing: -1
+  ignore:
+    - "target/**"
+  plugins: []
 
 expectations:
   - q: "Does this project satisfy the expectation described here?"

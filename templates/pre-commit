@@ -26,8 +26,8 @@ if [ ! -x "$canon_bin" ]; then
   exit 1
 fi
 
-if ! "$canon_bin" help 2>/dev/null | grep -q "canon check"; then
-  echo "canon pre-commit: $canon_bin does not support 'canon check'" >&2
+if ! "$canon_bin" help 2>/dev/null | grep -q "canon gate"; then
+  echo "canon pre-commit: $canon_bin does not support 'canon gate'" >&2
   echo "Update canon first: https://github.com/progbeat/canon#quick-start" >&2
   exit 1
 fi
@@ -39,5 +39,5 @@ if [ -n "$(git status --porcelain -- .canon/)" ]; then
   exit 1
 fi
 
-echo "canon pre-commit: running canon check"
-"$canon_bin" check
+echo "canon pre-commit: running canon gate"
+"$canon_bin" gate

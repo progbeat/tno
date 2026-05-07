@@ -44,7 +44,7 @@ The installer:
 | Local plugin registry | `~/.agents/plugins/marketplace.json` |
 | Plugin cache | `~/.codex/plugins/cache/codex-plugins/canon` |
 
-To create project checks and run `canon check` automatically before commits:
+To create project checks and run the fast `canon gate` before commits:
 
 ```sh
 canon init
@@ -54,7 +54,9 @@ canon hook install
 `canon init` creates `.canon/check.yml` from the embedded default template and
 fails if that file already exists. `canon hook install` installs or reuses
 `.githooks/pre-commit` and sets the local Git `core.hooksPath` to `.githooks`.
-Projects that keep check logs out of Git should ignore `.canon/logs/`.
+The pre-commit hook refuses dirty `.canon/` changes and runs `canon gate`, a
+fast cache-only check that asks you to run `canon check` when the staged snapshot
+has not been checked yet.
 
 ---
 
@@ -114,16 +116,19 @@ Search canon with ripgrep. `canon g` is also available as a short alias for `can
 canon init
 canon hook install
 canon check
+canon gate
 canon check --fail-fast
+canon check --ignore-cache
 canon check 4 5 42
 ```
 
 Create `.canon/check.yml`, install the pre-commit hook, run every project
-expectation, stop after the first failed expectation-agent result, or rerun
+expectation, validate cached results without asking the evaluator, stop after
+the first failed expectation result, ignore reusable cache records, or rerun
 selected 1-based expectations. `canon check` is a project-facing AI expectation
-linter: it asks configured evaluator agents to answer each expectation from
-allowed files, hides expected answers from them, and fails when observed answers
-do not exactly match.
+linter: it asks the configured evaluator agent to answer each expectation from
+allowed files in the staged Git snapshot, hides expected answers from it, and
+fails when observed answers do not exactly match.
 
 Long aliases: `path`, `read`, `write`, `append`, `delete`, `del`, and `rm`.
 
@@ -135,59 +140,67 @@ Long aliases: `path`, `read`, `write`, `append`, `delete`, `del`, and `rm`.
 
 ```yaml
 version: 1
-instructions: |
-  Use the following response policy:
-  Answer exactly `yes` or `no` only when there is sufficient evidence to support the answer.
-  Do not guess.
-  If there is not enough evidence to answer `yes` or `no`, answer exactly `skip`.
-  If question is malformed, answer exactly `malformed`.
-
-  Scoring policy:
-  * Correct answer: `+1`
-  * Incorrect answer: `-1`
-  * Skip: `0`
-
-agents:
-  project:
-    ignore:
-      - "target/**"
-    plugins: []
+agent:
+  instructions: |
+    Use the following response policy:
+    Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
+    If the question asks you to choose from lettered options, answer exactly with the option letter only, such as `a` or `b`.
+    Do not guess.
+    If there is not enough evidence to answer a valid question, answer exactly `idk`.
+    If the question is malformed, answer exactly `malformed`.
+    Scoring policy:
+    * Correct answer: +5
+    * Incorrect answer: -5
+    * `idk`: 0
+    * `malformed`: N/A, human review required
+    Scope policy:
+    * Prefer the smallest file scope that still contains enough evidence.
+    * Propose a narrower scope only when the evidence remains sufficient inside it.
+    * Successful scope narrowing: +1
+    * Failed scope narrowing: -1
+  ignore:
+    - "target/**"
+  plugins: []
 
 expectations:
   - q: "Does this project satisfy the expectation described here?"
     a: "yes"
 ```
 
-Each configured agent answers every selected expectation. `ignore` lists
+The single configured agent answers every selected expectation. `ignore` lists
 repository-relative files or globs that the evaluator must not read, and
-`.canon/**` is always added to the effective ignore list. `plugins` lists Codex
-plugin config keys such as `canon@codex-plugins`; when every list is empty,
-`canon check` starts `codex app-server` with plugin loading disabled. Expected
-answers are single-line strings compared by exact equality. `skip` is incorrect
-unless the expected answer is exactly `skip`.
+`.canon/**` plus `.git/**` are always added to the effective ignore list.
+`plugins` lists Codex plugin config keys such as `canon@codex-plugins`; when the
+list is empty, `canon check` starts `codex app-server` with plugin loading
+disabled. Expected answers are single-line strings compared by exact equality;
+`idk` is just an ordinary answer string.
 
-`canon check` supplies the runtime response format, asks one expectation at a
-time, reuses the same Codex app-server session per agent, restricts ignored
-paths through Codex filesystem permissions, and prints exactly one stdout line
-per selected expectation in the form `<number>. OK` or `<number>. FAIL`.
-Detailed prompt, expected answer, observed answer, evidence, and warning fields
-are written to the JSONL log. By default, all selected expectation-agent results
-are checked and reported; `--fail-fast` stops after the first failed result.
+`canon check` supplies the runtime answer, evidence, and scope response format,
+asks one expectation at a time, restricts ignored paths and narrowed scopes
+through Codex filesystem permissions, and prints one JSON object per selected
+expectation to stdout. The object includes `timestamp`, `number`, `result`,
+`prompt`, `expected`, `observed`, `evidence`, `scope`, and `scopeHash`.
 
-Each run also stores the interrogation report in
-`.canon/logs/YYYYMMDD-HHMMSS.jsonl`. Every non-empty line is one JSON object for
-one expectation-agent result with `timestamp`, `number`, `result`, `agent`,
-`prompt`, `expected`, `observed`, and `evidence`. `result` is exactly `pass` or
-`fail`, and timestamps are UTC. Each record timestamp is captured when that
-specific expectation is asked. Records are appended and flushed as each
-expectation-agent check finishes, so the current log can be watched with
-`tail -f`. After writing a log, `canon check` removes old `.jsonl` files until
-at most 10 logs remain and their total size is at most 100MB, unless the newest
-log alone exceeds that size.
+Per-expectation reusable results are stored in the Git directory under
+`canon/cache/<ID>/history.jsonl`, where `ID` is a 120-bit base64url hash of the
+expectation prompt and expected answer. `scopeHash` is a 120-bit base64url hash
+of the staged Git contents visible through the record's scope. `canon check`
+reuses matching cached pass and fail records, unless `--ignore-cache` is set.
 
-If an evaluator answers `malformed`, `canon check` fails that expectation and
-records a human-review warning in the JSONL log so a person can fix the
-expectation or prompt.
+Global diagnostic interrogation records are appended to
+`git rev-parse --git-path canon/logs/0.jsonl`. At the start of `canon check`,
+`0.jsonl` rotates only when it exceeds 128 KiB: `3.jsonl` is removed, `2` moves
+to `3`, `1` to `2`, and `0` to `1`. The next diagnostic write creates a fresh
+`0.jsonl`.
+
+`canon gate` is cache-only and side-effect-free. It passes only when every
+expectation has a reusable cached `pass` record for the current staged snapshot;
+it asks you to run `canon check` when cache records are missing and prints cached
+failures when they are present.
+
+If an evaluator answers `malformed`, `canon check` retries once. If the final
+answer is still `malformed`, the expectation fails and `canon check` prints a
+human-review warning so a person can fix the expectation or prompt.
 
 ---
 
