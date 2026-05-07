@@ -156,5 +156,5 @@ expectations:
   - q: "Does `canon check` print just one line per expectation as `<number>. OK` or `<number>. FAIL`?"
     a: "yes"
 
-  - q: "Does each log record's `timestamp` reflect the time when that specific expectation was asked to the agent, not the time when the log file was written?"
+  - q: "Does each log record's `timestamp` reflect the time when that specific log record is produced after the evaluator response and check result are available?"
     a: "yes"
