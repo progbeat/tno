@@ -89,16 +89,10 @@ expectations:
   - q: "Does `canon check` write per-expectation cache data under the Git directory path returned by `git rev-parse --git-path canon/cache`?"
     a: "yes"
 
-  - q: "Does `canon check` write global diagnostic logs under the Git directory path returned by `git rev-parse --git-path canon/logs`, such as `.git/canon/logs/*.jsonl`?"
+  - q: "Does `canon check` append global diagnostic records to the active log file at the Git directory path returned by `git rev-parse --git-path canon/logs/0.jsonl`?"
     a: "yes"
 
-  - q: "Does `canon check` append global diagnostic records to the active log file at `.git/canon/logs/0.jsonl`?"
-    a: "yes"
-
-  - q: "At the end of `canon check`, does global diagnostic log rolling rotate `.git/canon/logs/0.jsonl` only when its size exceeds 128 KiB?"
-    a: "yes"
-
-  - q: "When global diagnostic log rolling rotates, does it delete `3.jsonl` if present, rename `2.jsonl` to `3.jsonl`, `1.jsonl` to `2.jsonl`, and `0.jsonl` to `1.jsonl`, then start a new `0.jsonl` on the next write?"
+  - q: "At the start of `canon check`, before appending new diagnostic records, does global diagnostic log rolling rotate only when `0.jsonl` exceeds 128 KiB by deleting `3.jsonl` if present, renaming `2.jsonl` to `3.jsonl`, `1.jsonl` to `2.jsonl`, and `0.jsonl` to `1.jsonl`?"
     a: "yes"
 
   - q: "Does `canon check` write check logs to `.canon/logs/`?"
@@ -170,37 +164,19 @@ expectations:
   - q: "Does `canon check` attempt narrower-scope verification only when the evaluator-provided scope is a strict subset of the currently enforced scope?"
     a: "yes"
 
-  - q: "Does `canon check` write per-expectation `history.jsonl` records only for reusable verified results, including full-scope results and narrower-scope verifications that preserve the wider observed answer?"
+  - q: "Does `canon check` write per-expectation `history.jsonl` records only for reusable verified results, including full-scope results and narrower-scope verifications that preserve the wider observed answer, while excluding failed narrower-scope verification attempts that change the observed answer?"
     a: "yes"
 
-  - q: "Does `canon check` append each new per-expectation `history.jsonl` record immediately after a reusable verified result is available, except when rewriting during cache-history compaction?"
-    a: "yes"
-
-  - q: "Does `canon check` flush the per-expectation `history.jsonl` file after each newly appended history record?"
-    a: "yes"
-
-  - q: "Does `canon check` avoid writing failed narrower-scope verification attempts that change the observed answer to per-expectation `history.jsonl`?"
+  - q: "Does `canon check` append and flush each new per-expectation `history.jsonl` record immediately after a reusable verified result is available, except when rewriting during cache-history compaction?"
     a: "yes"
 
   - q: "Does `canon check` write a global diagnostic log record for each evaluator interrogation, including both a wider interrogation and any immediate narrower-scope verification?"
     a: "yes"
 
-  - q: "Does `canon check` keep evaluator Codex threads ephemeral to a single `canon check` invocation, without persisting or reusing them after the command exits?"
+  - q: "Does `canon check` keep evaluator Codex threads ephemeral to a single invocation, reuse a thread only for evaluator interrogations with the same normalized enforced scope within that invocation, and start separate threads for different enforced scopes?"
     a: "yes"
 
-  - q: "Within one `canon check` invocation, does `canon check` reuse the same Codex thread for evaluator interrogations that have the same normalized enforced scope?"
-    a: "yes"
-
-  - q: "Within one `canon check` invocation, does `canon check` start a separate Codex thread when an interrogation requires a different enforced scope?"
-    a: "yes"
-
-  - q: "Does `canon gate` validate existing cached records without asking the evaluator agent any questions?"
-    a: "yes"
-
-  - q: "Does `canon gate` avoid starting any Codex threads or evaluator sessions?"
-    a: "yes"
-
-  - q: "Does `canon gate` avoid modifying rolling logs or any cache state?"
+  - q: "Is `canon gate` cache-only and side-effect-free by validating existing cached records without asking evaluator questions, starting Codex threads or evaluator sessions, or modifying rolling logs or cache state?"
     a: "yes"
 
   - q: "Does `canon gate` pass only when every expectation has a reusable `history.jsonl` record with `result` exactly `pass` for the current staged Git snapshot?"
