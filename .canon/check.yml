@@ -89,9 +89,6 @@ expectations:
   - q: "Does `canon check` fail when the current Git change set includes both .canon/** changes and non-.canon changes?"
     a: "yes"
 
-  - q: "Does `canon check` store interrogation logs in .canon/logs with filenames in the format YYYYMMDD-HHMMSS.log?"
-    a: "yes"
-
   - q: "Are old logs in .canon/logs removed when the total size exceeds 100MB or the number of logs exceeds 10?"
     a: "yes"
 
@@ -100,3 +97,15 @@ expectations:
 
   - q: "Does `canon init` add /.canon/logs/ to .gitignore?"
     a: "no"
+
+  - q: "Are timestamps in logs UTC?"
+    a: "yes"
+
+  - q: |
+      Does `canon check` write interrogation logs to `.canon/logs/` as JSON Lines files
+      with filenames matching `YYYYMMDD-HHMMSS.jsonl`, where each non-empty line is
+      one complete valid JSON object representing one expectation-agent check result,
+      `result` is exactly either `pass` or `fail`, and every record contains at least
+      these keys: `timestamp`, `number`, `result`, `agent`, `prompt`, `expected`,
+      `observed`, and `evidence`?
+    a: "yes"
