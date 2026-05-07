@@ -18,6 +18,9 @@ agents:
     plugins: []
 
 expectations:
+  - q: Can you read .canon/check.yml?
+    a: "no"
+
   - q: Is README.md consistent with the current state of the repository?
     a: "yes"
 
