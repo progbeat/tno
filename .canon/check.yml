@@ -94,3 +94,6 @@ expectations:
 
   - q: "If evaluator agent answers that the question is `malformed`, is human review required to fix the expectation or prompt?"
     a: "yes"
+
+  - q: "`canon init` добавляет /.canon/logs/ в .gitignore?"
+    a: "no"
