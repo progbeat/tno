@@ -168,24 +168,26 @@ unless the expected answer is exactly `skip`.
 
 `canon check` supplies the runtime response format, asks one expectation at a
 time, reuses the same Codex app-server session per agent, restricts ignored
-paths through Codex filesystem permissions, and reports the expectation number,
-agent name, prompt, expected answer, observed answer, evidence, and rerun
-command. Each result starts with a summary line in the form `<number>. OK` or
-`<number>. FAIL`. By default, all selected expectation-agent results are checked
-and reported; `--fail-fast` stops after the first failed result.
+paths through Codex filesystem permissions, and prints exactly one stdout line
+per selected expectation in the form `<number>. OK` or `<number>. FAIL`.
+Detailed prompt, expected answer, observed answer, evidence, and warning fields
+are written to the JSONL log. By default, all selected expectation-agent results
+are checked and reported; `--fail-fast` stops after the first failed result.
 
 Each run also stores the interrogation report in
 `.canon/logs/YYYYMMDD-HHMMSS.jsonl`. Every non-empty line is one JSON object for
 one expectation-agent result with `timestamp`, `number`, `result`, `agent`,
 `prompt`, `expected`, `observed`, and `evidence`. `result` is exactly `pass` or
-`fail`, and timestamps are UTC. Records are appended and flushed as each
+`fail`, and timestamps are UTC. Each record timestamp is captured when that
+specific expectation is asked. Records are appended and flushed as each
 expectation-agent check finishes, so the current log can be watched with
 `tail -f`. After writing a log, `canon check` removes old `.jsonl` files until
 at most 10 logs remain and their total size is at most 100MB, unless the newest
 log alone exceeds that size.
 
 If an evaluator answers `malformed`, `canon check` fails that expectation and
-prints a human-review warning so a person can fix the expectation or prompt.
+records a human-review warning in the JSONL log so a person can fix the
+expectation or prompt.
 
 ---
 

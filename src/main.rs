@@ -72,6 +72,7 @@ struct ParsedAnswer {
 
 #[derive(Debug)]
 struct CheckRecord {
+    timestamp: String,
     number: usize,
     agent: String,
     prompt: String,
@@ -912,6 +913,7 @@ fn run_check_with_runner<R: EvaluatorRunner>(
         let session_id = runner.start_session(agent_name, root, &config.instructions, agent)?;
         for expectation in selected {
             let prompt = question_prompt(&config.instructions, &expectation.q);
+            let asked_at = format_log_record_timestamp(unix_timestamp()?);
             let response = ask_with_repairs(runner, &session_id, &prompt)?;
             let needs_human_review = response.answer == "malformed";
             let passed = !needs_human_review
@@ -926,6 +928,7 @@ fn run_check_with_runner<R: EvaluatorRunner>(
                 None
             };
             let record = CheckRecord {
+                timestamp: asked_at,
                 number: expectation.number,
                 agent: agent_name.clone(),
                 prompt: expectation.q.clone(),
@@ -1012,24 +1015,21 @@ fn parse_evaluator_response(text: &str) -> Result<ParsedAnswer, String> {
 }
 
 fn print_check_report(records: &[CheckRecord]) {
+    let mut results = BTreeMap::new();
     for record in records {
-        println!("{}", check_status_line(record));
-        println!("Agent: {}", record.agent);
-        println!("Prompt: {}", record.prompt);
-        println!("Expected: {}", record.expected);
-        println!("Observed: {}", record.observed);
-        println!("Evidence:\n{}", record.evidence);
-        if let Some(warning) = &record.warning {
-            println!("Warning: {}", warning);
-        }
-        println!("Rerun: canon check {}", record.number);
-        println!();
+        results
+            .entry(record.number)
+            .and_modify(|passed| *passed = *passed && record.passed)
+            .or_insert(record.passed);
+    }
+    for (number, passed) in results {
+        println!("{}", check_status_line(number, passed));
     }
 }
 
-fn check_status_line(record: &CheckRecord) -> String {
-    let status = if record.passed { "OK" } else { "FAIL" };
-    format!("{}. {}", record.number, status)
+fn check_status_line(number: usize, passed: bool) -> String {
+    let status = if passed { "OK" } else { "FAIL" };
+    format!("{}. {}", number, status)
 }
 
 #[cfg(test)]
@@ -1046,7 +1046,6 @@ fn write_check_log(root: &Path, records: &[CheckRecord]) -> Result<PathBuf, Stri
 struct CheckLogWriter {
     path: PathBuf,
     log_dir: PathBuf,
-    timestamp: String,
     file: fs::File,
 }
 
@@ -1056,20 +1055,18 @@ impl CheckLogWriter {
         ensure_dir(&log_dir)?;
         let seconds = unix_timestamp()?;
         let filename_timestamp = format_log_filename_timestamp(seconds);
-        let timestamp = format_log_record_timestamp(seconds);
         let path = log_dir.join(format!("{}.jsonl", filename_timestamp));
         let file = fs::File::create(&path)
             .map_err(|err| format!("failed to create {}: {}", path.display(), err))?;
         Ok(CheckLogWriter {
             path,
             log_dir,
-            timestamp,
             file,
         })
     }
 
     fn write_record(&mut self, record: &CheckRecord) -> Result<(), String> {
-        let line = render_check_log_record(record, &self.timestamp);
+        let line = render_check_log_record(record);
         self.file
             .write_all(line.as_bytes())
             .map_err(|err| format!("failed to write {}: {}", self.path.display(), err))?;
@@ -1086,11 +1083,16 @@ impl CheckLogWriter {
     }
 }
 
-fn render_check_log_record(record: &CheckRecord, timestamp: &str) -> String {
+fn render_check_log_record(record: &CheckRecord) -> String {
     let mut output = String::new();
     output.push('{');
     let mut first = true;
-    append_json_field(&mut output, &mut first, "timestamp", json!(timestamp));
+    append_json_field(
+        &mut output,
+        &mut first,
+        "timestamp",
+        json!(record.timestamp),
+    );
     append_json_field(&mut output, &mut first, "number", json!(record.number));
     append_json_field(
         &mut output,
@@ -1219,7 +1221,7 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i64, u32, u32) {
 }
 
 fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
-    let mut patterns = vec![".canon/**".to_string()];
+    let mut patterns = vec![".canon".to_string(), ".canon/**".to_string()];
     for pattern in &agent.ignore {
         if !patterns.iter().any(|existing| existing == pattern) {
             patterns.push(pattern.clone());
@@ -1230,16 +1232,21 @@ fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
 
 fn evaluator_thread_config(agent: &AgentConfig) -> Value {
     let mut root_permissions = Map::new();
+    root_permissions.insert(".".to_string(), Value::String("read".to_string()));
     root_permissions.insert("./**".to_string(), Value::String("read".to_string()));
     for pattern in effective_ignore_patterns(agent) {
         root_permissions.insert(pattern, Value::String("none".to_string()));
     }
 
     let mut filesystem = Map::new();
+    filesystem.insert("/".to_string(), Value::String("read".to_string()));
     filesystem.insert(
         ":project_roots".to_string(),
         Value::Object(root_permissions),
     );
+    for path in evaluator_runtime_read_paths() {
+        filesystem.insert(path.to_string(), Value::String("read".to_string()));
+    }
     filesystem.insert("glob_scan_max_depth".to_string(), json!(32));
 
     let mut profile = Map::new();
@@ -1247,18 +1254,35 @@ fn evaluator_thread_config(agent: &AgentConfig) -> Value {
     profile.insert("network".to_string(), json!({ "enabled": false }));
 
     let mut permissions = Map::new();
-    permissions.insert("canon-evaluator".to_string(), Value::Object(profile));
+    permissions.insert("canon_check".to_string(), Value::Object(profile));
 
     let mut config = Map::new();
     config.insert(
         "default_permissions".to_string(),
-        Value::String("canon-evaluator".to_string()),
+        Value::String("canon_check".to_string()),
     );
     config.insert("permissions".to_string(), Value::Object(permissions));
+    config.insert("history".to_string(), json!({ "persistence": "none" }));
     if !agent.plugins.is_empty() {
         config.insert("plugins".to_string(), enabled_plugins_config(agent));
     }
     Value::Object(config)
+}
+
+fn evaluator_runtime_read_paths() -> &'static [&'static str] {
+    &[
+        "/bin/**",
+        "/usr/bin/**",
+        "/usr/lib/**",
+        "/usr/libexec/**",
+        "/System/**",
+        "/Library/**",
+        "/opt/homebrew/**",
+        "/private/tmp/**",
+        "~/.codex/tmp/**",
+        ":tmpdir",
+        ":slash_tmp",
+    ]
 }
 
 fn enabled_plugins_config(agent: &AgentConfig) -> Value {
@@ -1440,7 +1464,6 @@ impl EvaluatorRunner for AppServerRunner {
                 "cwd": root.display().to_string(),
                 "developerInstructions": instructions,
                 "approvalPolicy": "never",
-                "sandbox": "read-only",
                 "config": evaluator_thread_config(agent),
                 "ephemeral": true,
                 "sessionStartSource": "startup"
@@ -1464,11 +1487,7 @@ impl EvaluatorRunner for AppServerRunner {
                         "type": "text",
                         "text": prompt
                     }
-                ],
-                "sandboxPolicy": {
-                    "type": "readOnly",
-                    "networkAccess": false
-                }
+                ]
             }),
         )
     }
@@ -1880,7 +1899,11 @@ expectations:
         assert_eq!(runner.start_roots, vec![root.clone()]);
         assert_eq!(
             runner.start_ignores,
-            vec![vec![".canon/**".to_string(), "target/**".to_string()]]
+            vec![vec![
+                ".canon".to_string(),
+                ".canon/**".to_string(),
+                "target/**".to_string()
+            ]]
         );
         assert_eq!(runner.start_plugins, vec![Vec::<String>::new()]);
         assert_eq!(runner.sessions, vec!["session-1", "session-1"]);
@@ -1981,7 +2004,8 @@ expectations:
 
     #[test]
     fn check_status_line_uses_number_and_ok_or_fail() {
-        let mut record = CheckRecord {
+        let record = CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
             number: 7,
             agent: "Smith".to_string(),
             prompt: "Question?".to_string(),
@@ -1991,9 +2015,8 @@ expectations:
             warning: None,
             passed: true,
         };
-        assert_eq!(check_status_line(&record), "7. OK");
-        record.passed = false;
-        assert_eq!(check_status_line(&record), "7. FAIL");
+        assert_eq!(check_status_line(record.number, record.passed), "7. OK");
+        assert_eq!(check_status_line(record.number, false), "7. FAIL");
     }
 
     #[test]
@@ -2010,6 +2033,7 @@ expectations:
         }
 
         let records = vec![CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
             number: 1,
             agent: "Smith".to_string(),
             prompt: "Question?".to_string(),
@@ -2068,6 +2092,7 @@ expectations:
     fn check_log_writer_flushes_each_record() {
         let root = temp_home("check-log-flush");
         let record = CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
             number: 1,
             agent: "Smith".to_string(),
             prompt: "Question?".to_string(),
@@ -2112,13 +2137,23 @@ expectations:
             plugins: Vec::new(),
         };
         let config = evaluator_thread_config(&agent);
-        let root_permissions = config["permissions"]["canon-evaluator"]["filesystem"]
-            [":project_roots"]
+        let root_permissions = config["permissions"]["canon_check"]["filesystem"][":project_roots"]
             .as_object()
             .unwrap();
+        assert_eq!(root_permissions["."], "read");
         assert_eq!(root_permissions["./**"], "read");
+        assert_eq!(root_permissions[".canon"], "none");
         assert_eq!(root_permissions[".canon/**"], "none");
         assert_eq!(root_permissions["target/**"], "none");
+        assert_eq!(
+            config["permissions"]["canon_check"]["filesystem"]["/"],
+            "read"
+        );
+        assert_eq!(
+            config["permissions"]["canon_check"]["filesystem"]["~/.codex/tmp/**"],
+            "read"
+        );
+        assert_eq!(config["history"]["persistence"], "none");
         assert!(config.get("plugins").is_none());
     }
 
