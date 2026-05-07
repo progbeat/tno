@@ -134,3 +134,24 @@ expectations:
 
   - q: "Does `canon check` start the codex app-server without loading any plugins unless explicitly configured?"
     a: "yes"
+
+  - q: "Does `canon check` by default check all selected expectations and report all results?"
+    a: "yes"
+
+  - q: "Does `canon check` support a --fail-fast flag to stop and exit immediately after the first expectation fails?"
+    a: "yes"
+
+  - q: "Does `canon check` continue checking remaining expectations when a failure occurs without --fail-fast?"
+    a: "yes"
+
+  - q: "Does `canon check` write each log record to the JSONL file immediately after it is produced, without buffering?"
+    a: "yes"
+
+  - q: "Does `canon check` flush the log file after each expectation-agent check record is written?"
+    a: "yes"
+
+  - q: "Does `canon check` allow real-time log observation via `tail -f .canon/logs/YYYYMMDD-HHMMSS.jsonl` during interrogation?"
+    a: "yes"
+
+  - q: "Does `canon check` print one line per expectation as `<number>. OK` or `<number>. FAIL`?"
+    a: "yes"
