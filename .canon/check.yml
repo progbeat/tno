@@ -102,9 +102,6 @@ expectations:
   - q: "Does `canon check` fail solely because evidence remains empty after retry?"
     a: "no"
 
-  - q: "Does the report include expectation number, agent name, prompt, expected answer, observed answer, and evidence?"
-    a: "yes"
-
   - q: "Does `canon check` fail when the current Git change set includes both .canon/** changes and non-.canon changes?"
     a: "yes"
 
@@ -153,5 +150,8 @@ expectations:
   - q: "Does `canon check` allow real-time log observation via `tail -f .canon/logs/YYYYMMDD-HHMMSS.jsonl` during interrogation?"
     a: "yes"
 
-  - q: "Does `canon check` print one line per expectation as `<number>. OK` or `<number>. FAIL`?"
+  - q: "Does `canon check` print just one line per expectation as `<number>. OK` or `<number>. FAIL`?"
+    a: "yes"
+
+  - q: "Does each log record's `timestamp` reflect the time when that specific expectation was asked to the agent, not the time when the log file was written?"
     a: "yes"
