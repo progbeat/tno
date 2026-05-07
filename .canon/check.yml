@@ -23,6 +23,9 @@ expectations:
   - q: "Does `canon init` create .canon/check.yml?"
     a: "yes"
 
+  - q: "Does `canon hook install` add a precommit hook?"
+    a: "yes"
+
   - q: "Does `canon init` fail if .canon/check.yml already exists?"
     a: "yes"
 
@@ -95,5 +98,5 @@ expectations:
   - q: "If evaluator agent answers that the question is `malformed`, is human review required to fix the expectation or prompt?"
     a: "yes"
 
-  - q: "`canon init` добавляет /.canon/logs/ в .gitignore?"
+  - q: "Does `canon init` add /.canon/logs/ to .gitignore?"
     a: "no"
