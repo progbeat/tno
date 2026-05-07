@@ -3,7 +3,9 @@ version: 1
 instructions: |
   Use the following response policy:
   Answer exactly `yes` or `no` only when there is sufficient evidence to support the answer.
-  Do not guess. If there is not enough evidence to answer `yes` or `no`, answer exactly `skip`.
+  Do not guess.
+  If there is not enough evidence to answer `yes` or `no`, answer exactly `skip`.
+  If question is malformed, answer exactly `malformed`.
   Scoring policy:
   * Correct answer: `+1`
   * Incorrect answer: `-1`
@@ -81,5 +83,14 @@ expectations:
   - q: "Does the report include expectation number, agent name, prompt, expected answer, observed answer, and evidence?"
     a: "yes"
 
-  - q: "Does canon check fail when the current Git change set includes both .canon/** changes and non-.canon changes?"
+  - q: "Does `canon check` fail when the current Git change set includes both .canon/** changes and non-.canon changes?"
+    a: "yes"
+
+  - q: "Does `canon check` store interrogation logs in .canon/logs with filenames in the format YYYYMMDD-HHMMSS.log?"
+    a: "yes"
+
+  - q: "Are old logs in .canon/logs removed when the total size exceeds 100MB or the number of logs exceeds 10?"
+    a: "yes"
+
+  - q: "If evaluator agent answers that the question is `malformed`, is human review required to fix the expectation or prompt?"
     a: "yes"
