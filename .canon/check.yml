@@ -173,16 +173,25 @@ expectations:
   - q: "Does `canon check` write per-expectation `history.jsonl` records only for reusable verified results, including full-scope results and narrower-scope verifications that preserve the wider observed answer?"
     a: "yes"
 
+  - q: "Does `canon check` append each new per-expectation `history.jsonl` record immediately after a reusable verified result is available, except when rewriting during cache-history compaction?"
+    a: "yes"
+
+  - q: "Does `canon check` flush the per-expectation `history.jsonl` file after each newly appended history record?"
+    a: "yes"
+
   - q: "Does `canon check` avoid writing failed narrower-scope verification attempts that change the observed answer to per-expectation `history.jsonl`?"
     a: "yes"
 
   - q: "Does `canon check` write a global diagnostic log record for each evaluator interrogation, including both a wider interrogation and any immediate narrower-scope verification?"
     a: "yes"
 
-  - q: "Does `canon check` reuse the same Codex thread for evaluator interrogations that have the same normalized enforced scope?"
+  - q: "Does `canon check` keep evaluator Codex threads ephemeral to a single `canon check` invocation, without persisting or reusing them after the command exits?"
     a: "yes"
 
-  - q: "Does `canon check` start a separate Codex thread when an interrogation requires a different enforced scope?"
+  - q: "Within one `canon check` invocation, does `canon check` reuse the same Codex thread for evaluator interrogations that have the same normalized enforced scope?"
+    a: "yes"
+
+  - q: "Within one `canon check` invocation, does `canon check` start a separate Codex thread when an interrogation requires a different enforced scope?"
     a: "yes"
 
   - q: "Does `canon gate` validate existing cached records without asking the evaluator agent any questions?"
@@ -194,16 +203,19 @@ expectations:
   - q: "Does `canon gate` avoid modifying rolling logs or any cache state?"
     a: "yes"
 
-  - q: "Does `canon gate` fail when any expectation lacks a reusable passing `history.jsonl` record for the current staged Git snapshot?"
+  - q: "Does `canon gate` pass only when every expectation has a reusable `history.jsonl` record with `result` exactly `pass` for the current staged Git snapshot?"
     a: "yes"
 
-  - q: "Does `canon gate` print an actionable message asking the user to run `canon check` when cached passing records are missing?"
+  - q: "Does `canon gate` fail and ask the user to run `canon check` when any expectation lacks a reusable `history.jsonl` record for the current staged Git snapshot?"
+    a: "yes"
+
+  - q: "Does `canon gate` fail and print cached failing expectation results when any expectation has a reusable `history.jsonl` record with `result` exactly `fail` for the current staged Git snapshot?"
     a: "yes"
 
   - q: "Which command does the pre-commit hook run? a) canon gate b) canon check"
     a: "a"
 
-  - q: "Does the pre-commit hook fail quickly and ask the user to run `canon check` when `canon gate` reports missing cached passing records?"
+  - q: "Does the pre-commit hook fail quickly when `canon gate` reports missing cached answers or cached failing expectation results?"
     a: "yes"
 
   - q: "Does `canon check` run all expectations when no numbers are provided?"
