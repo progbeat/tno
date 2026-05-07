@@ -1,6 +1,5 @@
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
@@ -8,8 +7,6 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, ChildStdin, Command, Stdio};
-use tempfile::TempDir;
-use walkdir::WalkDir;
 
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
@@ -49,9 +46,8 @@ struct CheckConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentConfig {
-    paths: Vec<String>,
-    #[serde(default)]
-    exclude: Vec<String>,
+    ignore: Vec<String>,
+    plugins: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,12 +82,18 @@ struct CheckRecord {
     passed: bool,
 }
 
+struct CheckOptions {
+    selected: Vec<SelectedExpectation>,
+    fail_fast: bool,
+}
+
 trait EvaluatorRunner {
     fn start_session(
         &mut self,
         agent_name: &str,
-        workspace: &Path,
+        root: &Path,
         instructions: &str,
+        agent: &AgentConfig,
     ) -> Result<String, String>;
     fn ask(&mut self, session_id: &str, prompt: &str) -> Result<String, String>;
 }
@@ -671,12 +673,20 @@ fn is_git_worktree(root: &Path) -> Result<bool, String> {
 
 fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), String> {
     let config = load_check_config(root)?;
-    let selected = select_expectations(&config, args)?;
+    let options = parse_check_options(&config, args)?;
     fail_on_mixed_canon_changes(root)?;
-    let mut runner = AppServerRunner::new()?;
-    let records = run_check_with_runner(root, &config, &selected, &mut runner)?;
+    let mut runner = AppServerRunner::new(check_config_loads_plugins(&config))?;
+    let mut log_writer = CheckLogWriter::create(root)?;
+    let records = run_check_with_runner(
+        root,
+        &config,
+        &options.selected,
+        &mut runner,
+        Some(&mut log_writer),
+        options.fail_fast,
+    )?;
+    log_writer.finish()?;
     print_check_report(&records);
-    write_check_log(root, &records)?;
     if records.iter().all(|record| record.passed) {
         Ok(())
     } else {
@@ -694,6 +704,25 @@ fn load_check_config(root: &Path) -> Result<CheckConfig, String> {
     Ok(config)
 }
 
+fn parse_check_options(config: &CheckConfig, args: &[OsString]) -> Result<CheckOptions, String> {
+    let mut fail_fast = false;
+    let mut numbers = Vec::new();
+    for arg in args {
+        if arg.to_str() == Some("--fail-fast") {
+            if fail_fast {
+                return Err("duplicate --fail-fast".to_string());
+            }
+            fail_fast = true;
+        } else {
+            numbers.push(arg.clone());
+        }
+    }
+    Ok(CheckOptions {
+        selected: select_expectations(config, &numbers)?,
+        fail_fast,
+    })
+}
+
 fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
     if config.version != 1 {
         return Err("check.yml version must be 1".to_string());
@@ -708,16 +737,14 @@ fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
         if name.trim().is_empty() {
             return Err("agent names must not be empty".to_string());
         }
-        if agent.paths.is_empty() {
-            return Err(format!("agent {} must have at least one path", name));
-        }
-        for path in &agent.paths {
-            validate_relative_config_path(path, "agent path")?;
-        }
-        for path in &agent.exclude {
+        for path in &agent.ignore {
             if path.trim().is_empty() {
-                return Err(format!("agent {} has an empty exclude pattern", name));
+                return Err(format!("agent {} has an empty ignore pattern", name));
             }
+            validate_relative_config_path(path, "agent ignore pattern")?;
+        }
+        for plugin in &agent.plugins {
+            validate_plugin_config_key(name, plugin)?;
         }
     }
     if config.expectations.is_empty() {
@@ -736,6 +763,32 @@ fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn validate_plugin_config_key(agent_name: &str, value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err(format!("agent {} has an empty plugin entry", agent_name));
+    }
+    if value.contains('\n') || value.contains('\r') {
+        return Err(format!(
+            "agent {} plugin entries must be single-line strings",
+            agent_name
+        ));
+    }
+    if !value.contains('@') {
+        return Err(format!(
+            "agent {} plugin entry must use Codex plugin key <plugin>@<marketplace>: {}",
+            agent_name, value
+        ));
+    }
+    Ok(())
+}
+
+fn check_config_loads_plugins(config: &CheckConfig) -> bool {
+    config
+        .agents
+        .values()
+        .any(|agent| !agent.plugins.is_empty())
 }
 
 fn validate_relative_config_path(value: &str, label: &str) -> Result<(), String> {
@@ -851,12 +904,12 @@ fn run_check_with_runner<R: EvaluatorRunner>(
     config: &CheckConfig,
     selected: &[SelectedExpectation],
     runner: &mut R,
+    mut log_writer: Option<&mut CheckLogWriter>,
+    fail_fast: bool,
 ) -> Result<Vec<CheckRecord>, String> {
     let mut records = Vec::new();
     for (agent_name, agent) in &config.agents {
-        let workspace = create_agent_workspace(root, agent)?;
-        let session_id =
-            runner.start_session(agent_name, workspace.path(), &config.instructions)?;
+        let session_id = runner.start_session(agent_name, root, &config.instructions, agent)?;
         for expectation in selected {
             let prompt = question_prompt(&config.instructions, &expectation.q);
             let response = ask_with_repairs(runner, &session_id, &prompt)?;
@@ -872,7 +925,7 @@ fn run_check_with_runner<R: EvaluatorRunner>(
             } else {
                 None
             };
-            records.push(CheckRecord {
+            let record = CheckRecord {
                 number: expectation.number,
                 agent: agent_name.clone(),
                 prompt: expectation.q.clone(),
@@ -881,7 +934,15 @@ fn run_check_with_runner<R: EvaluatorRunner>(
                 evidence: response.evidence,
                 warning,
                 passed,
-            });
+            };
+            if let Some(writer) = log_writer.as_mut() {
+                writer.write_record(&record)?;
+            }
+            let should_stop = fail_fast && !record.passed;
+            records.push(record);
+            if should_stop {
+                return Ok(records);
+            }
         }
     }
     Ok(records)
@@ -952,8 +1013,8 @@ fn parse_evaluator_response(text: &str) -> Result<ParsedAnswer, String> {
 
 fn print_check_report(records: &[CheckRecord]) {
     for record in records {
-        let status = if record.passed { "PASS" } else { "FAIL" };
-        println!("{} {} [{}]", status, record.number, record.agent);
+        println!("{}", check_status_line(record));
+        println!("Agent: {}", record.agent);
         println!("Prompt: {}", record.prompt);
         println!("Expected: {}", record.expected);
         println!("Observed: {}", record.observed);
@@ -966,39 +1027,98 @@ fn print_check_report(records: &[CheckRecord]) {
     }
 }
 
+fn check_status_line(record: &CheckRecord) -> String {
+    let status = if record.passed { "OK" } else { "FAIL" };
+    format!("{}. {}", record.number, status)
+}
+
+#[cfg(test)]
 fn write_check_log(root: &Path, records: &[CheckRecord]) -> Result<PathBuf, String> {
-    let log_dir = root.join(CHECK_LOG_DIR);
-    ensure_dir(&log_dir)?;
-    let seconds = unix_timestamp()?;
-    let filename_timestamp = format_log_filename_timestamp(seconds);
-    let record_timestamp = format_log_record_timestamp(seconds);
-    let path = log_dir.join(format!("{}.jsonl", filename_timestamp));
-    fs::write(&path, render_check_log(records, &record_timestamp))
-        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-    prune_check_logs(&log_dir, CHECK_LOG_MAX_BYTES, CHECK_LOG_MAX_FILES)?;
+    let mut writer = CheckLogWriter::create(root)?;
+    for record in records {
+        writer.write_record(record)?;
+    }
+    let path = writer.path.clone();
+    writer.finish()?;
     Ok(path)
 }
 
-fn render_check_log(records: &[CheckRecord], timestamp: &str) -> String {
-    let mut output = String::new();
-    for record in records {
-        let mut value = json!({
-            "timestamp": timestamp,
-            "number": record.number,
-            "result": if record.passed { "pass" } else { "fail" },
-            "agent": record.agent,
-            "prompt": record.prompt,
-            "expected": record.expected,
-            "observed": record.observed,
-            "evidence": record.evidence,
-        });
-        if let Some(warning) = &record.warning {
-            value["warning"] = Value::String(warning.clone());
-        }
-        output.push_str(&serde_json::to_string(&value).expect("check log record is serializable"));
-        output.push('\n');
+struct CheckLogWriter {
+    path: PathBuf,
+    log_dir: PathBuf,
+    timestamp: String,
+    file: fs::File,
+}
+
+impl CheckLogWriter {
+    fn create(root: &Path) -> Result<CheckLogWriter, String> {
+        let log_dir = root.join(CHECK_LOG_DIR);
+        ensure_dir(&log_dir)?;
+        let seconds = unix_timestamp()?;
+        let filename_timestamp = format_log_filename_timestamp(seconds);
+        let timestamp = format_log_record_timestamp(seconds);
+        let path = log_dir.join(format!("{}.jsonl", filename_timestamp));
+        let file = fs::File::create(&path)
+            .map_err(|err| format!("failed to create {}: {}", path.display(), err))?;
+        Ok(CheckLogWriter {
+            path,
+            log_dir,
+            timestamp,
+            file,
+        })
     }
+
+    fn write_record(&mut self, record: &CheckRecord) -> Result<(), String> {
+        let line = render_check_log_record(record, &self.timestamp);
+        self.file
+            .write_all(line.as_bytes())
+            .map_err(|err| format!("failed to write {}: {}", self.path.display(), err))?;
+        self.file
+            .flush()
+            .map_err(|err| format!("failed to flush {}: {}", self.path.display(), err))
+    }
+
+    fn finish(mut self) -> Result<(), String> {
+        self.file
+            .flush()
+            .map_err(|err| format!("failed to flush {}: {}", self.path.display(), err))?;
+        prune_check_logs(&self.log_dir, CHECK_LOG_MAX_BYTES, CHECK_LOG_MAX_FILES)
+    }
+}
+
+fn render_check_log_record(record: &CheckRecord, timestamp: &str) -> String {
+    let mut output = String::new();
+    output.push('{');
+    let mut first = true;
+    append_json_field(&mut output, &mut first, "timestamp", json!(timestamp));
+    append_json_field(&mut output, &mut first, "number", json!(record.number));
+    append_json_field(
+        &mut output,
+        &mut first,
+        "result",
+        json!(if record.passed { "pass" } else { "fail" }),
+    );
+    append_json_field(&mut output, &mut first, "agent", json!(record.agent));
+    append_json_field(&mut output, &mut first, "prompt", json!(record.prompt));
+    append_json_field(&mut output, &mut first, "expected", json!(record.expected));
+    append_json_field(&mut output, &mut first, "observed", json!(record.observed));
+    append_json_field(&mut output, &mut first, "evidence", json!(record.evidence));
+    if let Some(warning) = &record.warning {
+        append_json_field(&mut output, &mut first, "warning", json!(warning));
+    }
+    output.push_str("}\n");
     output
+}
+
+fn append_json_field(output: &mut String, first: &mut bool, key: &str, value: Value) {
+    if *first {
+        *first = false;
+    } else {
+        output.push(',');
+    }
+    output.push_str(&serde_json::to_string(key).expect("check log key is serializable"));
+    output.push(':');
+    output.push_str(&serde_json::to_string(&value).expect("check log value is serializable"));
 }
 
 #[derive(Debug)]
@@ -1098,116 +1218,66 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i64, u32, u32) {
     (year, month as u32, day as u32)
 }
 
-fn create_agent_workspace(root: &Path, agent: &AgentConfig) -> Result<TempDir, String> {
-    let temp = tempfile::tempdir().map_err(|err| format!("failed to create temp dir: {}", err))?;
-    let exclude = build_exclude_set(&agent.exclude)?;
-    for configured in &agent.paths {
-        let source = root.join(configured);
-        if !source.exists() {
-            return Err(format!("agent path does not exist: {}", configured));
-        }
-        copy_visible_path(root, &source, temp.path(), &exclude)?;
-    }
-    Ok(temp)
-}
-
-fn build_exclude_set(patterns: &[String]) -> Result<GlobSet, String> {
-    let mut builder = GlobSetBuilder::new();
-    builder.add(Glob::new(".canon/**").map_err(|err| err.to_string())?);
-    for pattern in patterns {
-        builder.add(Glob::new(pattern).map_err(|err| format!("bad exclude pattern: {}", err))?);
-    }
-    builder
-        .build()
-        .map_err(|err| format!("failed to build excludes: {}", err))
-}
-
-fn copy_visible_path(
-    root: &Path,
-    source: &Path,
-    destination_root: &Path,
-    exclude: &GlobSet,
-) -> Result<(), String> {
-    if source.is_file() {
-        copy_one_file(root, source, destination_root, exclude)?;
-        return Ok(());
-    }
-
-    for entry in WalkDir::new(source).follow_links(false) {
-        let entry = entry.map_err(|err| format!("failed to walk files: {}", err))?;
-        let path = entry.path();
-        if path == source && source == root.join(".") {
-            continue;
-        }
-        let rel = path
-            .strip_prefix(root)
-            .map_err(|_| format!("path is outside root: {}", path.display()))?;
-        if rel.as_os_str().is_empty() || excluded_path(rel, exclude) {
-            if entry.file_type().is_dir() {
-                continue;
-            }
-            continue;
-        }
-        let target = destination_root.join(rel);
-        if entry.file_type().is_dir() {
-            fs::create_dir_all(&target)
-                .map_err(|err| format!("failed to create {}: {}", target.display(), err))?;
-        } else if entry.file_type().is_file() {
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|err| format!("failed to create {}: {}", parent.display(), err))?;
-            }
-            fs::copy(path, &target).map_err(|err| {
-                format!(
-                    "failed to copy {} to {}: {}",
-                    path.display(),
-                    target.display(),
-                    err
-                )
-            })?;
+fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
+    let mut patterns = vec![".canon/**".to_string()];
+    for pattern in &agent.ignore {
+        if !patterns.iter().any(|existing| existing == pattern) {
+            patterns.push(pattern.clone());
         }
     }
-    Ok(())
+    patterns
 }
 
-fn copy_one_file(
-    root: &Path,
-    source: &Path,
-    destination_root: &Path,
-    exclude: &GlobSet,
-) -> Result<(), String> {
-    let rel = source
-        .strip_prefix(root)
-        .map_err(|_| format!("path is outside root: {}", source.display()))?;
-    if excluded_path(rel, exclude) {
-        return Ok(());
+fn evaluator_thread_config(agent: &AgentConfig) -> Value {
+    let mut root_permissions = Map::new();
+    root_permissions.insert("./**".to_string(), Value::String("read".to_string()));
+    for pattern in effective_ignore_patterns(agent) {
+        root_permissions.insert(pattern, Value::String("none".to_string()));
     }
-    let target = destination_root.join(rel);
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("failed to create {}: {}", parent.display(), err))?;
+
+    let mut filesystem = Map::new();
+    filesystem.insert(
+        ":project_roots".to_string(),
+        Value::Object(root_permissions),
+    );
+    filesystem.insert("glob_scan_max_depth".to_string(), json!(32));
+
+    let mut profile = Map::new();
+    profile.insert("filesystem".to_string(), Value::Object(filesystem));
+    profile.insert("network".to_string(), json!({ "enabled": false }));
+
+    let mut permissions = Map::new();
+    permissions.insert("canon-evaluator".to_string(), Value::Object(profile));
+
+    let mut config = Map::new();
+    config.insert(
+        "default_permissions".to_string(),
+        Value::String("canon-evaluator".to_string()),
+    );
+    config.insert("permissions".to_string(), Value::Object(permissions));
+    if !agent.plugins.is_empty() {
+        config.insert("plugins".to_string(), enabled_plugins_config(agent));
     }
-    fs::copy(source, &target).map_err(|err| {
-        format!(
-            "failed to copy {} to {}: {}",
-            source.display(),
-            target.display(),
-            err
-        )
-    })?;
-    Ok(())
+    Value::Object(config)
 }
 
-fn excluded_path(path: &Path, exclude: &GlobSet) -> bool {
-    let normalized = normalize_path_for_glob(path);
-    exclude.is_match(&normalized)
+fn enabled_plugins_config(agent: &AgentConfig) -> Value {
+    let mut plugins = Map::new();
+    for plugin in &agent.plugins {
+        plugins.insert(plugin.clone(), json!({ "enabled": true }));
+    }
+    Value::Object(plugins)
 }
 
-fn normalize_path_for_glob(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
+fn app_server_args(load_plugins: bool) -> Vec<&'static str> {
+    let mut args = vec!["app-server"];
+    if !load_plugins {
+        args.push("--disable");
+        args.push("plugins");
+    }
+    args.push("--listen");
+    args.push("stdio://");
+    args
 }
 
 struct AppServerRunner {
@@ -1218,14 +1288,13 @@ struct AppServerRunner {
 }
 
 impl AppServerRunner {
-    fn new() -> Result<AppServerRunner, String> {
-        let mut child = Command::new("codex")
-            .arg("app-server")
-            .arg("--listen")
-            .arg("stdio://")
+    fn new(load_plugins: bool) -> Result<AppServerRunner, String> {
+        let mut command = Command::new("codex");
+        command.args(app_server_args(load_plugins));
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|err| format!("failed to start codex app-server: {}", err))?;
         let stdin = child
@@ -1361,16 +1430,18 @@ impl EvaluatorRunner for AppServerRunner {
     fn start_session(
         &mut self,
         _agent_name: &str,
-        workspace: &Path,
+        root: &Path,
         instructions: &str,
+        agent: &AgentConfig,
     ) -> Result<String, String> {
         let result = self.send_request(
             "thread/start",
             json!({
-                "cwd": workspace.display().to_string(),
+                "cwd": root.display().to_string(),
                 "developerInstructions": instructions,
                 "approvalPolicy": "never",
                 "sandbox": "read-only",
+                "config": evaluator_thread_config(agent),
                 "ephemeral": true,
                 "sessionStartSource": "startup"
             }),
@@ -1409,7 +1480,7 @@ fn print_help() {
         "canon - thread-scoped decisions and invariants\n\n\
 Usage:\n  canon | canon pwd\n  canon p|path <key>\n  canon r|read <key>\n  canon w|write <key> [text]\n  canon a|append <key> [text]\n  canon d|del|delete|rm <key>\n  canon rg|g <pattern> [rg args...]\n"
             .to_string()
-            + "  canon init\n  canon hook install\n  canon check [expectation numbers...]\n"
+            + "  canon init\n  canon hook install\n  canon check [--fail-fast] [expectation numbers...]\n"
     );
 }
 
@@ -1465,10 +1536,9 @@ instructions: |
   Answer from files only.
 agents:
   project:
-    paths:
-      - "."
-    exclude:
-      - ".canon/**"
+    ignore:
+      - "target/**"
+    plugins: []
 expectations:
   - q: "First?"
     a: "yes"
@@ -1487,6 +1557,9 @@ expectations:
         answers: VecDeque<String>,
         prompts: Vec<String>,
         sessions: Vec<String>,
+        start_roots: Vec<PathBuf>,
+        start_ignores: Vec<Vec<String>>,
+        start_plugins: Vec<Vec<String>>,
         starts: usize,
     }
 
@@ -1496,6 +1569,9 @@ expectations:
                 answers: answers.iter().map(|answer| answer.to_string()).collect(),
                 prompts: Vec::new(),
                 sessions: Vec::new(),
+                start_roots: Vec::new(),
+                start_ignores: Vec::new(),
+                start_plugins: Vec::new(),
                 starts: 0,
             }
         }
@@ -1505,10 +1581,14 @@ expectations:
         fn start_session(
             &mut self,
             _agent_name: &str,
-            _workspace: &Path,
+            root: &Path,
             _instructions: &str,
+            agent: &AgentConfig,
         ) -> Result<String, String> {
             self.starts += 1;
+            self.start_roots.push(root.to_path_buf());
+            self.start_ignores.push(effective_ignore_patterns(agent));
+            self.start_plugins.push(agent.plugins.clone());
             Ok(format!("session-{}", self.starts))
         }
 
@@ -1716,7 +1796,7 @@ expectations:
                 .is_err()
         );
         assert!(parse_check_config(
-            "version: 1\ninstructions: x\nagents:\n  a:\n    paths: []\nexpectations:\n  - q: x\n    a: y\n"
+            "version: 1\ninstructions: x\nagents:\n  a:\n    ignore: []\nexpectations:\n  - q: x\n    a: y\n"
         )
         .is_err());
     }
@@ -1728,7 +1808,8 @@ version: 1
 instructions: x
 agents:
   project:
-    paths: ["."]
+    ignore: []
+    plugins: []
 expectations:
   - id: bad
     q: "Question?"
@@ -1749,6 +1830,18 @@ expectations:
         assert!(select_expectations(&config, &["3".into()]).is_err());
         assert!(select_expectations(&config, &["1".into(), "1".into()]).is_err());
         assert!(select_expectations(&config, &["x".into()]).is_err());
+    }
+
+    #[test]
+    fn check_options_accept_fail_fast_with_selected_numbers() {
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let options = parse_check_options(&config, &["--fail-fast".into(), "2".into()]).unwrap();
+        assert!(options.fail_fast);
+        assert_eq!(options.selected.len(), 1);
+        assert_eq!(options.selected[0].number, 2);
+        assert!(
+            parse_check_options(&config, &["--fail-fast".into(), "--fail-fast".into()]).is_err()
+        );
     }
 
     #[test]
@@ -1780,9 +1873,16 @@ expectations:
             "ANSWER: yes\nEVIDENCE:\nREADME.md says enough",
             "ANSWER: no\nEVIDENCE:\nREADME.md says enough",
         ]);
-        let records = run_check_with_runner(&root, &config, &selected, &mut runner).unwrap();
+        let records =
+            run_check_with_runner(&root, &config, &selected, &mut runner, None, false).unwrap();
         assert!(records.iter().all(|record| record.passed));
         assert_eq!(runner.starts, 1);
+        assert_eq!(runner.start_roots, vec![root.clone()]);
+        assert_eq!(
+            runner.start_ignores,
+            vec![vec![".canon/**".to_string(), "target/**".to_string()]]
+        );
+        assert_eq!(runner.start_plugins, vec![Vec::<String>::new()]);
         assert_eq!(runner.sessions, vec!["session-1", "session-1"]);
         assert!(runner.prompts.iter().all(|prompt| !prompt.contains("a:")));
         assert!(runner
@@ -1802,9 +1902,24 @@ expectations:
             "ANSWER: skip\nEVIDENCE:\nnot enough",
             "ANSWER: yes\nEVIDENCE:\nwrong",
         ]);
-        let records = run_check_with_runner(&root, &config, &selected, &mut runner).unwrap();
+        let records =
+            run_check_with_runner(&root, &config, &selected, &mut runner, None, false).unwrap();
         assert!(!records[0].passed);
         assert!(!records[1].passed);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn check_runner_fail_fast_stops_after_first_failure() {
+        let root = temp_home("check-fail-fast");
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let selected = select_expectations(&config, &["1".into(), "2".into()]).unwrap();
+        let mut runner = FakeRunner::new(&["ANSWER: no\nEVIDENCE:\nwrong"]);
+        let records =
+            run_check_with_runner(&root, &config, &selected, &mut runner, None, true).unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].passed);
+        assert_eq!(runner.prompts.len(), 1);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1815,7 +1930,8 @@ expectations:
         let config = parse_check_config(check_config_yaml()).unwrap();
         let selected = select_expectations(&config, &["1".into()]).unwrap();
         let mut runner = FakeRunner::new(&["not parseable", "ANSWER: yes\nEVIDENCE:\nREADME.md"]);
-        let records = run_check_with_runner(&root, &config, &selected, &mut runner).unwrap();
+        let records =
+            run_check_with_runner(&root, &config, &selected, &mut runner, None, false).unwrap();
         assert!(records[0].passed);
         assert_eq!(runner.prompts.len(), 2);
         assert!(runner.prompts[1].contains("could not be parsed"));
@@ -1829,7 +1945,8 @@ expectations:
         let config = parse_check_config(check_config_yaml()).unwrap();
         let selected = select_expectations(&config, &["1".into()]).unwrap();
         let mut runner = FakeRunner::new(&["ANSWER: yes\nEVIDENCE:\n", "ANSWER: yes\nEVIDENCE:\n"]);
-        let records = run_check_with_runner(&root, &config, &selected, &mut runner).unwrap();
+        let records =
+            run_check_with_runner(&root, &config, &selected, &mut runner, None, false).unwrap();
         assert!(records[0].passed);
         assert!(records[0].warning.is_some());
         assert_eq!(runner.prompts.len(), 2);
@@ -1844,7 +1961,8 @@ expectations:
         let config = parse_check_config(check_config_yaml()).unwrap();
         let selected = select_expectations(&config, &["1".into()]).unwrap();
         let mut runner = FakeRunner::new(&["ANSWER: malformed\nEVIDENCE:\nquestion is malformed"]);
-        let records = run_check_with_runner(&root, &config, &selected, &mut runner).unwrap();
+        let records =
+            run_check_with_runner(&root, &config, &selected, &mut runner, None, false).unwrap();
         assert!(!records[0].passed);
         assert_eq!(
             records[0].warning.as_deref(),
@@ -1859,6 +1977,23 @@ expectations:
         assert_eq!(format_log_filename_timestamp(86_399), "19700101-235959");
         assert_eq!(format_log_filename_timestamp(86_400), "19700102-000000");
         assert_eq!(format_log_record_timestamp(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn check_status_line_uses_number_and_ok_or_fail() {
+        let mut record = CheckRecord {
+            number: 7,
+            agent: "Smith".to_string(),
+            prompt: "Question?".to_string(),
+            expected: "yes".to_string(),
+            observed: "yes".to_string(),
+            evidence: "evidence".to_string(),
+            warning: None,
+            passed: true,
+        };
+        assert_eq!(check_status_line(&record), "7. OK");
+        record.passed = false;
+        assert_eq!(check_status_line(&record), "7. FAIL");
     }
 
     #[test]
@@ -1905,11 +2040,51 @@ expectations:
         let timestamp = json["timestamp"].as_str().unwrap();
         assert_eq!(timestamp.len(), "YYYY-MM-DDTHH:MM:SSZ".len());
         assert!(timestamp.ends_with('Z'));
+        let expected_order = [
+            "\"timestamp\"",
+            "\"number\"",
+            "\"result\"",
+            "\"agent\"",
+            "\"prompt\"",
+            "\"expected\"",
+            "\"observed\"",
+            "\"evidence\"",
+        ];
+        let mut previous = 0;
+        for key in expected_order {
+            let index = lines[0].find(key).unwrap();
+            assert!(index >= previous);
+            previous = index;
+        }
         assert_eq!(
             check_log_files(&log_dir).unwrap().len(),
             CHECK_LOG_MAX_FILES
         );
         assert!(!log_dir.join("20000101-000000.jsonl").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn check_log_writer_flushes_each_record() {
+        let root = temp_home("check-log-flush");
+        let record = CheckRecord {
+            number: 1,
+            agent: "Smith".to_string(),
+            prompt: "Question?".to_string(),
+            expected: "yes".to_string(),
+            observed: "yes".to_string(),
+            evidence: "README.md has evidence".to_string(),
+            warning: None,
+            passed: true,
+        };
+        let mut writer = CheckLogWriter::create(&root).unwrap();
+        let path = writer.path.clone();
+        writer.write_record(&record).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content.lines().count(), 1);
+        let json: Value = serde_json::from_str(content.lines().next().unwrap()).unwrap();
+        assert_eq!(json["number"], 1);
+        writer.finish().unwrap();
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1931,19 +2106,57 @@ expectations:
     }
 
     #[test]
-    fn agent_workspace_always_excludes_canon() {
-        let root = temp_home("workspace");
-        fs::create_dir_all(root.join(".canon")).unwrap();
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join(".canon/check.yml"), "secret").unwrap();
-        fs::write(root.join("src/main.rs"), "code").unwrap();
+    fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
         let agent = AgentConfig {
-            paths: vec![".".to_string()],
-            exclude: Vec::new(),
+            ignore: vec!["target/**".to_string()],
+            plugins: Vec::new(),
         };
-        let workspace = create_agent_workspace(&root, &agent).unwrap();
-        assert!(workspace.path().join("src/main.rs").exists());
-        assert!(!workspace.path().join(".canon/check.yml").exists());
-        let _ = fs::remove_dir_all(root);
+        let config = evaluator_thread_config(&agent);
+        let root_permissions = config["permissions"]["canon-evaluator"]["filesystem"]
+            [":project_roots"]
+            .as_object()
+            .unwrap();
+        assert_eq!(root_permissions["./**"], "read");
+        assert_eq!(root_permissions[".canon/**"], "none");
+        assert_eq!(root_permissions["target/**"], "none");
+        assert!(config.get("plugins").is_none());
+    }
+
+    #[test]
+    fn evaluator_plugin_list_is_explicitly_configured() {
+        let config = parse_check_config(
+            r#"
+version: 1
+instructions: x
+agents:
+  project:
+    ignore: []
+    plugins:
+      - "canon@codex-plugins"
+expectations:
+  - q: "Question?"
+    a: "yes"
+"#,
+        )
+        .unwrap();
+        assert!(check_config_loads_plugins(&config));
+        let agent = config.agents.get("project").unwrap();
+        let thread_config = evaluator_thread_config(agent);
+        assert_eq!(
+            thread_config["plugins"]["canon@codex-plugins"]["enabled"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn app_server_starts_with_plugins_disabled_by_default() {
+        assert_eq!(
+            app_server_args(false),
+            vec!["app-server", "--disable", "plugins", "--listen", "stdio://"]
+        );
+        assert_eq!(
+            app_server_args(true),
+            vec!["app-server", "--listen", "stdio://"]
+        );
     }
 }

@@ -114,14 +114,16 @@ Search canon with ripgrep. `canon g` is also available as a short alias for `can
 canon init
 canon hook install
 canon check
+canon check --fail-fast
 canon check 4 5 42
 ```
 
 Create `.canon/check.yml`, install the pre-commit hook, run every project
-expectation, or rerun selected 1-based expectations. `canon check` is a
-project-facing AI expectation linter: it asks configured evaluator agents to
-answer each expectation from allowed files, hides expected answers from them,
-and fails when observed answers do not exactly match.
+expectation, stop after the first failed expectation-agent result, or rerun
+selected 1-based expectations. `canon check` is a project-facing AI expectation
+linter: it asks configured evaluator agents to answer each expectation from
+allowed files, hides expected answers from them, and fails when observed answers
+do not exactly match.
 
 Long aliases: `path`, `read`, `write`, `append`, `delete`, `del`, and `rm`.
 
@@ -134,40 +136,53 @@ Long aliases: `path`, `read`, `write`, `append`, `delete`, `del`, and `rm`.
 ```yaml
 version: 1
 instructions: |
-  Answer using only the files available to you.
-  If the available files do not provide enough evidence, answer skip.
+  Use the following response policy:
+  Answer exactly `yes` or `no` only when there is sufficient evidence to support the answer.
   Do not guess.
+  If there is not enough evidence to answer `yes` or `no`, answer exactly `skip`.
+  If question is malformed, answer exactly `malformed`.
+
+  Scoring policy:
+  * Correct answer: `+1`
+  * Incorrect answer: `-1`
+  * Skip: `0`
 
 agents:
   project:
-    paths:
-      - "."
-    exclude:
-      - ".canon/**"
-      - ".git/**"
+    ignore:
       - "target/**"
+    plugins: []
 
 expectations:
   - q: "Does this project satisfy the expectation described here?"
     a: "yes"
 ```
 
-Each configured agent answers every selected expectation. Expected answers are
-single-line strings compared by exact equality. `skip` is incorrect unless the
-expected answer is exactly `skip`.
+Each configured agent answers every selected expectation. `ignore` lists
+repository-relative files or globs that the evaluator must not read, and
+`.canon/**` is always added to the effective ignore list. `plugins` lists Codex
+plugin config keys such as `canon@codex-plugins`; when every list is empty,
+`canon check` starts `codex app-server` with plugin loading disabled. Expected
+answers are single-line strings compared by exact equality. `skip` is incorrect
+unless the expected answer is exactly `skip`.
 
 `canon check` supplies the runtime response format, asks one expectation at a
-time, reuses the same Codex app-server session per agent, and reports the
-expectation number, agent name, prompt, expected answer, observed answer,
-evidence, and rerun command.
+time, reuses the same Codex app-server session per agent, restricts ignored
+paths through Codex filesystem permissions, and reports the expectation number,
+agent name, prompt, expected answer, observed answer, evidence, and rerun
+command. Each result starts with a summary line in the form `<number>. OK` or
+`<number>. FAIL`. By default, all selected expectation-agent results are checked
+and reported; `--fail-fast` stops after the first failed result.
 
 Each run also stores the interrogation report in
 `.canon/logs/YYYYMMDD-HHMMSS.jsonl`. Every non-empty line is one JSON object for
 one expectation-agent result with `timestamp`, `number`, `result`, `agent`,
 `prompt`, `expected`, `observed`, and `evidence`. `result` is exactly `pass` or
-`fail`, and timestamps are UTC. After writing a log, `canon check` removes old
-`.jsonl` files until at most 10 logs remain and their total size is at most
-100MB, unless the newest log alone exceeds that size.
+`fail`, and timestamps are UTC. Records are appended and flushed as each
+expectation-agent check finishes, so the current log can be watched with
+`tail -f`. After writing a log, `canon check` removes old `.jsonl` files until
+at most 10 logs remain and their total size is at most 100MB, unless the newest
+log alone exceeds that size.
 
 If an evaluator answers `malformed`, `canon check` fails that expectation and
 prints a human-review warning so a person can fix the expectation or prompt.
