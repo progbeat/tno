@@ -513,6 +513,52 @@ expectations:
     }
 
     #[test]
+    fn check_runner_verifies_narrowed_scope_before_history_reuse() {
+        let root = git_project("check-narrowing-accepted");
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let options = check_options(&config, &["1"], false, true);
+        let mut runner = FakeRunner::new(&[
+            &answer("yes", "full scope supports it", &["src/main.rs"]),
+            &answer("yes", "src/main.rs still supports it", &["src/main.rs"]),
+        ]);
+        let records =
+            run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None)
+                .unwrap();
+        assert!(records[0].passed());
+        assert_eq!(records[0].scope, vec!["src/main.rs"]);
+        assert_eq!(
+            runner.start_scopes,
+            vec![vec![".".to_string()], vec!["src/main.rs".to_string()]]
+        );
+        assert_eq!(
+            read_history_records(&root, &options.selected[0])
+                .unwrap()
+                .len(),
+            1
+        );
+        let _ = fs::remove_dir_all(root);
+
+        let root = git_project("check-narrowing-rejected");
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let options = check_options(&config, &["1"], false, true);
+        let mut runner = FakeRunner::new(&[
+            &answer("yes", "full scope supports it", &["src/main.rs"]),
+            &answer("no", "src/main.rs changes the answer", &["src/main.rs"]),
+        ]);
+        let records =
+            run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None)
+                .unwrap();
+        assert!(records[0].passed());
+        assert_eq!(records[0].observed, "yes");
+        assert_eq!(records[0].scope, vec!["."]);
+        let history = read_history_records(&root, &options.selected[0]).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].observed, "yes");
+        assert_eq!(history[0].scope, vec!["."]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn check_runner_fails_mismatch_and_treats_idk_as_exact_string() {
         let root = git_project("check-fails");
         let config = parse_check_config(check_config_yaml()).unwrap();
@@ -588,6 +634,46 @@ expectations:
                 .unwrap();
         assert!(!records[0].passed());
         assert_eq!(records[0].observed, "malformed");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
+        let root = git_project("check-restricted-idk");
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let options = check_options(&config, &["1"], false, true);
+        let expectation = options.selected[0].clone();
+        append_history_record(
+            &root,
+            &expectation,
+            &CheckRecord {
+                timestamp: "1970-01-01T00:00:00Z".to_string(),
+                number: expectation.number,
+                result: "fail".to_string(),
+                prompt: expectation.q.clone(),
+                expected: expectation.a.clone(),
+                observed: "idk".to_string(),
+                evidence: "src/main.rs was not enough".to_string(),
+                scope: vec!["src/main.rs".to_string()],
+                scope_hash: "old".to_string(),
+            },
+        )
+        .unwrap();
+        let mut runner = FakeRunner::new(&[
+            &answer("idk", "src/main.rs was not enough", &["src/main.rs"]),
+            &answer("yes", "README.md and src/main.rs answer it", &["."]),
+        ]);
+
+        let records =
+            run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None)
+                .unwrap();
+
+        assert!(records[0].passed());
+        assert_eq!(records[0].observed, "yes");
+        assert_eq!(
+            runner.start_scopes,
+            vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
+        );
         let _ = fs::remove_dir_all(root);
     }
 

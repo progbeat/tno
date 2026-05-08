@@ -319,7 +319,7 @@ fn run_check_with_runner<R: EvaluatorRunner>(
             }
         }
 
-        let mut scope =
+        let mut enforced_scope =
             latest_history_scope(root, &config.agent, expectation)?.unwrap_or_else(full_scope);
         let mut interrogation = interrogate_expectation(
             root,
@@ -329,10 +329,12 @@ fn run_check_with_runner<R: EvaluatorRunner>(
             runner,
             &mut sessions,
             &mut diagnostic_log,
-            &scope,
+            &enforced_scope,
         )?;
-        if interrogation.record.observed == "idk" && scope != full_scope() {
-            scope = full_scope();
+        if interrogation.record.observed == "idk" && enforced_scope != full_scope() {
+            enforced_scope = full_scope();
+            // Widening after a restricted `idk` is not a narrowing verification:
+            // the full-scope answer replaces the restricted `idk`.
             interrogation = interrogate_expectation(
                 root,
                 snapshot_root,
@@ -341,13 +343,16 @@ fn run_check_with_runner<R: EvaluatorRunner>(
                 runner,
                 &mut sessions,
                 &mut diagnostic_log,
-                &scope,
+                &enforced_scope,
             )?;
         }
 
         let proposed_scope = sanitize_scope(&interrogation.proposed_scope, &config.agent)
             .unwrap_or_else(|_| interrogation.record.scope.clone());
-        if is_strict_scope_subset(&proposed_scope, &scope) {
+        if is_strict_scope_subset(&proposed_scope, &enforced_scope) {
+            // A proposed narrower scope is never written into the current
+            // record directly. It becomes reusable only if an independent
+            // interrogation with that enforced scope preserves the answer.
             let narrowed = interrogate_expectation(
                 root,
                 snapshot_root,
