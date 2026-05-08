@@ -28,8 +28,11 @@ agent:
   plugins: []
 
 expectations:
-  - q: Is this a temporary directory?
+  - q: Does `canon check` copy the staged Git snapshot before evaluation?
     a: "no"
+
+  - q: "Do canon commands that spawn child processes ensure those processes are terminated and reaped on both success and failure?"
+    a: "yes"
 
   - q: "Can any available `canon check` result be delayed from real-time observation in stdout or any file?"
     a: "no"
