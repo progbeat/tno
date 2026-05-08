@@ -140,3 +140,6 @@ expectations:
 
   - q: "Are there any hand-written, non-generated source files that are excessively large or mix unrelated responsibilities enough that they should be split into smaller focused modules?"
     a: "no"
+
+  - q: "Is the local Git configuration for this repository set to run the repository pre-commit hook?"
+    a: "yes"
