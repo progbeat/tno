@@ -98,7 +98,7 @@ expectations:
   - q: "When interrogating without a reusable cache hit, does `canon check` use the latest history scope for that expectation or [`.`] if no history exists, retry with full project scope when a restricted interrogation returns `idk`, and avoid treating restricted `idk` as final when full-scope evidence can answer?"
     a: "yes"
 
-  - q: "If the evaluator returns a narrower scope with the same answer, does `canon check` verify that strict-subset scope by asking whether the previous observed answer remains supported in that restricted scope, accept it only when the observed answer is unchanged, write reusable history only for verified results, and exclude failed narrowing attempts that change the answer?"
+  - q: "If the evaluator returns a narrower scope with the same answer, does `canon check` verify that strict-subset scope with an independent interrogation on that restricted scope, accept it only when the observed answer is unchanged, write reusable history only for verified results, and exclude failed narrowing attempts that change the answer?"
     a: "yes"
 
   - q: "Does `canon check` write a global diagnostic log record for every evaluator interrogation, including wider interrogations and narrower-scope verifications, and append and flush each diagnostic record immediately after it is produced?"

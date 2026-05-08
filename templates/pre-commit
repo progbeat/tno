@@ -40,4 +40,7 @@ if [ -n "$(git status --porcelain -- .canon/)" ]; then
 fi
 
 echo "canon pre-commit: running canon gate"
-"$canon_bin" gate
+if ! "$canon_bin" gate; then
+  echo "canon pre-commit: canon gate failed; run canon check before committing or fix cached failures." >&2
+  exit 1
+fi

@@ -119,16 +119,19 @@ canon check
 canon gate
 canon check --fail-fast
 canon check --ignore-cache
+canon check --config other-check.yml
+canon check -c other-check.yml
 canon check 4 5 42
 ```
 
 Create `.canon/check.yml`, install the pre-commit hook, run every project
 expectation, validate cached results without asking the evaluator, stop after
-the first failed expectation result, ignore reusable cache records, or rerun
-selected 1-based expectations. `canon check` is a project-facing AI expectation
-linter: it asks the configured evaluator agent to answer each expectation from
-allowed files in the staged Git snapshot, hides expected answers from it, and
-fails when observed answers do not exactly match.
+the first failed expectation result, ignore reusable cache records, run checks
+from a custom YAML config, or rerun selected 1-based expectations. `canon check`
+is a project-facing AI expectation linter: it asks the configured evaluator
+agent to answer each expectation from allowed files in the staged Git snapshot,
+hides expected answers from it, and fails when observed answers do not exactly
+match.
 
 Long aliases: `path`, `read`, `write`, `append`, `delete`, `del`, and `rm`.
 
@@ -141,6 +144,7 @@ Long aliases: `path`, `read`, `write`, `append`, `delete`, `del`, and `rm`.
 ```yaml
 version: 1
 agent:
+  model: gpt-5.3-codex-spark
   instructions: |
     Use the following response policy:
     Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
@@ -154,10 +158,12 @@ agent:
     * `idk`: 0
     * `malformed`: N/A, human review required
     Scope policy:
-    * Prefer the smallest file scope that still contains enough evidence.
-    * Propose a narrower scope only when the evidence remains sufficient inside it.
+    * `scope` is the smallest allowed project context sufficient to answer the expectation with the same answer.
+    * `scope` is not the list of evidence citations; cite supporting files or code inside `EVIDENCE`.
+    * Use `["."]` for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it.
+    * Propose a narrower scope only when the same answer remains fully supported inside it.
     * Successful scope narrowing: +1
-    * Failed scope narrowing: -1
+    * Failed scope narrowing: -5
   ignore:
     - "target/**"
   plugins: []
@@ -167,19 +173,23 @@ expectations:
     a: "yes"
 ```
 
-The single configured agent answers every selected expectation. `ignore` lists
-repository-relative files or globs that the evaluator must not read, and
-`.canon/**` plus `.git/**` are always added to the effective ignore list.
-`plugins` lists Codex plugin config keys such as `canon@codex-plugins`; when the
-list is empty, `canon check` starts `codex app-server` with plugin loading
-disabled. Expected answers are single-line strings compared by exact equality;
-`idk` is just an ordinary answer string.
+The single configured agent answers every selected expectation. `model` selects
+the evaluator model. `ignore` lists repository-relative files or globs that the
+evaluator must not read, and `.canon/**` plus `.git/**` are always added to the
+effective ignore list. `plugins` lists Codex plugin config keys such as
+`canon@codex-plugins`; when the list is empty, `canon check` starts
+`codex app-server` with plugin loading disabled. Expected answers are
+single-line strings compared by exact equality; `idk` is just an ordinary answer
+string.
 
 `canon check` supplies the runtime answer, evidence, and scope response format,
 asks one expectation at a time, restricts ignored paths and narrowed scopes
 through Codex filesystem permissions, and prints one JSON object per selected
-expectation to stdout. The object includes `timestamp`, `number`, `result`,
-`prompt`, `expected`, `observed`, `evidence`, `scope`, and `scopeHash`.
+expectation to stdout as soon as that result is available. The object includes
+`timestamp`, `number`, `result`, `prompt`, `expected`, `observed`, `evidence`,
+`scope`, and `scopeHash`. `evidence` cites supporting files or code; `scope` is
+the smallest allowed project context sufficient to answer with the same result,
+not a list of evidence citations.
 
 Per-expectation reusable results are stored in the Git directory under
 `canon/cache/<ID>/history.jsonl`, where `ID` is a 120-bit base64url hash of the
