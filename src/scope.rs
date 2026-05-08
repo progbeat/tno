@@ -40,9 +40,6 @@ fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, 
     if scope.is_empty() {
         return Ok(full_scope());
     }
-    if scope.len() > 4 {
-        return Err("scope must contain at most 4 paths".to_string());
-    }
     let mut normalized = Vec::new();
     for path in scope {
         let path = normalize_repo_path(path)?;

@@ -1,7 +1,10 @@
 version: 1
 
 agent:
-  model: gpt-5.3-codex-spark
+  model:
+    primary: gpt-5.4-mini
+    fallbacks:
+      - gpt-5.3-codex-spark
   instructions: |
     Use the following response policy:
     Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
@@ -18,7 +21,7 @@ agent:
     * `scope` is the smallest allowed project context sufficient to answer the expectation with the same answer.
     * `scope` is not the list of evidence citations; cite supporting files or code inside `EVIDENCE`.
     * Use `["."]` for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it.
-    * Propose a narrower scope only when the same answer remains fully supported inside it.
+    * Propose a narrower scope of at most 4 paths only when the same answer remains fully supported inside it.
     * Successful scope narrowing: +1
     * Failed scope narrowing: -5
   ignore:

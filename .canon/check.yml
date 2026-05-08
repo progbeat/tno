@@ -20,7 +20,7 @@ agent:
     * `scope` is the smallest allowed project context sufficient to answer the expectation with the same answer.
     * `scope` is not the list of evidence citations; cite supporting files or code inside `EVIDENCE`.
     * Use `["."]` for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it.
-    * Propose a narrower scope only when the same answer remains fully supported inside it.
+    * Propose a narrower scope of at most 4 paths only when the same answer remains fully supported inside it.
     * Successful scope narrowing: +1
     * Failed scope narrowing: -5
   ignore:
@@ -85,13 +85,10 @@ expectations:
   - q: "Does each expectation cache directory store reusable verified cache history in `history.jsonl`, append and flush each new history record immediately after it is available, and compact history with approximately a 1-in-15 chance after appending by keeping at least the latest 5 records?"
     a: "yes"
 
-  - q: "Is every `scope` either exactly [`.`] for full project scope, or a lexicographically sorted, duplicate-free list of at most 4 normalized repository-relative paths with redundant child paths removed when a parent directory path already covers them?"
-    a: "yes"
-
   - q: "Does `canon check` treat `scope` as the minimal allowed project context needed to answer the expectation with the same observed answer, not as the list of files cited by `evidence`, and keep `scope` as [`.`] for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it?"
     a: "yes"
 
-  - q: "Does `canon check` canonicalize evaluator-provided scope immediately after parsing it, reject or ignore paths outside the repository or inside denied paths, and then use that `scope` unchanged for validation, comparison, `scopeHash` computation, thread reuse, stdout output, cache-history writes, and diagnostic-log writes?"
+  - q: "Does the evaluator-response parser either reject the evaluator-provided scope or produce the final `scope`, where `scope` is exactly [`.`] for full project scope or a lexicographically sorted, duplicate-free list of normalized repository-relative paths with redundant child paths removed when a parent directory path already covers them?"
     a: "yes"
 
   - q: "Is `scopeHash` stored after `scope`, encoded as a 120-bit base64url string without padding and exactly 20 characters, and derived only from tracked staged Git contents under the record's scope paths?"
