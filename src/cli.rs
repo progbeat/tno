@@ -22,10 +22,28 @@ struct CheckConfig {
 #[serde(deny_unknown_fields)]
 struct AgentConfig {
     #[serde(default)]
-    model: Option<String>,
+    model: ModelConfig,
     instructions: String,
     ignore: Vec<String>,
     plugins: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+struct ModelConfig {
+    #[serde(default)]
+    primary: Option<String>,
+    #[serde(default)]
+    fallbacks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct TokenUsage {
+    total_tokens: u64,
+    input_tokens: u64,
+    cached_input_tokens: u64,
+    output_tokens: u64,
+    reasoning_output_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +63,14 @@ struct SelectedExpectation {
 
 #[derive(Debug)]
 struct ParsedAnswer {
+    answer: String,
+    evidence: String,
+    scope: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvaluatorResponseJson {
     answer: String,
     evidence: String,
     scope: Vec<String>,
@@ -77,7 +103,6 @@ struct CheckCommandArgs {
 
 struct InterrogationResult {
     record: CheckRecord,
-    proposed_scope: Vec<String>,
 }
 
 trait EvaluatorRunner {
@@ -86,6 +111,7 @@ trait EvaluatorRunner {
         root: &Path,
         instructions: &str,
         agent: &AgentConfig,
+        model: Option<&str>,
         scope: &[String],
     ) -> Result<String, String>;
     fn ask(&mut self, session_id: &str, prompt: &str) -> Result<String, String>;
@@ -111,16 +137,20 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
             if args.len() != 1 {
                 return Err("init does not accept arguments".to_string());
             }
-            return run_init(Path::new("."));
+            let root = project_root_or_current(Path::new("."))?;
+            return run_init(&root);
         }
         "hook" => {
-            return run_hook_command(Path::new("."), &args[1..]);
+            let root = git_project_root(Path::new("."))?;
+            return run_hook_command(&root, &args[1..]);
         }
         "check" => {
-            return run_check_command(Path::new("."), &args[1..]);
+            let root = git_project_root(Path::new("."))?;
+            return run_check_command(&root, &args[1..]);
         }
         "gate" => {
-            return run_gate_command(Path::new("."), &args[1..]);
+            let root = git_project_root(Path::new("."))?;
+            return run_gate_command(&root, &args[1..]);
         }
         "-h" | "--help" | "help" => {
             print_help();
@@ -211,4 +241,30 @@ impl Config {
             root: temp_root.join("canon").join("codex").join(thread_id),
         })
     }
+}
+
+fn project_root_or_current(start: &Path) -> Result<PathBuf, String> {
+    match git_project_root(start) {
+        Ok(root) => Ok(root),
+        Err(_) => env::current_dir().map_err(|err| format!("failed to read current dir: {}", err)),
+    }
+}
+
+fn git_project_root(start: &Path) -> Result<PathBuf, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(start)
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .output()
+        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to find git project root: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let root = String::from_utf8(output.stdout)
+        .map_err(|_| "git project root must be valid UTF-8".to_string())?;
+    Ok(PathBuf::from(root.trim()))
 }

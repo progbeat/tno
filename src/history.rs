@@ -16,10 +16,19 @@ fn read_history_records(
     let content = fs::read_to_string(&path)
         .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
     let mut records = Vec::new();
-    for line in content.lines().filter(|line| !line.trim().is_empty()) {
-        if let Ok(record) = serde_json::from_str::<CheckRecord>(line) {
-            records.push(record);
+    for (index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
         }
+        let record = serde_json::from_str::<CheckRecord>(line).map_err(|err| {
+            format!(
+                "failed to parse {} line {}: {}",
+                path.display(),
+                index + 1,
+                err
+            )
+        })?;
+        records.push(record);
     }
     Ok(records)
 }
@@ -29,15 +38,32 @@ fn reusable_history_record(
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
 ) -> Result<Option<CheckRecord>, String> {
+    reusable_history_record_for_source(root, agent, expectation, ScopeHashSource::Index)
+}
+
+fn reusable_history_record_for_source(
+    root: &Path,
+    agent: &AgentConfig,
+    expectation: &SelectedExpectation,
+    source: ScopeHashSource,
+) -> Result<Option<CheckRecord>, String> {
     let records = read_history_records(root, expectation)?;
     for mut record in records.into_iter().rev() {
+        if record.observed == UNPARSEABLE_OBSERVED {
+            continue;
+        }
         let scope = match sanitize_scope(&record.scope, agent) {
             Ok(scope) => scope,
             Err(_) => continue,
         };
-        let current_hash = staged_scope_hash(root, agent, &scope)?;
+        let Some(current_hash) = scope_hash_for_source(root, agent, &scope, source)? else {
+            return Ok(None);
+        };
         if current_hash == record.scope_hash {
             record.scope = scope;
+            record.number = expectation.number;
+            record.prompt = expectation.q.clone();
+            record.expected = expectation.a.clone();
             return Ok(Some(record));
         }
     }
@@ -51,6 +77,12 @@ fn latest_history_scope(
 ) -> Result<Option<Vec<String>>, String> {
     let records = read_history_records(root, expectation)?;
     for record in records.into_iter().rev() {
+        if record.observed == "idk"
+            || record.observed == "malformed"
+            || record.observed == UNPARSEABLE_OBSERVED
+        {
+            continue;
+        }
         if let Ok(scope) = sanitize_scope(&record.scope, agent) {
             return Ok(Some(scope));
         }
@@ -84,11 +116,12 @@ fn append_history_record(
 }
 
 fn should_compact_history() -> Result<bool, String> {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|err| format!("system time is before UNIX_EPOCH: {}", err))?
-        .subsec_nanos();
-    Ok(nanos % 15 == 0)
+    let mut bytes = [0_u8; 2];
+    let mut file = fs::File::open("/dev/urandom")
+        .map_err(|err| format!("failed to open OS random source: {}", err))?;
+    file.read_exact(&mut bytes)
+        .map_err(|err| format!("failed to read OS random source: {}", err))?;
+    Ok(u16::from_ne_bytes(bytes) % 15 == 0)
 }
 
 fn compact_history(path: &Path) -> Result<(), String> {

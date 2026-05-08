@@ -7,6 +7,14 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::Once;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
@@ -22,6 +30,20 @@ const PRE_COMMIT_HOOK_PATH: &str = ".githooks/pre-commit";
 const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../templates/pre-commit");
 const MALFORMED_REVIEW_WARNING: &str =
     "human review required: evaluator marked the expectation question as malformed";
+const UNPARSEABLE_OBSERVED: &str = "unparseable";
+static CHECK_INTERRUPTED: AtomicBool = AtomicBool::new(false);
+static SIGNAL_HANDLER_INIT: Once = Once::new();
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+#[cfg(unix)]
+extern "C" fn handle_sigint(_: i32) {
+    CHECK_INTERRUPTED.store(true, Ordering::SeqCst);
+}
 
 include!("cli.rs");
 include!("notes.rs");

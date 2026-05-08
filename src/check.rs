@@ -1,30 +1,60 @@
 fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), String> {
+    install_sigint_handler();
+    CHECK_INTERRUPTED.store(false, Ordering::SeqCst);
     let command = parse_check_command_args(args)?;
     let config = load_check_config(root, &command.config_path)?;
     let options = parse_check_options(&config, &command.option_args)?;
     fail_on_mixed_canon_changes(root)?;
-    let tree = git_write_tree(root)?;
-    let snapshot = StagedSnapshot::create(root, &tree)?;
-    let mut runner = LazyAppServerRunner::new(check_config_loads_plugins(&config));
+    let _staged_view = StagedWorktreeView::apply(root)?;
+    let mut runner = LazyAppServerRunner::new(check_config_loads_plugins(&config), &config.agent);
     let mut diagnostic_log = DiagnosticLogWriter::create(root)?;
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     let mut result_output: &mut dyn Write = &mut stdout;
-    let records = run_check_with_runner(
+    let records_result = run_check_with_runner(
         root,
-        snapshot.path(),
+        root,
         &config,
         &options,
         &mut runner,
         Some(&mut diagnostic_log),
         Some(&mut result_output),
-    )?;
+    );
+    runner.drain_token_usage_updates();
     diagnostic_log.finish()?;
+    print_token_usage_summary(runner.token_usage(), check_interrupted());
+    let records = records_result?;
     if records.iter().all(CheckRecord::passed) {
         Ok(())
     } else {
         Err("canon check failed".to_string())
     }
+}
+
+fn print_token_usage_summary(usage: Option<TokenUsage>, force: bool) {
+    if let Some(usage) = usage {
+        eprintln!("{}", render_token_usage_summary(usage));
+    } else if force {
+        eprintln!("{}", render_token_usage_summary(TokenUsage::default()));
+    }
+}
+
+fn install_sigint_handler() {
+    SIGNAL_HANDLER_INIT.call_once(|| {
+        #[cfg(unix)]
+        unsafe {
+            const SIGHUP: i32 = 1;
+            const SIGINT: i32 = 2;
+            const SIGTERM: i32 = 15;
+            let _ = signal(SIGHUP, handle_sigint);
+            let _ = signal(SIGINT, handle_sigint);
+            let _ = signal(SIGTERM, handle_sigint);
+        }
+    });
+}
+
+fn check_interrupted() -> bool {
+    CHECK_INTERRUPTED.load(Ordering::SeqCst)
 }
 
 fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), String> {
@@ -46,6 +76,7 @@ fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), String> {
     for expectation in &selected {
         match reusable_history_record(root, &config.agent, expectation)? {
             Some(record) if record.passed() => {}
+            Some(_) if has_reusable_head_failure(root, &config.agent, expectation)? => {}
             Some(record) => failing.push(record),
             None => missing.push(expectation.number),
         }
@@ -68,6 +99,17 @@ fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), String> {
         }
     }
     Err("canon gate failed".to_string())
+}
+
+fn has_reusable_head_failure(
+    root: &Path,
+    agent: &AgentConfig,
+    expectation: &SelectedExpectation,
+) -> Result<bool, String> {
+    Ok(matches!(
+        reusable_history_record_for_source(root, agent, expectation, ScopeHashSource::Head)?,
+        Some(record) if !record.passed()
+    ))
 }
 
 fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommandArgs, String> {
@@ -155,13 +197,12 @@ fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
     if config.agent.instructions.trim().is_empty() {
         return Err("check.yml agent.instructions must not be empty".to_string());
     }
-    if let Some(model) = &config.agent.model {
-        if model.trim().is_empty() {
-            return Err("check.yml agent.model must not be empty".to_string());
-        }
-        if model.contains('\n') || model.contains('\r') {
-            return Err("check.yml agent.model must be a single-line string".to_string());
-        }
+    validate_optional_model(config.agent.model.primary.as_deref(), "agent.model.primary")?;
+    for (index, model) in config.agent.model.fallbacks.iter().enumerate() {
+        validate_optional_model(
+            Some(model.as_str()),
+            &format!("agent.model.fallbacks[{}]", index),
+        )?;
     }
     for path in &config.agent.ignore {
         validate_relative_config_path(path, "agent ignore pattern")?;
@@ -199,6 +240,19 @@ fn validate_plugin_config_key(value: &str) -> Result<(), String> {
             "agent plugin entry must use Codex plugin key <plugin>@<marketplace>: {}",
             value
         ));
+    }
+    Ok(())
+}
+
+fn validate_optional_model(value: Option<&str>, label: &str) -> Result<(), String> {
+    let Some(model) = value else {
+        return Ok(());
+    };
+    if model.trim().is_empty() {
+        return Err(format!("check.yml {} must not be empty", label));
+    }
+    if model.contains('\n') || model.contains('\r') {
+        return Err(format!("check.yml {} must be a single-line string", label));
     }
     Ok(())
 }
@@ -307,6 +361,9 @@ fn run_check_with_runner<R: EvaluatorRunner>(
     let mut records = Vec::new();
     let mut sessions = BTreeMap::new();
     for expectation in &options.selected {
+        if check_interrupted() {
+            return Err("interrupted".to_string());
+        }
         if !options.ignore_cache {
             if let Some(record) = reusable_history_record(root, &config.agent, expectation)? {
                 let should_stop = options.fail_fast && !record.passed();
@@ -319,8 +376,7 @@ fn run_check_with_runner<R: EvaluatorRunner>(
             }
         }
 
-        let mut enforced_scope =
-            latest_history_scope(root, &config.agent, expectation)?.unwrap_or_else(full_scope);
+        let scope = latest_history_scope(root, &config.agent, expectation)?.unwrap_or_else(full_scope);
         let mut interrogation = interrogate_expectation(
             root,
             snapshot_root,
@@ -329,12 +385,13 @@ fn run_check_with_runner<R: EvaluatorRunner>(
             runner,
             &mut sessions,
             &mut diagnostic_log,
-            &enforced_scope,
+            &scope,
         )?;
-        if interrogation.record.observed == "idk" && enforced_scope != full_scope() {
-            enforced_scope = full_scope();
-            // Widening after a restricted `idk` is not a narrowing verification:
-            // the full-scope answer replaces the restricted `idk`.
+        if interrogation.record.observed == "idk" && scope != full_scope() {
+            // Widening after a restricted non-answer is not narrowing
+            // verification: it is a separate full-scope interrogation whose
+            // record replaces the restricted `idk` response.
+            let full_scope = full_scope();
             interrogation = interrogate_expectation(
                 root,
                 snapshot_root,
@@ -343,16 +400,16 @@ fn run_check_with_runner<R: EvaluatorRunner>(
                 runner,
                 &mut sessions,
                 &mut diagnostic_log,
-                &enforced_scope,
+                &full_scope,
             )?;
         }
 
-        let proposed_scope = sanitize_scope(&interrogation.proposed_scope, &config.agent)
-            .unwrap_or_else(|_| interrogation.record.scope.clone());
-        if is_strict_scope_subset(&proposed_scope, &enforced_scope) {
-            // A proposed narrower scope is never written into the current
-            // record directly. It becomes reusable only if an independent
-            // interrogation with that enforced scope preserves the answer.
+        let record_scope = interrogation.record.scope.clone();
+        let mut write_history = true;
+        if is_strict_scope_subset(&record_scope, &scope) {
+            // A narrower scope from one evaluator response becomes reusable
+            // only if an independent interrogation with that same canonical
+            // scope preserves the answer.
             let narrowed = interrogate_expectation(
                 root,
                 snapshot_root,
@@ -361,14 +418,18 @@ fn run_check_with_runner<R: EvaluatorRunner>(
                 runner,
                 &mut sessions,
                 &mut diagnostic_log,
-                &proposed_scope,
+                &record_scope,
             )?;
             if narrowed.record.observed == interrogation.record.observed {
                 interrogation = narrowed;
+            } else {
+                write_history = false;
             }
         }
 
-        append_history_record(root, expectation, &interrogation.record)?;
+        if write_history && is_verified_record(&interrogation.record) {
+            append_history_record(root, expectation, &interrogation.record)?;
+        }
         let should_stop = options.fail_fast && !interrogation.record.passed();
         write_result_output(&mut result_output, &interrogation.record)?;
         records.push(interrogation.record);
@@ -389,32 +450,100 @@ fn interrogate_expectation<R: EvaluatorRunner>(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     enforced_scope: &[String],
 ) -> Result<InterrogationResult, String> {
-    let scope = sanitize_scope(enforced_scope, &config.agent)?;
-    let scope_hash = staged_scope_hash(root, &config.agent, &scope)?;
-    let session_key = scope.join("\n");
-    let session_id = if let Some(existing) = sessions.get(&session_key) {
-        existing.clone()
-    } else {
-        let session_id = runner.start_session(
+    let mut failures = Vec::new();
+    for model in evaluator_models(&config.agent) {
+        if check_interrupted() {
+            return Err("interrupted".to_string());
+        }
+        match interrogate_expectation_with_model(
+            root,
             snapshot_root,
-            &config.agent.instructions,
+            config,
+            expectation,
+            runner,
+            sessions,
+            diagnostic_log,
+            enforced_scope,
+            model.as_deref(),
+        ) {
+            Ok(result) => return Ok(result),
+            Err(err) if is_model_technical_failure(&err) => {
+                failures.push(format!("{}: {}", model_label(model.as_deref()), err));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(format!(
+        "all evaluator models failed: {}",
+        failures.join("; ")
+    ))
+}
+
+fn interrogate_expectation_with_model<R: EvaluatorRunner>(
+    root: &Path,
+    snapshot_root: &Path,
+    config: &CheckConfig,
+    expectation: &SelectedExpectation,
+    runner: &mut R,
+    sessions: &mut BTreeMap<String, String>,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    enforced_scope: &[String],
+    model: Option<&str>,
+) -> Result<InterrogationResult, String> {
+    let enforced_scope = sanitize_scope(enforced_scope, &config.agent)?;
+    // Threads are reused only for the same canonical enforced scope. When
+    // checking a narrower scope returned by an evaluator response, that
+    // canonical record scope is passed back here unchanged as enforced_scope.
+    let session_key = format!("{}\n{}", model_label(model), enforced_scope.join("\n"));
+    let existing_session = sessions.get(&session_key).cloned();
+    let session_id = match existing_session {
+        Some(existing) => existing,
+        None => runner.start_session(
+            snapshot_root,
+            &developer_instructions(&config.agent),
             &config.agent,
-            &scope,
-        )?;
-        sessions.insert(session_key, session_id.clone());
-        session_id
+            model,
+            &enforced_scope,
+        )?,
     };
-    let prompt = question_prompt(config, &expectation.q, &scope);
-    let response = ask_with_repairs(runner, &session_id, &prompt, &config.agent)?;
-    let proposed_scope = response.scope.clone();
-    let record = record_from_response(expectation, response, scope, scope_hash)?;
+    let prompt = question_prompt(&expectation.q, &enforced_scope);
+    let response = match ask_with_repairs(runner, &session_id, &prompt, &config.agent) {
+        Ok(response) => response,
+        Err(err) => {
+            if is_model_technical_failure(&err) {
+                sessions.remove(&session_key);
+            }
+            return Err(err);
+        }
+    };
+    sessions
+        .entry(session_key)
+        .or_insert_with(|| session_id.clone());
+    let record_scope = response.scope.clone();
+    let scope_hash = staged_scope_hash(root, &config.agent, &record_scope)?;
+    let record = record_from_response(expectation, response, record_scope, scope_hash)?;
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_record(&record)?;
     }
-    Ok(InterrogationResult {
-        record,
-        proposed_scope,
-    })
+    Ok(InterrogationResult { record })
+}
+
+fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
+    let mut models = vec![agent.model.primary.clone()];
+    models.extend(agent.model.fallbacks.iter().cloned().map(Some));
+    models
+}
+
+fn model_label(model: Option<&str>) -> &str {
+    model.unwrap_or("<default>")
+}
+
+fn is_model_technical_failure(err: &str) -> bool {
+    err.contains("usageLimitExceeded")
+        || err.contains("usage limit")
+        || err.contains("rate limit")
+        || err.contains("model unavailable")
+        || err.contains("model is unavailable")
 }
 
 fn record_from_response(
@@ -453,6 +582,10 @@ fn record_from_response(
     })
 }
 
+fn is_verified_record(record: &CheckRecord) -> bool {
+    record.observed != UNPARSEABLE_OBSERVED
+}
+
 fn ask_with_repairs<R: EvaluatorRunner>(
     runner: &mut R,
     session_id: &str,
@@ -463,12 +596,18 @@ fn ask_with_repairs<R: EvaluatorRunner>(
     let mut parsed = match parse_evaluator_response(&first, agent) {
         Ok(answer) => answer,
         Err(err) => {
-            let repaired = runner.ask(session_id, &malformed_repair_prompt(&err))?;
+            let first_excerpt = response_excerpt(&first);
+            let repaired = runner.ask(session_id, &malformed_repair_prompt(&err, prompt))?;
             match parse_evaluator_response(&repaired, agent) {
                 Ok(answer) => answer,
                 Err(err) => ParsedAnswer {
-                    answer: "malformed".to_string(),
-                    evidence: format!("evaluator response could not be parsed after retry: {}", err),
+                    answer: UNPARSEABLE_OBSERVED.to_string(),
+                    evidence: format!(
+                        "evaluator response could not be parsed after retry: {}\nfirst response: {}\nrepair response: {}",
+                        err,
+                        first_excerpt,
+                        response_excerpt(&repaired)
+                    ),
                     scope: full_scope(),
                 },
             }
@@ -476,14 +615,24 @@ fn ask_with_repairs<R: EvaluatorRunner>(
     };
 
     if parsed.answer == "malformed" {
-        let repaired = runner.ask(session_id, malformed_answer_repair_prompt())?;
+        let repair_prompt = malformed_answer_repair_prompt();
+        let repaired = runner.ask(session_id, &repair_prompt)?;
+        if let Ok(answer) = parse_evaluator_response(&repaired, agent) {
+            parsed = answer;
+        }
+    }
+
+    if parsed.answer == "idk" && should_repair_absence_idk(prompt) {
+        let repair_prompt = absence_idk_repair_prompt();
+        let repaired = runner.ask(session_id, &repair_prompt)?;
         if let Ok(answer) = parse_evaluator_response(&repaired, agent) {
             parsed = answer;
         }
     }
 
     if parsed.evidence.trim().is_empty() {
-        let repaired = runner.ask(session_id, evidence_repair_prompt())?;
+        let repair_prompt = evidence_repair_prompt();
+        let repaired = runner.ask(session_id, &repair_prompt)?;
         if let Ok(answer) = parse_evaluator_response(&repaired, agent) {
             parsed = answer;
         }
@@ -492,102 +641,90 @@ fn ask_with_repairs<R: EvaluatorRunner>(
     Ok(parsed)
 }
 
-fn question_prompt(config: &CheckConfig, question: &str, scope: &[String]) -> String {
+fn response_excerpt(text: &str) -> String {
+    const LIMIT: usize = 600;
+    let text = text.trim();
+    if text.is_empty() {
+        return "<empty>".to_string();
+    }
+    let mut excerpt = text.chars().take(LIMIT).collect::<String>();
+    if text.chars().count() > LIMIT {
+        excerpt.push_str("...");
+    }
+    excerpt
+}
+
+fn question_prompt(question: &str, scope: &[String]) -> String {
+    serde_json::to_string(&json!({
+        "scope": scope,
+        "question": question,
+    }))
+    .expect("question prompt is serializable")
+}
+
+fn developer_instructions(agent: &AgentConfig) -> String {
     format!(
-        "{}\n\nRuntime check.yml metadata summary:\n{}\nThis summary is provided by canon itself, is not file-read access to `.canon/check.yml`, and does not include expected answers.\n\nAllowed scope:\n{}\n\nExpectation:\n{}\n\nReply using this exact format:\nANSWER: <single-line answer>\nEVIDENCE:\n<free-form evidence citing supporting files or code>\nSCOPE: <JSON array of up to 4 normalized repository-relative paths representing the smallest allowed project context sufficient to answer this expectation with the same ANSWER; this is not the list of evidence citations; use [\".\"] when the answer depends on project-wide absence, consistency, duplication, garbage, or overall quality>\n",
-        config.agent.instructions.trim(),
-        check_config_summary(config),
-        serde_json::to_string(scope).expect("scope is serializable"),
-        question
+        "{}\n\n{}",
+        agent.instructions.trim(),
+        response_format_block()
     )
 }
 
-fn check_config_summary(config: &CheckConfig) -> String {
+fn malformed_repair_prompt(error: &str, original_prompt: &str) -> String {
     format!(
-        "- version: {}\n- top-level `agent` section: present\n- top-level `agents` section: absent\n- single evaluator agent fields: instructions, model, ignore, plugins\n- configured model: {}\n- configured ignore patterns: {}\n- configured plugins: {}\n- expectation count: {}",
-        config.version,
-        config.agent.model.as_deref().unwrap_or("<default>"),
-        serde_json::to_string(&config.agent.ignore).expect("ignore patterns are serializable"),
-        serde_json::to_string(&config.agent.plugins).expect("plugins are serializable"),
-        config.expectations.len()
+        "Your previous response could not be parsed: {}.\n\nOriginal prompt:\n{}\n",
+        error, original_prompt
     )
 }
 
-fn malformed_repair_prompt(error: &str) -> String {
-    format!(
-        "Your previous response could not be parsed: {}. Reply again using exactly:\nANSWER: <single-line answer>\nEVIDENCE:\n<free-form evidence citing supporting files or code>\nSCOPE: <JSON array of up to 4 normalized repository-relative paths representing the smallest allowed project context sufficient to answer with the same ANSWER; this is not the list of evidence citations; do not include denied paths such as .canon/**, .git/**, or configured ignore paths; use [\".\"] when no narrower allowed scope is sufficient>\n",
-        error
-    )
+fn malformed_answer_repair_prompt() -> String {
+    "Your previous answer was `malformed`. Retry once. If the question is truly malformed, answer `malformed` again.\n".to_string()
 }
 
-fn malformed_answer_repair_prompt() -> &'static str {
-    "Your previous answer was `malformed`. Retry once. If the question is truly malformed, answer `malformed` again. Reply using exactly:\nANSWER: <single-line answer>\nEVIDENCE:\n<free-form evidence citing supporting files or code>\nSCOPE: <JSON array of up to 4 normalized repository-relative paths representing the smallest allowed project context sufficient to answer with the same ANSWER; this is not the list of evidence citations>\n"
+fn should_repair_absence_idk(prompt: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(prompt.trim()) else {
+        return false;
+    };
+    let Some(question) = value.get("question").and_then(Value::as_str) else {
+        return false;
+    };
+    question.starts_with("Are there any ")
+        || question.starts_with("Is there any ")
+        || question.starts_with("Can any ")
 }
 
-fn evidence_repair_prompt() -> &'static str {
-    "Your previous response had an answer but no evidence. Reply again with the same format and include evidence if the available files support it:\nANSWER: <single-line answer>\nEVIDENCE:\n<free-form evidence citing supporting files or code>\nSCOPE: <JSON array of up to 4 normalized repository-relative paths representing the smallest allowed project context sufficient to answer with the same ANSWER; this is not the list of evidence citations>\n"
+fn absence_idk_repair_prompt() -> String {
+    "Your previous answer was `idk`. For an existence or absence question, concrete evidence of the problem is required for `yes`; if you performed a focused inspection of the allowed files and found no such evidence, answer `no` and cite what you inspected. Keep `idk` only if the allowed scope truly prevents a focused inspection.\n".to_string()
+}
+
+fn evidence_repair_prompt() -> String {
+    "Your previous response had an answer but no evidence. Reply again with evidence if the available files support it.\n".to_string()
+}
+
+fn response_format_block() -> &'static str {
+    "Response format:\nReturn exactly one valid JSON object and no markdown, code fences, or surrounding prose.\nSchema: {\"answer\":\"<single-line answer>\",\"evidence\":\"<free-form evidence citing supporting files or code>\",\"scope\":[\"<normalized repository-relative path>\"]}\n`scope` is the smallest allowed project context sufficient to answer this question with the same `answer`; it is not the list of evidence citations. Use [\".\"] when the answer depends on project-wide absence, consistency, duplication, garbage, overall quality, or denied/inaccessible paths. Never include denied or inaccessible paths in `scope`.\n"
 }
 
 fn parse_evaluator_response(text: &str, agent: &AgentConfig) -> Result<ParsedAnswer, String> {
-    let lines = text.lines().collect::<Vec<_>>();
-    let answer_line_index = lines
-        .iter()
-        .position(|line| line.trim_start().starts_with("ANSWER: "))
-        .ok_or("missing ANSWER line".to_string())?;
-    let answer = lines[answer_line_index]
-        .trim_start()
-        .trim_end()
-        .strip_prefix("ANSWER: ")
-        .ok_or("missing ANSWER line".to_string())?
-        .to_string();
-    let evidence_line_index = lines
-        .iter()
-        .enumerate()
-        .skip(answer_line_index + 1)
-        .find_map(|(index, line)| {
-            line.trim_start()
-                .starts_with("EVIDENCE:")
-                .then_some(index)
-        })
-        .ok_or("missing EVIDENCE block".to_string())?;
-    let scope_line_index = lines
-        .iter()
-        .enumerate()
-        .skip(evidence_line_index + 1)
-        .rev()
-        .find_map(|(index, line)| line.trim_start().strip_prefix("SCOPE: ").map(|_| index))
-        .ok_or("missing SCOPE line".to_string())?;
-    let scope_text = lines[scope_line_index]
-        .trim_start()
-        .trim_end()
-        .strip_prefix("SCOPE: ")
-        .ok_or("missing SCOPE line".to_string())?;
-    let evidence_header = lines[evidence_line_index].trim_start();
-    let evidence_suffix = evidence_header
-        .strip_prefix("EVIDENCE:")
-        .unwrap_or("")
-        .trim_start();
-    let mut evidence_lines = Vec::new();
-    if !evidence_suffix.is_empty() {
-        evidence_lines.push(evidence_suffix);
+    let response: EvaluatorResponseJson = serde_json::from_str(text.trim())
+        .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))?;
+    if response.answer.contains('\n') || response.answer.contains('\r') {
+        return Err("answer must be a single-line string".to_string());
     }
-    evidence_lines.extend(lines[evidence_line_index + 1..scope_line_index].iter().copied());
     Ok(ParsedAnswer {
-        answer,
-        evidence: evidence_lines.join("\n"),
-        scope: parse_scope_json(scope_text, agent)?,
+        answer: response.answer,
+        evidence: response.evidence,
+        scope: parse_scope_strings(&response.scope, agent)?,
     })
 }
 
+#[cfg(test)]
 fn parse_scope_json(text: &str, agent: &AgentConfig) -> Result<Vec<String>, String> {
     let value: Value =
         serde_json::from_str(text).map_err(|err| format!("failed to parse SCOPE JSON: {}", err))?;
     let array = value
         .as_array()
         .ok_or("SCOPE must be a JSON array".to_string())?;
-    if array.len() > 4 {
-        return Err("SCOPE must contain at most 4 paths".to_string());
-    }
     let mut scope = Vec::new();
     for item in array {
         let raw = item
@@ -600,6 +737,18 @@ fn parse_scope_json(text: &str, agent: &AgentConfig) -> Result<Vec<String>, Stri
         scope.push(normalized);
     }
     sanitize_scope(&scope, agent)
+}
+
+fn parse_scope_strings(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, String> {
+    let mut parsed = Vec::new();
+    for raw in scope {
+        let normalized = normalize_repo_path(raw)?;
+        if normalized != raw.trim() {
+            return Err(format!("scope entry must be normalized: {}", raw));
+        }
+        parsed.push(normalized);
+    }
+    sanitize_scope(&parsed, agent)
 }
 
 fn write_result_output(

@@ -1,5 +1,33 @@
+#[derive(Clone, Copy)]
+enum ScopeHashSource {
+    Index,
+    Head,
+}
+
 fn staged_scope_hash(root: &Path, agent: &AgentConfig, scope: &[String]) -> Result<String, String> {
+    scope_hash_for_source(root, agent, scope, ScopeHashSource::Index)?
+        .ok_or("failed to hash staged scope".to_string())
+}
+
+fn scope_hash_for_source(
+    root: &Path,
+    agent: &AgentConfig,
+    scope: &[String],
+    source: ScopeHashSource,
+) -> Result<Option<String>, String> {
     let scope = sanitize_scope(scope, agent)?;
+    let entries = match source {
+        ScopeHashSource::Index => staged_scope_entries(root, agent, &scope).map(Some)?,
+        ScopeHashSource::Head => head_scope_entries(root, agent, &scope)?,
+    };
+    Ok(entries.map(|entries| hash_120(entries.join("\n").as_bytes())))
+}
+
+fn staged_scope_entries(
+    root: &Path,
+    agent: &AgentConfig,
+    scope: &[String],
+) -> Result<Vec<String>, String> {
     let mut command = Command::new("git");
     command
         .arg("-C")
@@ -8,7 +36,7 @@ fn staged_scope_hash(root: &Path, agent: &AgentConfig, scope: &[String]) -> Resu
         .arg("-s")
         .arg("--");
     if scope != full_scope() {
-        for path in &scope {
+        for path in scope {
             command.arg(path);
         }
     }
@@ -27,13 +55,100 @@ fn staged_scope_hash(root: &Path, agent: &AgentConfig, scope: &[String]) -> Resu
     for line in stdout.lines() {
         if let Some((metadata, path)) = line.split_once('\t') {
             if !is_denied_path(agent, path) {
-                entries.push(format!("{}\t{}", metadata, path));
+                entries.push(normalize_index_metadata(metadata, path)?);
             }
         }
     }
     entries.sort();
     entries.dedup();
-    Ok(hash_120(entries.join("\n").as_bytes()))
+    Ok(entries)
+}
+
+fn head_scope_entries(
+    root: &Path,
+    agent: &AgentConfig,
+    scope: &[String],
+) -> Result<Option<Vec<String>>, String> {
+    if !git_has_head(root)? {
+        return Ok(None);
+    }
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(root)
+        .arg("ls-tree")
+        .arg("-r")
+        .arg("HEAD")
+        .arg("--");
+    if scope != full_scope() {
+        for path in scope {
+            command.arg(path);
+        }
+    }
+    let output = command
+        .output()
+        .map_err(|err| format!("failed to run git ls-tree: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to inspect HEAD scope: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|_| "git ls-tree output must be valid UTF-8".to_string())?;
+    let mut entries = Vec::new();
+    for line in stdout.lines() {
+        if let Some((metadata, path)) = line.split_once('\t') {
+            if !is_denied_path(agent, path) {
+                entries.push(normalize_head_metadata(metadata, path)?);
+            }
+        }
+    }
+    entries.sort();
+    entries.dedup();
+    Ok(Some(entries))
+}
+
+fn git_has_head(root: &Path) -> Result<bool, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "-q", "HEAD^{tree}"])
+        .output()
+        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
+    Ok(output.status.success())
+}
+
+fn normalize_index_metadata(metadata: &str, path: &str) -> Result<String, String> {
+    let mut fields = metadata.split_whitespace();
+    let mode = fields
+        .next()
+        .ok_or_else(|| format!("malformed git index entry for {}", path))?;
+    let object = fields
+        .next()
+        .ok_or_else(|| format!("malformed git index entry for {}", path))?;
+    let stage = fields
+        .next()
+        .ok_or_else(|| format!("malformed git index entry for {}", path))?;
+    if stage == "0" {
+        Ok(format!("{} {}\t{}", mode, object, path))
+    } else {
+        Ok(format!("{} {} {}\t{}", mode, object, stage, path))
+    }
+}
+
+fn normalize_head_metadata(metadata: &str, path: &str) -> Result<String, String> {
+    let mut fields = metadata.split_whitespace();
+    let mode = fields
+        .next()
+        .ok_or_else(|| format!("malformed git tree entry for {}", path))?;
+    let _kind = fields
+        .next()
+        .ok_or_else(|| format!("malformed git tree entry for {}", path))?;
+    let object = fields
+        .next()
+        .ok_or_else(|| format!("malformed git tree entry for {}", path))?;
+    Ok(format!("{} {}\t{}", mode, object, path))
 }
 
 fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, String> {
@@ -174,8 +289,8 @@ fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
     let mut patterns = vec![
         ".canon".to_string(),
         ".canon/**".to_string(),
-        ".git".to_string(),
-        ".git/**".to_string(),
+        ".git/canon".to_string(),
+        ".git/canon/**".to_string(),
     ];
     for pattern in &agent.ignore {
         if !patterns.iter().any(|existing| existing == pattern) {

@@ -6,48 +6,102 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(name: &str) -> TestDir {
+            let mut path = PathBuf::from("/tmp");
+            path.push(format!("canon-test-{}-{}", name, process::id()));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("create test directory");
+            TestDir { path }
+        }
+
+        fn path(&self) -> PathBuf {
+            self.path.clone()
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
     fn temp_home(name: &str) -> PathBuf {
         let mut path = PathBuf::from("/tmp");
         path.push(format!("canon-test-{}-{}", name, process::id()));
         let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
+        fs::create_dir_all(&path).expect("create test directory");
         path
+    }
+
+    struct EnvSnapshot {
+        values: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl EnvSnapshot {
+        fn capture(keys: &[&'static str]) -> EnvSnapshot {
+            EnvSnapshot {
+                values: keys.iter().map(|key| (*key, env::var_os(key))).collect(),
+            }
+        }
+
+        fn set(&self, key: &str, value: impl AsRef<std::ffi::OsStr>) {
+            env::set_var(key, value);
+        }
+
+        fn remove(&self, key: &str) {
+            env::remove_var(key);
+        }
+    }
+
+    impl Drop for EnvSnapshot {
+        fn drop(&mut self) {
+            for (key, value) in &self.values {
+                match value {
+                    Some(value) => env::set_var(key, value),
+                    None => env::remove_var(key),
+                }
+            }
+        }
     }
 
     fn with_env<F>(name: &str, f: F)
     where
         F: FnOnce(PathBuf),
     {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let home = temp_home(name);
-        env::set_var("CANON_HOME", &home);
-        env::set_var("CODEX_THREAD_ID", "thread-test");
-        f(home.clone());
-        env::remove_var("CANON_HOME");
-        env::remove_var("CODEX_THREAD_ID");
-        let _ = fs::remove_dir_all(home);
+        let _guard = ENV_LOCK.lock().expect("lock test environment");
+        let env_snapshot = EnvSnapshot::capture(&["CANON_HOME", "CODEX_THREAD_ID"]);
+        let home = TestDir::new(name);
+        env_snapshot.set("CANON_HOME", home.path());
+        env_snapshot.set("CODEX_THREAD_ID", "thread-test");
+        f(home.path());
     }
 
     fn with_tmpdir<F>(name: &str, f: F)
     where
         F: FnOnce(PathBuf),
     {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let temp = temp_home(name);
-        env::remove_var("CANON_HOME");
-        env::set_var("TMPDIR", &temp);
-        env::set_var("CODEX_THREAD_ID", "thread-test");
-        f(temp.clone());
-        env::remove_var("TMPDIR");
-        env::remove_var("CODEX_THREAD_ID");
-        let _ = fs::remove_dir_all(temp);
+        let _guard = ENV_LOCK.lock().expect("lock test environment");
+        let env_snapshot = EnvSnapshot::capture(&["CANON_HOME", "TMPDIR", "CODEX_THREAD_ID"]);
+        let temp = TestDir::new(name);
+        env_snapshot.remove("CANON_HOME");
+        env_snapshot.set("TMPDIR", temp.path());
+        env_snapshot.set("CODEX_THREAD_ID", "thread-test");
+        f(temp.path());
     }
 
     fn check_config_yaml() -> &'static str {
         r#"
 version: 1
 agent:
-  model: gpt-5.3-codex-spark
+  model:
+    primary: gpt-5.4-mini
+    fallbacks:
+      - gpt-5.3-codex-spark
   instructions: |
     Answer from files only.
   ignore:
@@ -68,7 +122,7 @@ expectations:
     }
 
     struct FakeRunner {
-        answers: VecDeque<String>,
+        answers: VecDeque<Result<String, String>>,
         prompts: Vec<String>,
         sessions: Vec<String>,
         start_roots: Vec<PathBuf>,
@@ -82,7 +136,27 @@ expectations:
     impl FakeRunner {
         fn new(answers: &[&str]) -> FakeRunner {
             FakeRunner {
-                answers: answers.iter().map(|answer| answer.to_string()).collect(),
+                answers: answers
+                    .iter()
+                    .map(|answer| Ok((*answer).to_string()))
+                    .collect(),
+                prompts: Vec::new(),
+                sessions: Vec::new(),
+                start_roots: Vec::new(),
+                start_ignores: Vec::new(),
+                start_models: Vec::new(),
+                start_plugins: Vec::new(),
+                start_scopes: Vec::new(),
+                starts: 0,
+            }
+        }
+
+        fn new_results(answers: Vec<Result<&str, &str>>) -> FakeRunner {
+            FakeRunner {
+                answers: answers
+                    .into_iter()
+                    .map(|answer| answer.map(str::to_string).map_err(str::to_string))
+                    .collect(),
                 prompts: Vec::new(),
                 sessions: Vec::new(),
                 start_roots: Vec::new(),
@@ -101,12 +175,14 @@ expectations:
             root: &Path,
             _instructions: &str,
             agent: &AgentConfig,
+            model: Option<&str>,
             scope: &[String],
         ) -> Result<String, String> {
             self.starts += 1;
             self.start_roots.push(root.to_path_buf());
             self.start_ignores.push(effective_ignore_patterns(agent));
-            self.start_models.push(agent.model.clone());
+            self.start_models
+                .push(model.or(agent.model.primary.as_deref()).map(str::to_string));
             self.start_plugins.push(agent.plugins.clone());
             self.start_scopes.push(scope.to_vec());
             Ok(format!("session-{}", self.starts))
@@ -117,7 +193,7 @@ expectations:
             self.prompts.push(prompt.to_string());
             self.answers
                 .pop_front()
-                .ok_or("fake runner has no answer".to_string())
+                .unwrap_or_else(|| Err("fake runner has no answer".to_string()))
         }
     }
 
@@ -140,6 +216,90 @@ expectations:
         root
     }
 
+    fn commit_all(root: &Path, message: &str) {
+        let output = Command::new("git")
+            .args([
+                "-c",
+                "user.name=Canon Test",
+                "-c",
+                "user.email=canon@example.test",
+                "commit",
+                "-m",
+                message,
+            ])
+            .current_dir(root)
+            .output()
+            .expect("run git commit");
+        assert!(
+            output.status.success(),
+            "git commit failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn write_check_config(root: &Path) {
+        fs::create_dir_all(root.join(".canon")).unwrap();
+        fs::write(root.join(CHECK_PATH), check_config_yaml()).unwrap();
+    }
+
+    #[test]
+    fn git_project_root_finds_top_level_from_subdirectory() {
+        let root = git_project("git-root-subdir");
+        let subdir = root.join(".canon");
+        fs::create_dir_all(&subdir).unwrap();
+        assert_eq!(
+            fs::canonicalize(git_project_root(&subdir).unwrap()).unwrap(),
+            fs::canonicalize(&root).unwrap()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn staged_worktree_view_preserves_and_restores_changes() {
+        let root = git_project("hide-worktree-changes");
+        Command::new("git")
+            .args([
+                "-c",
+                "user.name=Canon Test",
+                "-c",
+                "user.email=canon@example.test",
+                "commit",
+                "-m",
+                "initial",
+            ])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        fs::write(root.join("README.md"), "staged\n").unwrap();
+        Command::new("git")
+            .arg("add")
+            .arg("README.md")
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        fs::write(root.join("README.md"), "unstaged\n").unwrap();
+        fs::write(root.join("untracked.txt"), "untracked\n").unwrap();
+
+        {
+            let _staged_view = StagedWorktreeView::apply(&root).unwrap();
+            assert_eq!(fs::read_to_string(root.join("README.md")).unwrap(), "staged\n");
+            assert!(!root.join("untracked.txt").exists());
+        }
+
+        assert_eq!(
+            fs::read_to_string(root.join("README.md")).unwrap(),
+            "unstaged\n"
+        );
+        assert!(root.join("untracked.txt").exists());
+        let diff = Command::new("git")
+            .args(["diff", "--cached", "--name-only"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&diff.stdout).trim(), "README.md");
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn check_options(
         config: &CheckConfig,
         numbers: &[&str],
@@ -158,12 +318,12 @@ expectations:
     }
 
     fn answer(answer: &str, evidence: &str, scope: &[&str]) -> String {
-        format!(
-            "ANSWER: {}\nEVIDENCE:\n{}\nSCOPE: {}",
-            answer,
-            evidence,
-            serde_json::to_string(scope).unwrap()
-        )
+        serde_json::to_string(&json!({
+            "answer": answer,
+            "evidence": evidence,
+            "scope": scope,
+        }))
+        .unwrap()
     }
 
     fn sample_record(number: usize, result: &str) -> CheckRecord {
@@ -180,6 +340,25 @@ expectations:
         }
     }
 
+    fn expectation_record(
+        expectation: &SelectedExpectation,
+        result: &str,
+        observed: &str,
+        scope_hash: String,
+    ) -> CheckRecord {
+        CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
+            number: expectation.number,
+            result: result.to_string(),
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: observed.to_string(),
+            evidence: "cached answer".to_string(),
+            scope: full_scope(),
+            scope_hash,
+        }
+    }
+
     #[test]
     fn hash_is_ten_base64url_chars() {
         let hash = hash_key("src/lib.rs");
@@ -191,12 +370,13 @@ expectations:
 
     #[test]
     fn missing_thread_id_fails() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        env::remove_var("CODEX_THREAD_ID");
-        env::set_var("CANON_HOME", temp_home("missing-thread"));
+        let _guard = ENV_LOCK.lock().expect("lock test environment");
+        let env_snapshot = EnvSnapshot::capture(&["CANON_HOME", "CODEX_THREAD_ID"]);
+        let home = TestDir::new("missing-thread");
+        env_snapshot.remove("CODEX_THREAD_ID");
+        env_snapshot.set("CANON_HOME", home.path());
         let result = Config::from_env();
         assert!(result.is_err());
-        env::remove_var("CANON_HOME");
     }
 
     #[test]
@@ -220,13 +400,13 @@ expectations:
 
     #[test]
     fn default_root_uses_slash_tmp_without_tmpdir() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        env::remove_var("CANON_HOME");
-        env::remove_var("TMPDIR");
-        env::set_var("CODEX_THREAD_ID", "thread-test");
+        let _guard = ENV_LOCK.lock().expect("lock test environment");
+        let env_snapshot = EnvSnapshot::capture(&["CANON_HOME", "TMPDIR", "CODEX_THREAD_ID"]);
+        env_snapshot.remove("CANON_HOME");
+        env_snapshot.remove("TMPDIR");
+        env_snapshot.set("CODEX_THREAD_ID", "thread-test");
         let config = Config::from_env().unwrap();
         assert_eq!(config.root, PathBuf::from("/tmp/canon/codex/thread-test"));
-        env::remove_var("CODEX_THREAD_ID");
     }
 
     #[test]
@@ -314,8 +494,9 @@ expectations:
 
     #[test]
     fn init_does_not_require_thread_id() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        env::remove_var("CODEX_THREAD_ID");
+        let _guard = ENV_LOCK.lock().expect("lock test environment");
+        let env_snapshot = EnvSnapshot::capture(&["CODEX_THREAD_ID"]);
+        env_snapshot.remove("CODEX_THREAD_ID");
         let root = temp_home("init-no-thread");
         run_init(&root).unwrap();
         assert!(root.join(CHECK_PATH).exists());
@@ -364,7 +545,11 @@ expectations:
     fn check_config_accepts_minimal_schema() {
         let config = parse_check_config(check_config_yaml()).unwrap();
         assert_eq!(config.expectations.len(), 2);
-        assert_eq!(config.agent.model.as_deref(), Some("gpt-5.3-codex-spark"));
+        assert_eq!(config.agent.model.primary.as_deref(), Some("gpt-5.4-mini"));
+        assert_eq!(
+            config.agent.model.fallbacks,
+            vec!["gpt-5.3-codex-spark"]
+        );
         assert_eq!(config.agent.ignore, vec!["target/**"]);
     }
 
@@ -460,15 +645,35 @@ expectations:
     }
 
     #[test]
-    fn parser_handles_answer_and_free_form_evidence() {
+    fn parser_handles_json_answer_and_free_form_evidence() {
         let parsed = parse_evaluator_response(
-            "ANSWER: yes\nEVIDENCE:\nline: one\n- two\nSCOPE: [\".\"]",
+            r#"{"answer":"yes","evidence":"line: one\nSCOPE: this is evidence\nANSWER: also evidence","scope":["."]}"#,
             &parse_check_config(check_config_yaml()).unwrap().agent,
         )
         .unwrap();
         assert_eq!(parsed.answer, "yes");
-        assert_eq!(parsed.evidence, "line: one\n- two");
+        assert_eq!(
+            parsed.evidence,
+            "line: one\nSCOPE: this is evidence\nANSWER: also evidence"
+        );
         assert_eq!(parsed.scope, vec!["."]);
+        let canonicalized = parse_evaluator_response(
+            r#"{"answer":"no","evidence":"code says no","scope":["src/check.rs","src"]}"#,
+            &parse_check_config(check_config_yaml()).unwrap().agent,
+        )
+        .unwrap();
+        assert_eq!(canonicalized.answer, "no");
+        assert_eq!(canonicalized.scope, vec!["src"]);
+        assert!(parse_evaluator_response(
+            "ANSWER: yes\nEVIDENCE:\nok\nSCOPE: [\".\"]",
+            &parse_check_config(check_config_yaml()).unwrap().agent,
+        )
+        .is_err());
+        assert!(parse_evaluator_response(
+            r#"{"answer":"yes\nno","evidence":"bad","scope":["."]}"#,
+            &parse_check_config(check_config_yaml()).unwrap().agent,
+        )
+        .is_err());
         assert!(parse_evaluator_response(
             "yes",
             &parse_check_config(check_config_yaml()).unwrap().agent
@@ -496,19 +701,20 @@ expectations:
             vec![vec![
                 ".canon".to_string(),
                 ".canon/**".to_string(),
-                ".git".to_string(),
-                ".git/**".to_string(),
+                ".git/canon".to_string(),
+                ".git/canon/**".to_string(),
                 "target/**".to_string()
             ]]
         );
         assert_eq!(runner.start_plugins, vec![Vec::<String>::new()]);
         assert_eq!(
             runner.start_models,
-            vec![Some("gpt-5.3-codex-spark".to_string())]
+            vec![Some("gpt-5.4-mini".to_string())]
         );
         assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
         assert_eq!(runner.sessions, vec!["session-1", "session-1"]);
         assert!(runner.prompts.iter().all(|prompt| !prompt.contains("a:")));
+        assert!(runner.prompts.iter().all(|prompt| !prompt.contains("Response format:")));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -550,11 +756,9 @@ expectations:
                 .unwrap();
         assert!(records[0].passed());
         assert_eq!(records[0].observed, "yes");
-        assert_eq!(records[0].scope, vec!["."]);
+        assert_eq!(records[0].scope, vec!["src/main.rs"]);
         let history = read_history_records(&root, &options.selected[0]).unwrap();
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].observed, "yes");
-        assert_eq!(history[0].scope, vec!["."]);
+        assert!(history.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -572,6 +776,39 @@ expectations:
                 .unwrap();
         assert!(!records[0].passed());
         assert!(!records[1].passed());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn check_runner_repairs_absence_question_idk_once() {
+        let root = git_project("check-absence-idk");
+        let config = parse_check_config(
+            r#"
+version: 1
+agent:
+  instructions: Answer from files only.
+  ignore:
+    - "target/**"
+  plugins: []
+expectations:
+  - q: "Are there any unused files?"
+    a: "no"
+"#,
+        )
+        .unwrap();
+        let options = check_options(&config, &["1"], false, true);
+        let mut runner = FakeRunner::new(&[
+            &answer("idk", "no concrete issue found", &["."]),
+            &answer("no", "README.md and src/main.rs were inspected", &["."]),
+        ]);
+
+        let records =
+            run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None)
+                .unwrap();
+
+        assert!(records[0].passed());
+        assert_eq!(records[0].observed, "no");
+        assert!(runner.prompts[1].contains("existence or absence question"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -607,6 +844,52 @@ expectations:
     }
 
     #[test]
+    fn check_runner_uses_model_fallback_after_usage_limit() {
+        let root = git_project("check-model-fallback");
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let options = check_options(&config, &["1"], false, true);
+        let answer = answer("yes", "README.md", &["."]);
+        let mut runner = FakeRunner::new_results(vec![
+            Err("app-server turn/start failed: usageLimitExceeded"),
+            Ok(&answer),
+        ]);
+        let records =
+            run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None)
+                .unwrap();
+        assert!(records[0].passed());
+        assert_eq!(
+            runner.start_models,
+            vec![
+                Some("gpt-5.4-mini".to_string()),
+                Some("gpt-5.3-codex-spark".to_string())
+            ]
+        );
+        assert_eq!(
+            runner.start_scopes,
+            vec![vec![".".to_string()], vec![".".to_string()]]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn check_runner_marks_unparseable_after_response_repair_fails() {
+        let root = git_project("check-unparseable");
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let options = check_options(&config, &["1"], false, true);
+        let mut runner = FakeRunner::new(&["", ""]);
+        let records =
+            run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None)
+                .unwrap();
+        assert!(!records[0].passed());
+        assert_eq!(records[0].observed, UNPARSEABLE_OBSERVED);
+        assert!(records[0].evidence.contains("first response: <empty>"));
+        assert!(read_history_records(&root, &options.selected[0])
+            .unwrap()
+            .is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn check_runner_warns_when_evidence_stays_empty() {
         let root = git_project("check-empty-evidence");
         let config = parse_check_config(check_config_yaml()).unwrap();
@@ -628,7 +911,8 @@ expectations:
         let config = parse_check_config(check_config_yaml()).unwrap();
         let options = check_options(&config, &["1"], false, true);
         let malformed = answer("malformed", "question is malformed", &["."]);
-        let mut runner = FakeRunner::new(&[&malformed, &malformed]);
+        let mut runner =
+            FakeRunner::new(&[&malformed, &malformed, &malformed, &malformed]);
         let records =
             run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None)
                 .unwrap();
@@ -643,6 +927,22 @@ expectations:
         let config = parse_check_config(check_config_yaml()).unwrap();
         let options = check_options(&config, &["1"], false, true);
         let expectation = options.selected[0].clone();
+        append_history_record(
+            &root,
+            &expectation,
+            &CheckRecord {
+                timestamp: "1970-01-01T00:00:00Z".to_string(),
+                number: expectation.number,
+                result: "pass".to_string(),
+                prompt: expectation.q.clone(),
+                expected: expectation.a.clone(),
+                observed: "yes".to_string(),
+                evidence: "src/main.rs was previously enough".to_string(),
+                scope: vec!["src/main.rs".to_string()],
+                scope_hash: "old".to_string(),
+            },
+        )
+        .unwrap();
         append_history_record(
             &root,
             &expectation,
@@ -674,6 +974,235 @@ expectations:
             runner.start_scopes,
             vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn check_runner_does_not_widen_restricted_unparseable_response() {
+        let root = git_project("check-restricted-unparseable");
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let options = check_options(&config, &["1"], false, true);
+        let expectation = options.selected[0].clone();
+        append_history_record(
+            &root,
+            &expectation,
+            &CheckRecord {
+                timestamp: "1970-01-01T00:00:00Z".to_string(),
+                number: expectation.number,
+                result: "pass".to_string(),
+                prompt: expectation.q.clone(),
+                expected: expectation.a.clone(),
+                observed: "yes".to_string(),
+                evidence: "src/main.rs was previously enough".to_string(),
+                scope: vec!["src/main.rs".to_string()],
+                scope_hash: "old".to_string(),
+            },
+        )
+        .unwrap();
+        append_history_record(
+            &root,
+            &expectation,
+            &CheckRecord {
+                timestamp: "1970-01-01T00:00:00Z".to_string(),
+                number: expectation.number,
+                result: "fail".to_string(),
+                prompt: expectation.q.clone(),
+                expected: expectation.a.clone(),
+                observed: "malformed".to_string(),
+                evidence: "restricted response was empty".to_string(),
+                scope: vec!["src/main.rs".to_string()],
+                scope_hash: "old".to_string(),
+            },
+        )
+        .unwrap();
+        let mut runner = FakeRunner::new(&["", ""]);
+
+        let records =
+            run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None)
+                .unwrap();
+
+        assert!(!records[0].passed());
+        assert_eq!(records[0].observed, UNPARSEABLE_OBSERVED);
+        assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
+        assert_eq!(read_history_records(&root, &expectation).unwrap().len(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reusable_history_record_uses_current_expectation_metadata() {
+        let root = git_project("history-current-number");
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let options = check_options(&config, &["1"], false, true);
+        let expectation = options.selected[0].clone();
+        append_history_record(
+            &root,
+            &expectation,
+            &CheckRecord {
+                timestamp: "1970-01-01T00:00:00Z".to_string(),
+                number: 99,
+                result: "pass".to_string(),
+                prompt: "old prompt text".to_string(),
+                expected: "old expected".to_string(),
+                observed: "yes".to_string(),
+                evidence: "cached answer".to_string(),
+                scope: full_scope(),
+                scope_hash: staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+            },
+        )
+        .unwrap();
+
+        let mut moved = expectation.clone();
+        moved.number = 7;
+        let record = reusable_history_record(&root, &config.agent, &moved)
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.number, 7);
+        assert_eq!(record.prompt, expectation.q);
+        assert_eq!(record.expected, expectation.a);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn malformed_history_json_is_an_error() {
+        let root = git_project("history-malformed-json");
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+        let path = history_path(&root, &expectation).unwrap();
+        ensure_dir(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{not json}\n").unwrap();
+
+        let err = read_history_records(&root, &expectation).unwrap_err();
+
+        assert!(err.contains("failed to parse"));
+        assert!(err.contains("line 1"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_untracked_stash_parent_is_not_restore_failure() {
+        let root = git_project("stash-no-untracked-parent");
+        commit_all(&root, "initial");
+
+        assert!(!git_revision_exists(&root, "HEAD^3").unwrap());
+        assert!(restore_untracked_from_stash(&root, "HEAD").is_ok());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn gate_passes_with_current_cached_pass() {
+        let root = git_project("gate-pass");
+        write_check_config(&root);
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+        let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+        append_history_record(
+            &root,
+            &expectation,
+            &expectation_record(&expectation, "pass", "yes", scope_hash),
+        )
+        .unwrap();
+
+        let result = run_gate_command(&root, &[OsString::from("1")]);
+
+        assert!(result.is_ok());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn gate_fails_when_cache_is_missing() {
+        let root = git_project("gate-missing");
+        write_check_config(&root);
+
+        let result = run_gate_command(&root, &[OsString::from("1")]);
+
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn gate_fails_for_new_current_failure_without_head_failure() {
+        let root = git_project("gate-new-fail");
+        commit_all(&root, "initial");
+        write_check_config(&root);
+        fs::write(root.join("README.md"), "changed\n").unwrap();
+        Command::new("git")
+            .arg("add")
+            .arg("README.md")
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+        let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+        append_history_record(
+            &root,
+            &expectation,
+            &expectation_record(&expectation, "fail", "no", current_hash),
+        )
+        .unwrap();
+
+        let result = run_gate_command(&root, &[OsString::from("1")]);
+
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn gate_accepts_failure_already_present_on_head() {
+        let root = git_project("gate-head-fail");
+        commit_all(&root, "initial");
+        write_check_config(&root);
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+        let head_hash =
+            scope_hash_for_source(&root, &config.agent, &full_scope(), ScopeHashSource::Head)
+                .unwrap()
+                .unwrap();
+        append_history_record(
+            &root,
+            &expectation,
+            &expectation_record(&expectation, "fail", "no", head_hash),
+        )
+        .unwrap();
+        fs::write(root.join("README.md"), "changed\n").unwrap();
+        Command::new("git")
+            .arg("add")
+            .arg("README.md")
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+        append_history_record(
+            &root,
+            &expectation,
+            &expectation_record(&expectation, "fail", "no", current_hash),
+        )
+        .unwrap();
+
+        let result = run_gate_command(&root, &[OsString::from("1")]);
+
+        assert!(result.is_ok());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn check_runner_keeps_semantic_malformed_as_human_review_failure() {
+        let root = git_project("check-full-malformed");
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let options = check_options(&config, &["1"], false, true);
+        let mut runner = FakeRunner::new(&[
+            &answer("malformed", "full scope response stayed malformed", &["."]),
+            &answer("malformed", "question is malformed", &["."]),
+            &answer("malformed", "question is malformed", &["."]),
+        ]);
+
+        let records =
+            run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None)
+                .unwrap();
+
+        assert!(!records[0].passed());
+        assert_eq!(records[0].observed, "malformed");
+        assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -755,6 +1284,12 @@ expectations:
         )
         .unwrap();
         assert_eq!(scope, vec!["README.md", "src"]);
+        let many_paths = parse_scope_json(
+            r#"["a", "b", "c", "d", "e"]"#,
+            &config.agent,
+        )
+        .unwrap();
+        assert_eq!(many_paths, vec!["a", "b", "c", "d", "e"]);
         assert!(parse_scope_json(r#"["target/output.txt"]"#, &config.agent).is_err());
     }
 
@@ -787,27 +1322,73 @@ expectations:
     }
 
     #[test]
+    fn question_prompt_includes_only_current_context() {
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let prompt = question_prompt("Permission question?", &full_scope());
+        assert_eq!(
+            prompt,
+            r#"{"question":"Permission question?","scope":["."]}"#
+        );
+        assert!(!prompt.contains("Response format:"));
+        assert!(!prompt.contains("ANSWER: <single-line answer>"));
+        assert!(!prompt.contains("Instructions:"));
+        assert!(!prompt.contains(config.agent.instructions.trim()));
+        assert!(!prompt.contains("Current context:"));
+        assert!(!prompt.contains("\nQuestion:\n"));
+        assert!(!prompt.contains("QUESTION:"));
+        assert!(!prompt.contains("\nExpectation:\n"));
+        assert!(!prompt.contains("Runtime canon metadata"));
+        assert!(!prompt.contains("repository pre-commit hook"));
+        assert!(!prompt.contains("core.hooksPath"));
+        assert!(!prompt.contains("evaluator default permission profile"));
+    }
+
+    #[test]
+    fn absence_repair_detection_reads_json_question_prompt() {
+        assert!(should_repair_absence_idk(&question_prompt(
+            "Are there any unused files?",
+            &full_scope()
+        )));
+        assert!(!should_repair_absence_idk(&question_prompt(
+            "Does README exist?",
+            &full_scope()
+        )));
+        assert!(!should_repair_absence_idk("QUESTION: Are there any unused files?"));
+    }
+
+    #[test]
+    fn developer_instructions_include_agent_instructions_and_response_format() {
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let instructions = developer_instructions(&config.agent);
+        assert!(instructions.contains(config.agent.instructions.trim()));
+        assert!(instructions.contains("Response format:\nReturn exactly one valid JSON object"));
+        assert!(instructions.contains(r#""answer":"<single-line answer>""#));
+        assert!(instructions.contains(r#""scope":["<normalized repository-relative path>"]"#));
+    }
+
+    #[test]
     fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
         let agent = AgentConfig {
-            model: None,
+            model: ModelConfig::default(),
             instructions: "Answer from files only.".to_string(),
             ignore: vec!["target/**".to_string()],
             plugins: Vec::new(),
         };
-        let config = evaluator_thread_config(&agent, &full_scope());
+        let config = evaluator_thread_config(&agent, &full_scope(), None);
         let root_permissions = config["permissions"]["canon_check"]["filesystem"][":project_roots"]
             .as_object()
             .unwrap();
         assert_eq!(root_permissions["."], "read");
         assert_eq!(root_permissions[".canon"], "none");
         assert_eq!(root_permissions[".canon/**"], "none");
-        assert_eq!(root_permissions[".git"], "none");
-        assert_eq!(root_permissions[".git/**"], "none");
+        assert_eq!(root_permissions[".git/canon"], "none");
+        assert_eq!(root_permissions[".git/canon/**"], "none");
         assert_eq!(root_permissions["target/**"], "none");
         assert_eq!(
-            config["permissions"]["canon_check"]["filesystem"]["/"],
+            config["permissions"]["canon_check"]["filesystem"][":root"],
             "read"
         );
+        assert_eq!(config["model_reasoning_effort"], "low");
         assert_eq!(
             config["permissions"]["canon_check"]["filesystem"]["~/.codex/tmp/**"],
             "read"
@@ -817,10 +1398,100 @@ expectations:
     }
 
     #[test]
+    fn completed_agent_message_text_is_turn_text_fallback() {
+        let message = json!({
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "output_text", "text": "ANSWER: yes\n" },
+                        { "type": "output_text", "text": "EVIDENCE:\nok\nSCOPE: [\".\"]" }
+                    ]
+                }
+            }
+        });
+        let mut completed_text = String::new();
+        append_completed_agent_text(&message, &mut completed_text);
+        assert_eq!(
+            turn_text(String::new(), completed_text),
+            "ANSWER: yes\nEVIDENCE:\nok\nSCOPE: [\".\"]"
+        );
+        assert_eq!(
+            turn_text("ANSWER: no".to_string(), "ANSWER: yes".to_string()),
+            "ANSWER: no"
+        );
+    }
+
+    #[test]
+    fn app_server_error_message_is_extracted() {
+        let message = json!({
+            "method": "error",
+            "params": {
+                "error": {
+                    "message": "You've hit your usage limit for GPT-5.3-Codex-Spark."
+                }
+            }
+        });
+        assert_eq!(
+            app_server_error_message(&message).unwrap(),
+            "You've hit your usage limit for GPT-5.3-Codex-Spark."
+        );
+
+        let turn_completed = json!({
+            "method": "turn/completed",
+            "params": {
+                "turn": {
+                    "status": "failed",
+                    "error": {
+                        "message": "model unavailable"
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            app_server_error_message(&turn_completed).unwrap(),
+            "model unavailable"
+        );
+    }
+
+    #[test]
+    fn token_usage_update_is_rendered_like_codex_summary() {
+        let message = json!({
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "turnId": "turn-1",
+                "tokenUsage": {
+                    "last": {
+                        "totalTokens": 69748,
+                        "inputTokens": 63574,
+                        "cachedInputTokens": 361216,
+                        "outputTokens": 6174,
+                        "reasoningOutputTokens": 2911
+                    }
+                }
+            }
+        });
+        let (turn_id, usage) = token_usage_update(&message).unwrap();
+        assert_eq!(turn_id, "turn-1");
+        assert_eq!(
+            render_token_usage_summary(usage),
+            "Token usage: total=69,748 input=63,574 (+ 361,216 cached) output=6,174 (reasoning 2,911)"
+        );
+        assert_eq!(
+            render_token_usage_summary(TokenUsage::default()),
+            "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)"
+        );
+    }
+
+    #[test]
     fn evaluator_model_is_configured_when_present() {
         let config = parse_check_config(check_config_yaml()).unwrap();
-        let thread_config = evaluator_thread_config(&config.agent, &full_scope());
-        assert_eq!(thread_config["model"], "gpt-5.3-codex-spark");
+        let thread_config = evaluator_thread_config(&config.agent, &full_scope(), None);
+        assert_eq!(thread_config["model"], "gpt-5.4-mini");
+        let fallback_config =
+            evaluator_thread_config(&config.agent, &full_scope(), Some("gpt-5.3-codex-spark"));
+        assert_eq!(fallback_config["model"], "gpt-5.3-codex-spark");
     }
 
     #[test]
@@ -840,7 +1511,7 @@ expectations:
         )
         .unwrap();
         assert!(check_config_loads_plugins(&config));
-        let thread_config = evaluator_thread_config(&config.agent, &full_scope());
+        let thread_config = evaluator_thread_config(&config.agent, &full_scope(), None);
         assert_eq!(
             thread_config["plugins"]["canon@codex-plugins"]["enabled"],
             json!(true)
@@ -849,13 +1520,35 @@ expectations:
 
     #[test]
     fn app_server_starts_with_plugins_disabled_by_default() {
-        assert_eq!(
-            app_server_args(false),
-            vec!["app-server", "--disable", "plugins", "--listen", "stdio://"]
-        );
-        assert_eq!(
-            app_server_args(true),
-            vec!["app-server", "--listen", "stdio://"]
-        );
+        let config = parse_check_config(check_config_yaml()).unwrap();
+        let disabled = app_server_args(false, &config.agent);
+        assert_eq!(&disabled[..3], ["app-server", "--disable", "plugins"]);
+        assert_eq!(&disabled[disabled.len() - 2..], ["--listen", "stdio://"]);
+        assert!(disabled.windows(2).any(|pair| pair == [
+            "-c",
+            "default_permissions=\"canon_check\""
+        ]));
+        assert!(disabled
+            .windows(2)
+            .any(|pair| pair == ["-c", "model_reasoning_effort=\"low\""]));
+        let filesystem_arg = disabled
+            .windows(2)
+            .find_map(|pair| {
+                (pair[0] == "-c"
+                    && pair[1].starts_with("permissions.canon_check.filesystem="))
+                .then_some(pair[1].as_str())
+            })
+            .unwrap();
+        assert!(filesystem_arg.contains(r#"":project_roots"={"."="none""#));
+        assert!(filesystem_arg.contains(r#"".canon/**"="none""#));
+        assert!(filesystem_arg.contains(r#""target/**"="none""#));
+        assert!(filesystem_arg.contains(r#"":root"="read""#));
+        assert!(filesystem_arg.contains(r#""glob_scan_max_depth"=32"#));
+        assert!(!filesystem_arg.contains(r#""."="read""#));
+
+        let enabled = app_server_args(true, &config.agent);
+        assert_eq!(enabled.first().map(String::as_str), Some("app-server"));
+        assert!(!enabled.iter().any(|arg| arg == "--disable"));
+        assert_eq!(&enabled[enabled.len() - 2..], ["--listen", "stdio://"]);
     }
 }

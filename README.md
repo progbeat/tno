@@ -162,7 +162,7 @@ agent:
     * `malformed`: N/A, human review required
     Scope policy:
     * `scope` is the smallest allowed project context sufficient to answer the expectation with the same answer.
-    * `scope` is not the list of evidence citations; cite supporting files or code inside `EVIDENCE`.
+    * `scope` is not the list of evidence citations; cite supporting files or code inside the `evidence` response field.
     * Use `["."]` for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it.
     * Propose a narrower scope of at most 4 paths only when the same answer remains fully supported inside it.
     * Successful scope narrowing: +1
@@ -178,21 +178,22 @@ expectations:
 
 The single configured agent answers every selected expectation. `model` selects
 the evaluator model. `ignore` lists repository-relative files or globs that the
-evaluator must not read, and `.canon/**` plus `.git/**` are always added to the
-effective ignore list. `plugins` lists Codex plugin config keys such as
+evaluator must not read, and `.canon/**` plus `.git/canon/**` are always added
+to the effective ignore list. `plugins` lists Codex plugin config keys such as
 `canon@codex-plugins`; when the list is empty, `canon check` starts
 `codex app-server` with plugin loading disabled. Expected answers are
 single-line strings compared by exact equality; `idk` is just an ordinary answer
 string.
 
-`canon check` supplies the runtime answer, evidence, and scope response format,
-asks one expectation at a time, restricts ignored paths and narrowed scopes
-through Codex filesystem permissions, and prints one JSON object per selected
-expectation to stdout as soon as that result is available. The object includes
-`timestamp`, `number`, `result`, `prompt`, `expected`, `observed`, `evidence`,
-`scope`, and `scopeHash`. `evidence` cites supporting files or code; `scope` is
-the smallest allowed project context sufficient to answer with the same result,
-not a list of evidence citations.
+`canon check` supplies the evaluator response protocol through thread developer
+instructions, asks one question at a time as a JSON object with `scope` and
+`question`, restricts ignored paths and narrowed scopes through Codex filesystem
+permissions, and prints one JSON object per selected expectation to stdout as
+soon as that result is available. The stdout object includes `timestamp`,
+`number`, `result`, `prompt`, `expected`, `observed`, `evidence`, `scope`, and
+`scopeHash`. `evidence` cites supporting files or code; `scope` is the smallest
+allowed project context sufficient to answer with the same result, not a list of
+evidence citations.
 
 Per-expectation reusable results are stored in the Git directory under
 `canon/cache/<ID>/history.jsonl`, where `ID` is a 120-bit base64url hash of the
@@ -206,10 +207,12 @@ Global diagnostic interrogation records are appended to
 to `3`, `1` to `2`, and `0` to `1`. The next diagnostic write creates a fresh
 `0.jsonl`.
 
-`canon gate` is cache-only and side-effect-free. It passes only when every
-expectation has a reusable cached `pass` record for the current staged snapshot;
-it asks you to run `canon check` when cache records are missing and prints cached
-failures when they are present.
+`canon gate` is cache-only and side-effect-free. It passes when every
+expectation either has a reusable cached `pass` record for the current staged
+snapshot or has reusable cached `fail` records for both the current staged
+snapshot and `HEAD`, which means the failure was already present before the
+staged change. It asks you to run `canon check` when cache records are missing
+and prints new cached failures when they are present.
 
 If an evaluator answers `malformed`, `canon check` retries once. If the final
 answer is still `malformed`, the expectation fails and `canon check` prints a
@@ -237,14 +240,13 @@ ${CANON_HOME}/codex/<CODEX_THREAD_ID>/
 ## Repository Layout
 
 ```text
-.codex-plugin/plugin.json
 skills/canon/SKILL.md
 scripts/install.sh
 src/main.rs
 ```
 
-The Codex plugin and skill define the agent behavior. The Rust CLI is the
-storage/runtime layer used by the skill.
+The Codex skill defines the agent behavior. The Rust CLI is the storage/runtime
+layer used by the skill.
 
 ---
 

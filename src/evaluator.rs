@@ -1,4 +1,16 @@
-fn evaluator_thread_config(agent: &AgentConfig, scope: &[String]) -> Value {
+fn evaluator_thread_config(agent: &AgentConfig, scope: &[String], model: Option<&str>) -> Value {
+    let root_permissions = evaluator_thread_root_permissions(agent, scope);
+    let mut config = evaluator_base_config(Value::Object(root_permissions), "read");
+    if let Some(model) = model.or(agent.model.primary.as_deref()) {
+        config["model"] = Value::String(model.to_string());
+    }
+    if !agent.plugins.is_empty() {
+        config["plugins"] = enabled_plugins_config(agent);
+    }
+    config
+}
+
+fn evaluator_thread_root_permissions(agent: &AgentConfig, scope: &[String]) -> Map<String, Value> {
     let mut root_permissions = Map::new();
     if scope == full_scope() {
         root_permissions.insert(".".to_string(), Value::String("read".to_string()));
@@ -12,15 +24,24 @@ fn evaluator_thread_config(agent: &AgentConfig, scope: &[String]) -> Value {
     for pattern in effective_ignore_patterns(agent) {
         root_permissions.insert(pattern, Value::String("none".to_string()));
     }
+    root_permissions
+}
 
+fn evaluator_startup_root_permissions(agent: &AgentConfig) -> Map<String, Value> {
+    let mut root_permissions = Map::new();
+    root_permissions.insert(".".to_string(), Value::String("none".to_string()));
+    for pattern in effective_ignore_patterns(agent) {
+        root_permissions.insert(pattern, Value::String("none".to_string()));
+    }
+    root_permissions
+}
+
+fn evaluator_base_config(root_permissions: Value, root_access: &str) -> Value {
     let mut filesystem = Map::new();
-    filesystem.insert("/".to_string(), Value::String("read".to_string()));
-    filesystem.insert(
-        ":project_roots".to_string(),
-        Value::Object(root_permissions),
-    );
-    for path in evaluator_runtime_read_paths() {
-        filesystem.insert(path.to_string(), Value::String("read".to_string()));
+    filesystem.insert(":root".to_string(), Value::String(root_access.to_string()));
+    filesystem.insert(":project_roots".to_string(), root_permissions);
+    for (path, permission) in evaluator_runtime_permissions() {
+        filesystem.insert(path, Value::String(permission));
     }
     filesystem.insert("glob_scan_max_depth".to_string(), json!(32));
 
@@ -38,17 +59,15 @@ fn evaluator_thread_config(agent: &AgentConfig, scope: &[String]) -> Value {
     );
     config.insert("permissions".to_string(), Value::Object(permissions));
     config.insert("history".to_string(), json!({ "persistence": "none" }));
-    if let Some(model) = &agent.model {
-        config.insert("model".to_string(), Value::String(model.clone()));
-    }
-    if !agent.plugins.is_empty() {
-        config.insert("plugins".to_string(), enabled_plugins_config(agent));
-    }
+    config.insert(
+        "model_reasoning_effort".to_string(),
+        Value::String("low".to_string()),
+    );
     Value::Object(config)
 }
 
-fn evaluator_runtime_read_paths() -> &'static [&'static str] {
-    &[
+fn evaluator_runtime_permissions() -> Vec<(String, String)> {
+    let mut permissions = [
         "/bin/**",
         "/usr/bin/**",
         "/usr/lib/**",
@@ -61,6 +80,17 @@ fn evaluator_runtime_read_paths() -> &'static [&'static str] {
         ":tmpdir",
         ":slash_tmp",
     ]
+    .into_iter()
+    .map(|path| (path.to_string(), "read".to_string()))
+    .collect::<Vec<_>>();
+    permissions.push(("~/.codex/sessions".to_string(), "write".to_string()));
+    permissions.push(("~/.codex/sessions/**".to_string(), "write".to_string()));
+    if let Some(home) = env::var_os("HOME").and_then(|home| home.into_string().ok()) {
+        let sessions = format!("{}/.codex/sessions", home.trim_end_matches('/'));
+        permissions.push((sessions.clone(), "write".to_string()));
+        permissions.push((format!("{}/**", sessions), "write".to_string()));
+    }
+    permissions
 }
 
 fn enabled_plugins_config(agent: &AgentConfig) -> Value {
@@ -71,40 +101,141 @@ fn enabled_plugins_config(agent: &AgentConfig) -> Value {
     Value::Object(plugins)
 }
 
-fn app_server_args(load_plugins: bool) -> Vec<&'static str> {
-    let mut args = vec!["app-server"];
+fn app_server_args(load_plugins: bool, agent: &AgentConfig) -> Vec<String> {
+    let mut args = vec!["app-server".to_string()];
     if !load_plugins {
-        args.push("--disable");
-        args.push("plugins");
+        args.push("--disable".to_string());
+        args.push("plugins".to_string());
     }
-    args.push("--listen");
-    args.push("stdio://");
+    args.extend(app_server_startup_config_args(agent));
+    args.push("--listen".to_string());
+    args.push("stdio://".to_string());
     args
+}
+
+fn app_server_startup_config_args(agent: &AgentConfig) -> Vec<String> {
+    let mut args = Vec::new();
+    push_config_arg(&mut args, "default_permissions=\"canon_check\"");
+    push_config_arg(&mut args, "history.persistence=\"none\"");
+    push_config_arg(&mut args, "model_reasoning_effort=\"low\"");
+    push_config_arg(&mut args, "permissions.canon_check.network.enabled=false");
+    push_config_arg(&mut args, &app_server_startup_filesystem_arg(agent));
+    args
+}
+
+fn app_server_startup_filesystem_arg(agent: &AgentConfig) -> String {
+    let mut entries = Vec::new();
+    entries.push(toml_assignment(":root", &toml_string("read")));
+    let mut project_root_entries = Vec::new();
+    for (path, value) in evaluator_startup_root_permissions(agent) {
+        project_root_entries.push(toml_assignment(
+            &path,
+            &toml_string(
+                value
+                    .as_str()
+                    .expect("startup project root permissions are strings"),
+            ),
+        ));
+    }
+    entries.push(format!(
+        "{}={{{}}}",
+        toml_key_segment(":project_roots"),
+        project_root_entries.join(",")
+    ));
+    for (path, permission) in evaluator_runtime_permissions() {
+        entries.push(toml_assignment(&path, &toml_string(&permission)));
+    }
+    entries.push(format!("{}=32", toml_key_segment("glob_scan_max_depth")));
+    format!("permissions.canon_check.filesystem={{{}}}", entries.join(","))
+}
+
+fn push_config_arg(args: &mut Vec<String>, value: &str) {
+    args.push("-c".to_string());
+    args.push(value.to_string());
+}
+
+fn toml_key_segment(value: &str) -> String {
+    toml_string(value)
+}
+
+fn toml_assignment(key: &str, value: &str) -> String {
+    format!("{}={}", toml_key_segment(key), value)
+}
+
+fn toml_string(value: &str) -> String {
+    let mut output = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => output.push_str("\\\\"),
+            '"' => output.push_str("\\\""),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            _ => output.push(ch),
+        }
+    }
+    output.push('"');
+    output
 }
 
 struct AppServerRunner {
     child: Child,
+    watchdog: Option<Child>,
     stdin: ChildStdin,
-    stdout: BufReader<std::process::ChildStdout>,
+    messages: Receiver<Result<Value, String>>,
+    reader: Option<JoinHandle<()>>,
     next_id: u64,
+    token_usage_by_turn: BTreeMap<String, TokenUsage>,
 }
 
 struct LazyAppServerRunner {
     load_plugins: bool,
+    agent: AgentConfig,
     inner: Option<AppServerRunner>,
 }
 
+fn spawn_app_server_reader(
+    stdout: std::process::ChildStdout,
+) -> (Receiver<Result<Value, String>>, JoinHandle<()>) {
+    let (sender, receiver) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        let mut stdout = BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match stdout.read_line(&mut line) {
+                Ok(0) => return,
+                Ok(_) => {
+                    let parsed = serde_json::from_str(line.trim_end())
+                        .map_err(|err| format!("failed to parse app-server JSON: {}", err));
+                    if sender.send(parsed).is_err() {
+                        return;
+                    }
+                }
+                Err(err) => {
+                    let _ = sender.send(Err(format!(
+                        "failed to read app-server response: {}",
+                        err
+                    )));
+                    return;
+                }
+            }
+        }
+    });
+    (receiver, reader)
+}
+
 impl LazyAppServerRunner {
-    fn new(load_plugins: bool) -> LazyAppServerRunner {
+    fn new(load_plugins: bool, agent: &AgentConfig) -> LazyAppServerRunner {
         LazyAppServerRunner {
             load_plugins,
+            agent: agent.clone(),
             inner: None,
         }
     }
 
     fn inner(&mut self) -> Result<&mut AppServerRunner, String> {
         if self.inner.is_none() {
-            self.inner = Some(AppServerRunner::new(self.load_plugins)?);
+            self.inner = Some(AppServerRunner::new(self.load_plugins, &self.agent)?);
         }
         Ok(self
             .inner
@@ -114,9 +245,11 @@ impl LazyAppServerRunner {
 }
 
 impl AppServerRunner {
-    fn new(load_plugins: bool) -> Result<AppServerRunner, String> {
+    fn new(load_plugins: bool, agent: &AgentConfig) -> Result<AppServerRunner, String> {
         let mut command = Command::new("codex");
-        command.args(app_server_args(load_plugins));
+        command.args(app_server_args(load_plugins, agent));
+        #[cfg(unix)]
+        command.process_group(0);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -126,16 +259,33 @@ impl AppServerRunner {
         let stdin = child
             .stdin
             .take()
-            .ok_or("failed to open app-server stdin".to_string())?;
+            .ok_or_else(|| {
+                terminate_app_server_child(&mut child);
+                "failed to open app-server stdin".to_string()
+            })?;
         let stdout = child
             .stdout
             .take()
-            .ok_or("failed to open app-server stdout".to_string())?;
+            .ok_or_else(|| {
+                terminate_app_server_child(&mut child);
+                "failed to open app-server stdout".to_string()
+            })?;
+        let watchdog = match spawn_app_server_watchdog(child.id()) {
+            Ok(watchdog) => watchdog,
+            Err(err) => {
+                terminate_app_server_child(&mut child);
+                return Err(err);
+            }
+        };
+        let (messages, reader) = spawn_app_server_reader(stdout);
         let mut runner = AppServerRunner {
             child,
+            watchdog,
             stdin,
-            stdout: BufReader::new(stdout),
+            messages,
+            reader: Some(reader),
             next_id: 1,
+            token_usage_by_turn: BTreeMap::new(),
         };
         runner.send_request(
             "initialize",
@@ -153,6 +303,9 @@ impl AppServerRunner {
     }
 
     fn send_request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        if check_interrupted() {
+            return Err("interrupted".to_string());
+        }
         let id = self.next_id;
         self.next_id += 1;
         let request = json!({
@@ -167,7 +320,11 @@ impl AppServerRunner {
             .flush()
             .map_err(|err| format!("failed to flush app-server request: {}", err))?;
         loop {
+            if check_interrupted() {
+                return Err("interrupted".to_string());
+            }
             let message = self.read_message()?;
+            self.record_token_usage(&message);
             if message.get("id").and_then(Value::as_u64) == Some(id) {
                 if let Some(error) = message.get("error") {
                     return Err(format!("app-server {} failed: {}", method, error));
@@ -181,6 +338,9 @@ impl AppServerRunner {
     }
 
     fn send_turn_request(&mut self, method: &str, params: Value) -> Result<String, String> {
+        if check_interrupted() {
+            return Err("interrupted".to_string());
+        }
         let id = self.next_id;
         self.next_id += 1;
         let request = json!({
@@ -198,15 +358,41 @@ impl AppServerRunner {
         let mut saw_response = false;
         let mut saw_completed = false;
         let mut text = String::new();
+        let mut completed_text = String::new();
+        let thread_id = params
+            .get("threadId")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let mut turn_id: Option<String> = None;
+        let mut interrupted = false;
+        let mut interrupt_sent = false;
         loop {
-            let message = self.read_message()?;
+            self.maybe_interrupt_turn(
+                &mut interrupted,
+                &mut interrupt_sent,
+                thread_id.as_deref(),
+                turn_id.as_deref(),
+            )?;
+            let Some(message) = self.read_message_or_timeout()? else {
+                continue;
+            };
+            self.record_token_usage(&message);
+            if let Some(started_turn_id) = turn_started_id(&message) {
+                turn_id = Some(started_turn_id);
+                self.maybe_interrupt_turn(
+                    &mut interrupted,
+                    &mut interrupt_sent,
+                    thread_id.as_deref(),
+                    turn_id.as_deref(),
+                )?;
+            }
             if message.get("id").and_then(Value::as_u64) == Some(id) {
                 if let Some(error) = message.get("error") {
                     return Err(format!("app-server {} failed: {}", method, error));
                 }
                 saw_response = true;
                 if saw_completed {
-                    return Ok(text);
+                    return Ok(turn_text(text, completed_text));
                 }
                 continue;
             }
@@ -220,10 +406,24 @@ impl AppServerRunner {
                         text.push_str(delta);
                     }
                 }
+                Some("item/completed") | Some("item/agentMessage/completed") => {
+                    append_completed_agent_text(&message, &mut completed_text);
+                }
                 Some("turn/completed") => {
+                    if interrupted {
+                        return Err("interrupted".to_string());
+                    }
+                    if let Some(error) = app_server_error_message(&message) {
+                        return Err(format!("app-server {} failed: {}", method, error));
+                    }
                     saw_completed = true;
                     if saw_response {
-                        return Ok(text);
+                        return Ok(turn_text(text, completed_text));
+                    }
+                }
+                Some(_) => {
+                    if let Some(error) = app_server_error_message(&message) {
+                        return Err(format!("app-server {} failed: {}", method, error));
                     }
                 }
                 _ => {}
@@ -231,25 +431,411 @@ impl AppServerRunner {
         }
     }
 
-    fn read_message(&mut self) -> Result<Value, String> {
-        let mut line = String::new();
-        let bytes = self
-            .stdout
-            .read_line(&mut line)
-            .map_err(|err| format!("failed to read app-server response: {}", err))?;
-        if bytes == 0 {
-            return Err("app-server closed stdout".to_string());
+    fn maybe_interrupt_turn(
+        &mut self,
+        interrupted: &mut bool,
+        interrupt_sent: &mut bool,
+        thread_id: Option<&str>,
+        turn_id: Option<&str>,
+    ) -> Result<(), String> {
+        if !check_interrupted() {
+            return Ok(());
         }
-        serde_json::from_str(line.trim_end())
-            .map_err(|err| format!("failed to parse app-server JSON: {}", err))
+        *interrupted = true;
+        if *interrupt_sent {
+            return Ok(());
+        }
+        let (Some(thread_id), Some(turn_id)) = (thread_id, turn_id) else {
+            return Ok(());
+        };
+        self.send_turn_interrupt(thread_id, turn_id)?;
+        *interrupt_sent = true;
+        Ok(())
+    }
+
+    fn send_turn_interrupt(&mut self, thread_id: &str, turn_id: &str) -> Result<(), String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "turn/interrupt",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id
+            }
+        });
+        writeln!(self.stdin, "{}", request)
+            .map_err(|err| format!("failed to write app-server interrupt: {}", err))?;
+        self.stdin
+            .flush()
+            .map_err(|err| format!("failed to flush app-server interrupt: {}", err))
+    }
+
+    fn read_message(&mut self) -> Result<Value, String> {
+        loop {
+            match self.read_message_or_timeout()? {
+                Some(message) => return Ok(message),
+                None if check_interrupted() => return Err("interrupted".to_string()),
+                None => {}
+            }
+        }
+    }
+
+    fn read_message_or_timeout(&mut self) -> Result<Option<Value>, String> {
+        match self.messages.recv_timeout(Duration::from_millis(100)) {
+            Ok(result) => result.map(Some),
+            Err(RecvTimeoutError::Timeout) => Ok(None),
+            Err(RecvTimeoutError::Disconnected) => {
+                if check_interrupted() {
+                    Err("interrupted".to_string())
+                } else {
+                    Err("app-server closed stdout".to_string())
+                }
+            }
+        }
+    }
+
+    fn record_token_usage(&mut self, message: &Value) {
+        let Some((turn_id, usage)) = token_usage_update(message) else {
+            return;
+        };
+        self.token_usage_by_turn.insert(turn_id, usage);
+    }
+
+    fn token_usage(&self) -> Option<TokenUsage> {
+        let mut usage = TokenUsage::default();
+        for turn_usage in self.token_usage_by_turn.values() {
+            usage = usage.add(*turn_usage);
+        }
+        if usage.total_tokens == 0 {
+            None
+        } else {
+            Some(usage)
+        }
+    }
+
+    fn drain_token_usage_updates(&mut self) {
+        loop {
+            match self.messages.recv_timeout(Duration::from_millis(50)) {
+                Ok(Ok(message)) => self.record_token_usage(&message),
+                Ok(Err(_)) => return,
+                Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    }
+}
+
+impl LazyAppServerRunner {
+    fn token_usage(&self) -> Option<TokenUsage> {
+        self.inner
+            .as_ref()
+            .and_then(AppServerRunner::token_usage)
+    }
+
+    fn drain_token_usage_updates(&mut self) {
+        if let Some(inner) = self.inner.as_mut() {
+            inner.drain_token_usage_updates();
+        }
+    }
+}
+
+impl TokenUsage {
+    fn add(self, other: TokenUsage) -> TokenUsage {
+        TokenUsage {
+            total_tokens: self.total_tokens + other.total_tokens,
+            input_tokens: self.input_tokens + other.input_tokens,
+            cached_input_tokens: self.cached_input_tokens + other.cached_input_tokens,
+            output_tokens: self.output_tokens + other.output_tokens,
+            reasoning_output_tokens: self.reasoning_output_tokens + other.reasoning_output_tokens,
+        }
+    }
+}
+
+fn token_usage_update(message: &Value) -> Option<(String, TokenUsage)> {
+    if message.get("method").and_then(Value::as_str) != Some("thread/tokenUsage/updated") {
+        return None;
+    }
+    let params = message.get("params")?;
+    let turn_id = params.get("turnId").and_then(Value::as_str)?.to_string();
+    let usage = params.get("tokenUsage")?.get("last")?;
+    Some((turn_id, parse_token_usage(usage)?))
+}
+
+fn turn_started_id(message: &Value) -> Option<String> {
+    if message.get("method").and_then(Value::as_str) != Some("turn/started") {
+        return None;
+    }
+    message
+        .get("params")?
+        .get("turn")?
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn parse_token_usage(value: &Value) -> Option<TokenUsage> {
+    Some(TokenUsage {
+        total_tokens: value.get("totalTokens").and_then(Value::as_u64)?,
+        input_tokens: value.get("inputTokens").and_then(Value::as_u64)?,
+        cached_input_tokens: value
+            .get("cachedInputTokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        output_tokens: value.get("outputTokens").and_then(Value::as_u64)?,
+        reasoning_output_tokens: value
+            .get("reasoningOutputTokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    })
+}
+
+fn render_token_usage_summary(usage: TokenUsage) -> String {
+    format!(
+        "Token usage: total={} input={} (+ {} cached) output={} (reasoning {})",
+        format_number(usage.total_tokens),
+        format_number(usage.input_tokens),
+        format_number(usage.cached_input_tokens),
+        format_number(usage.output_tokens),
+        format_number(usage.reasoning_output_tokens)
+    )
+}
+
+fn format_number(value: u64) -> String {
+    let digits = value.to_string();
+    let mut output = String::new();
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            output.push(',');
+        }
+        output.push(ch);
+    }
+    output.chars().rev().collect()
+}
+
+fn app_server_error_message(message: &Value) -> Option<String> {
+    let method = message.get("method").and_then(Value::as_str)?;
+    if method != "error" && method != "turn/failed" && method != "turn/error" {
+        if method == "turn/completed"
+            && string_at_path(message, &["params", "turn", "status"]) == Some("failed")
+        {
+            return string_at_path(message, &["params", "turn", "error", "message"])
+                .or_else(|| string_at_path(message, &["params", "turn", "error"]))
+                .map(str::to_string)
+                .or_else(|| Some("turn failed".to_string()));
+        }
+        return None;
+    }
+    string_at_path(message, &["params", "error", "message"])
+        .or_else(|| string_at_path(message, &["params", "message"]))
+        .or_else(|| string_at_path(message, &["params", "error", "codexErrorInfo"]))
+        .or_else(|| string_at_path(message, &["error", "message"]))
+        .or_else(|| string_at_path(message, &["message"]))
+        .or_else(|| string_at_path(message, &["params", "error"]))
+        .map(str::to_string)
+        .or_else(|| Some(method.to_string()))
+}
+
+fn string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current.as_str()
+}
+
+fn turn_text(delta_text: String, completed_text: String) -> String {
+    if delta_text.trim().is_empty() {
+        completed_text
+    } else {
+        delta_text
+    }
+}
+
+fn append_completed_agent_text(message: &Value, output: &mut String) {
+    let Some(params) = message.get("params") else {
+        return;
+    };
+    if let Some(item) = params.get("item") {
+        if is_assistant_message_item(item) {
+            append_text_fields(item, output);
+        }
+    } else if message.get("method").and_then(Value::as_str) == Some("item/agentMessage/completed")
+    {
+        append_text_fields(params, output);
+    }
+}
+
+fn is_assistant_message_item(item: &Value) -> bool {
+    item.get("role").and_then(Value::as_str) == Some("assistant")
+        || item
+            .get("type")
+            .and_then(Value::as_str)
+            .map(|kind| kind.contains("agent") && kind.contains("message"))
+            .unwrap_or(false)
+}
+
+fn append_text_fields(value: &Value, output: &mut String) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                append_text_fields(item, output);
+            }
+        }
+        Value::Object(fields) => {
+            for (key, value) in fields {
+                if key == "text" {
+                    if let Some(text) = value.as_str() {
+                        output.push_str(text);
+                    }
+                } else {
+                    append_text_fields(value, output);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
 impl Drop for AppServerRunner {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        terminate_app_server_child(&mut self.child);
+        terminate_watchdog_child(&mut self.watchdog);
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
     }
+}
+
+#[cfg(unix)]
+fn spawn_app_server_watchdog(process_group: u32) -> Result<Option<Child>, String> {
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg(
+            "kill_tree() { \
+               root=$1; sig=$2; \
+               for child in $(pgrep -P \"$root\" 2>/dev/null); do kill_tree \"$child\" \"$sig\"; done; \
+               kill -\"$sig\" \"$root\" 2>/dev/null || true; \
+             }; \
+             parent=$1; app_pid=$2; pgid=$3; \
+             while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done; \
+             kill_tree \"$app_pid\" TERM; \
+             kill -TERM \"-$pgid\" 2>/dev/null || true; \
+             sleep 1; \
+             kill_tree \"$app_pid\" KILL; \
+             kill -KILL \"-$pgid\" 2>/dev/null || true",
+        )
+        .arg("canon-app-server-watchdog")
+        .arg(process::id().to_string())
+        .arg(process_group.to_string())
+        .arg(process_group.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command.process_group(0);
+    command
+        .spawn()
+        .map(Some)
+        .map_err(|err| format!("failed to start app-server watchdog: {}", err))
+}
+
+#[cfg(not(unix))]
+fn spawn_app_server_watchdog(_process_group: u32) -> Result<Option<Child>, String> {
+    Ok(None)
+}
+
+fn terminate_watchdog_child(watchdog: &mut Option<Child>) {
+    let Some(mut child) = watchdog.take() else {
+        return;
+    };
+    if child.try_wait().ok().flatten().is_some() {
+        return;
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn terminate_app_server_child(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_some() {
+        return;
+    }
+    let app_server_pid = child.id() as i32;
+    let process_group = app_server_pid;
+    signal_process_tree(app_server_pid, 2);
+    signal_process_group(process_group, 2);
+    thread::sleep(Duration::from_millis(200));
+    if child.try_wait().ok().flatten().is_some() {
+        return;
+    }
+    signal_process_tree(app_server_pid, 15);
+    signal_process_group(process_group, 15);
+    thread::sleep(Duration::from_millis(200));
+    if child.try_wait().ok().flatten().is_none() {
+        signal_process_tree(app_server_pid, 9);
+        signal_process_group(process_group, 9);
+    }
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn signal_process_tree(root_pid: i32, signal_number: i32) {
+    let mut descendants = descendant_pids(root_pid);
+    descendants.reverse();
+    for pid in descendants {
+        signal_pid(pid, signal_number);
+    }
+    signal_pid(root_pid, signal_number);
+}
+
+#[cfg(unix)]
+fn descendant_pids(root_pid: i32) -> Vec<i32> {
+    let mut output = Vec::new();
+    let mut stack = child_pids(root_pid);
+    while let Some(pid) = stack.pop() {
+        stack.extend(child_pids(pid));
+        output.push(pid);
+    }
+    output
+}
+
+#[cfg(unix)]
+fn child_pids(parent_pid: i32) -> Vec<i32> {
+    let output = Command::new("pgrep")
+        .arg("-P")
+        .arg(parent_pid.to_string())
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<i32>().ok())
+        .collect()
+}
+
+#[cfg(unix)]
+fn signal_process_group(process_group: i32, signal_number: i32) {
+    unsafe {
+        let _ = kill(-process_group, signal_number);
+    }
+}
+
+#[cfg(unix)]
+fn signal_pid(pid: i32, signal_number: i32) {
+    unsafe {
+        let _ = kill(pid, signal_number);
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_app_server_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 impl EvaluatorRunner for AppServerRunner {
@@ -258,6 +844,7 @@ impl EvaluatorRunner for AppServerRunner {
         root: &Path,
         instructions: &str,
         agent: &AgentConfig,
+        model: Option<&str>,
         scope: &[String],
     ) -> Result<String, String> {
         let result = self.send_request(
@@ -266,7 +853,7 @@ impl EvaluatorRunner for AppServerRunner {
                 "cwd": root.display().to_string(),
                 "developerInstructions": instructions,
                 "approvalPolicy": "never",
-                "config": evaluator_thread_config(agent, scope),
+                "config": evaluator_thread_config(agent, scope, model),
                 "ephemeral": true,
                 "sessionStartSource": "startup"
             }),
@@ -301,10 +888,11 @@ impl EvaluatorRunner for LazyAppServerRunner {
         root: &Path,
         instructions: &str,
         agent: &AgentConfig,
+        model: Option<&str>,
         scope: &[String],
     ) -> Result<String, String> {
         self.inner()?
-            .start_session(root, instructions, agent, scope)
+            .start_session(root, instructions, agent, model, scope)
     }
 
     fn ask(&mut self, session_id: &str, prompt: &str) -> Result<String, String> {

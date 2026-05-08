@@ -37,77 +37,209 @@ fn staged_file_content(root: &Path, path: &str) -> Result<String, String> {
     String::from_utf8(output.stdout).map_err(|_| format!("staged {} must be valid UTF-8", path))
 }
 
-fn git_write_tree(root: &Path) -> Result<String, String> {
+struct StagedWorktreeView {
+    root: PathBuf,
+    stash_ref: Option<String>,
+}
+
+impl StagedWorktreeView {
+    fn apply(root: &Path) -> Result<StagedWorktreeView, String> {
+        if !has_unstaged_or_untracked_changes(root)? {
+            return Ok(StagedWorktreeView {
+                root: root.to_path_buf(),
+                stash_ref: None,
+            });
+        }
+
+        let before = current_stash_oid(root)?;
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args([
+                "stash",
+                "push",
+                "--keep-index",
+                "--include-untracked",
+                "-m",
+                "canon check: preserve unstaged changes while checking the index",
+            ])
+            .output()
+            .map_err(|err| format!("failed to run git stash: {}", err))?;
+        if !output.status.success() {
+            return Err(format!(
+                "failed to prepare staged worktree view: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        let after = current_stash_oid(root)?;
+        let stash_ref = if after.is_some() && after != before {
+            Some("stash@{0}".to_string())
+        } else {
+            None
+        };
+        Ok(StagedWorktreeView {
+            root: root.to_path_buf(),
+            stash_ref,
+        })
+    }
+}
+
+impl Drop for StagedWorktreeView {
+    fn drop(&mut self) {
+        let Some(stash_ref) = self.stash_ref.as_deref() else {
+            return;
+        };
+        match restore_staged_worktree_view(&self.root, stash_ref) {
+            Ok(()) => {
+                let _ = Command::new("git")
+                    .arg("-C")
+                    .arg(&self.root)
+                    .args(["stash", "drop", "--quiet", stash_ref])
+                    .status();
+            }
+            Err(err) => {
+                eprintln!(
+                    "canon: failed to restore worktree changes preserved in {}: {}",
+                    stash_ref, err
+                );
+            }
+        }
+    }
+}
+
+fn restore_staged_worktree_view(root: &Path, stash_ref: &str) -> Result<(), String> {
+    let restore_tracked = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["restore", "--worktree", "--source", stash_ref, "--", "."])
+        .status()
+        .map_err(|err| format!("failed to run git restore: {}", err))?;
+    if !restore_tracked.success() {
+        return Err(format!(
+            "failed to restore tracked working tree changes (exit {})",
+            restore_tracked
+        ));
+    }
+    restore_untracked_from_stash(root, stash_ref)
+}
+
+fn restore_untracked_from_stash(root: &Path, stash_ref: &str) -> Result<(), String> {
+    let source = format!("{}^3", stash_ref);
+    if !git_revision_exists(root, &source)? {
+        return Ok(());
+    }
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
-        .arg("write-tree")
+        .args(["ls-tree", "-rz", "--name-only", &source])
         .output()
-        .map_err(|err| format!("failed to run git write-tree: {}", err))?;
+        .map_err(|err| format!("failed to run git ls-tree: {}", err))?;
     if !output.status.success() {
         return Err(format!(
-            "failed to write staged git tree: {}",
+            "failed to inspect untracked stash tree {}: {}",
+            source,
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let paths = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            String::from_utf8(path.to_vec())
+                .map_err(|_| "untracked stash path must be valid UTF-8".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut restore = Command::new("git");
+    restore
+        .arg("-C")
+        .arg(root)
+        .args(["restore", "--worktree", "--source", &source, "--"]);
+    restore.args(paths);
+    let status = restore
+        .status()
+        .map_err(|err| format!("failed to run git restore: {}", err))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to restore untracked working tree changes (exit {})",
+            status
+        ))
+    }
 }
 
-struct StagedSnapshot {
-    path: PathBuf,
+fn git_revision_exists(root: &Path, revision: &str) -> Result<bool, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "-q", revision])
+        .output()
+        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
+    if output.status.success() {
+        return Ok(true);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.trim().is_empty() || stderr.contains("Needed a single revision") {
+        Ok(false)
+    } else {
+        Err(format!(
+            "failed to inspect git revision {}: {}",
+            revision,
+            stderr.trim()
+        ))
+    }
 }
 
-impl StagedSnapshot {
-    fn create(root: &Path, tree: &str) -> Result<StagedSnapshot, String> {
-        let path = unique_temp_dir("canon-staged-snapshot")?;
-        ensure_dir(&path)?;
-        let mut archive = Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .arg("archive")
-            .arg("--format=tar")
-            .arg(tree)
-            .stdout(Stdio::piped())
-            .spawn()
-            .map_err(|err| format!("failed to start git archive: {}", err))?;
-        let archive_stdout = archive
-            .stdout
-            .take()
-            .ok_or("failed to capture git archive stdout".to_string())?;
-        let tar_status = Command::new("tar")
-            .arg("-x")
-            .arg("-C")
-            .arg(&path)
-            .stdin(Stdio::from(archive_stdout))
-            .status()
-            .map_err(|err| format!("failed to run tar: {}", err))?;
-        let archive_status = archive
-            .wait()
-            .map_err(|err| format!("failed to wait for git archive: {}", err))?;
-        if !archive_status.success() {
-            return Err("git archive failed".to_string());
+fn has_unstaged_or_untracked_changes(root: &Path) -> Result<bool, String> {
+    let diff = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["diff", "--quiet"])
+        .status()
+        .map_err(|err| format!("failed to run git diff: {}", err))?;
+    if !diff.success() {
+        match diff.code() {
+            Some(1) => return Ok(true),
+            _ => {
+                return Err(format!(
+                    "failed to inspect unstaged changes (exit {})",
+                    diff
+                ));
+            }
         }
-        if !tar_status.success() {
-            return Err("failed to extract staged git snapshot".to_string());
-        }
-        Ok(StagedSnapshot { path })
     }
 
-    fn path(&self) -> &Path {
-        &self.path
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .output()
+        .map_err(|err| format!("failed to run git ls-files: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to inspect untracked changes: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
+    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
 }
 
-impl Drop for StagedSnapshot {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
+fn current_stash_oid(root: &Path) -> Result<Option<String>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "-q", "refs/stash"])
+        .output()
+        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
+    if output.status.success() {
+        return Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ));
     }
-}
-
-fn unique_temp_dir(prefix: &str) -> Result<PathBuf, String> {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|err| format!("system time is before UNIX_EPOCH: {}", err))?
-        .as_nanos();
-    Ok(env::temp_dir().join(format!("{}-{}-{}", prefix, process::id(), nanos)))
+    Ok(None)
 }
