@@ -1,7 +1,9 @@
 version: 1
 
 agent:
-  model: gpt-5.3-codex-spark
+  model:
+    primary: gpt-5.4-mini
+    fallbacks: [gpt-5.3-codex-spark]
   instructions: |
     Use the following response policy:
     Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
@@ -47,13 +49,16 @@ expectations:
   - q: "Which command does the pre-commit hook run? a) canon gate b) canon check"
     a: "a"
 
-  - q: "Does `.canon/check.yml` configure exactly one evaluator agent through a single `agent` section with `instructions`, `model`, `ignore`, and `plugins`, and are expected answers single-line strings compared by exact string equality?"
+  - q: "Does `.canon/check.yml` configure exactly one evaluator agent through a single `agent` section with `instructions`, a `model` object containing `primary` and `fallbacks`, `ignore`, and `plugins`, and are expected answers single-line strings compared by exact string equality?"
     a: "yes"
 
   - q: "Can `canon check` use `--config <path>` or `-c <path>` to read checks from a custom YAML config file?"
     a: "yes"
 
-  - q: "Does `canon check` hide expected answers from the evaluator, supply the runtime answer/evidence/scope response format with evidence citations separate from scope, ask one expectation at a time through `codex app-server`, use the configured `agent.model`, start without plugins unless configured, and suppress codex app-server stderr noise?"
+  - q: "Does `canon check` hide expected answers from the evaluator, supply the runtime answer/evidence/scope response format with evidence citations separate from scope, ask one expectation at a time through `codex app-server`, use the configured `agent.model.primary`, start without plugins unless configured, and suppress codex app-server stderr noise?"
+    a: "yes"
+
+  - q: "Does `canon check` use `agent.model.primary` as the primary evaluator model and retry with configured `agent.model.fallbacks` in order only after a technical app-server/model failure such as `usageLimitExceeded`, without falling back for `idk`, `malformed`, incorrect answers, or evidence quality?"
     a: "yes"
 
   - q: "Does `canon check` always deny evaluator read access to `.canon/**`, every configured ignore pattern, and paths outside the enforced scope by configuring Codex filesystem permissions for `codex app-server`?"
