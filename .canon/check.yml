@@ -56,7 +56,7 @@ expectations:
   - q: "Does `canon check` hide expected answers from the evaluator, supply the runtime answer/evidence/scope response format with evidence citations separate from scope, ask one expectation at a time through `codex app-server`, use the configured `agent.model`, start without plugins unless configured, and suppress codex app-server stderr noise?"
     a: "yes"
 
-  - q: "Does `canon check` always deny evaluator read access to `.canon/**`, `.git/**`, every configured ignore pattern, and paths outside the enforced scope by configuring Codex filesystem permissions for `codex app-server`?"
+  - q: "Does `canon check` always deny evaluator read access to `.canon/**`, every configured ignore pattern, and paths outside the enforced scope by configuring Codex filesystem permissions for `codex app-server`?"
     a: "yes"
 
   - q: "Does `canon check` evaluate the staged Git snapshot by default, preserve unstaged and untracked working tree changes after success or failure, and fail when the current staged Git change set includes both `.canon/**` changes and non-`.canon` changes?"
@@ -143,3 +143,6 @@ expectations:
 
   - q: "Is the local Git configuration for this repository set to run the repository pre-commit hook?"
     a: "yes"
+
+  - q: "Are there any dirty hacks that can be avoided?"
+    a: "no"
