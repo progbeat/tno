@@ -28,6 +28,9 @@ agent:
   plugins: []
 
 expectations:
+  - q: Is this a temporary directory?
+    a: "no"
+
   - q: "Can any available `canon check` result be delayed from real-time observation in stdout or any file?"
     a: "no"
 
