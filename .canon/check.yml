@@ -50,6 +50,9 @@ expectations:
   - q: "Does `.canon/check.yml` configure exactly one evaluator agent through a single `agent` section with `instructions`, `model`, `ignore`, and `plugins`, and are expected answers single-line strings compared by exact string equality?"
     a: "yes"
 
+  - q: "Can `canon check` use `--config <path>` or `-c <path>` to read checks from a custom YAML config file?"
+    a: "yes"
+
   - q: "Does `canon check` hide expected answers from the evaluator, supply the runtime answer/evidence/scope response format with evidence citations separate from scope, ask one expectation at a time through `codex app-server`, use the configured `agent.model`, start without plugins unless configured, and suppress codex app-server stderr noise?"
     a: "yes"
 
