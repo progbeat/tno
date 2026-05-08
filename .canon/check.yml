@@ -154,3 +154,6 @@ expectations:
 
   - q: "Are there any dirty hacks that can be avoided?"
     a: "no"
+
+  - q: "Are there any avoidable, evidence-backed violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility?"
+    a: "no"
