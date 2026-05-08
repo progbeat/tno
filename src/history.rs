@@ -1,11 +1,16 @@
-fn history_path(root: &Path, expectation: &SelectedExpectation) -> Result<PathBuf, String> {
+use crate::*;
+
+pub(crate) fn history_path(
+    root: &Path,
+    expectation: &SelectedExpectation,
+) -> Result<PathBuf, String> {
     git_path(
         root,
         &format!("{}/{}/history.jsonl", GIT_CANON_CACHE_DIR, expectation.id),
     )
 }
 
-fn read_history_records(
+pub(crate) fn read_history_records(
     root: &Path,
     expectation: &SelectedExpectation,
 ) -> Result<Vec<CheckRecord>, String> {
@@ -33,7 +38,7 @@ fn read_history_records(
     Ok(records)
 }
 
-fn reusable_history_record(
+pub(crate) fn reusable_history_record(
     root: &Path,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
@@ -41,7 +46,7 @@ fn reusable_history_record(
     reusable_history_record_for_source(root, agent, expectation, ScopeHashSource::Index)
 }
 
-fn reusable_history_record_for_source(
+pub(crate) fn reusable_history_record_for_source(
     root: &Path,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
@@ -70,7 +75,7 @@ fn reusable_history_record_for_source(
     Ok(None)
 }
 
-fn latest_history_scope(
+pub(crate) fn latest_history_scope(
     root: &Path,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
@@ -90,7 +95,7 @@ fn latest_history_scope(
     Ok(None)
 }
 
-fn append_history_record(
+pub(crate) fn append_history_record(
     root: &Path,
     expectation: &SelectedExpectation,
     record: &CheckRecord,
@@ -115,7 +120,7 @@ fn append_history_record(
     Ok(())
 }
 
-fn should_compact_history() -> Result<bool, String> {
+pub(crate) fn should_compact_history() -> Result<bool, String> {
     let mut bytes = [0_u8; 2];
     let mut file = fs::File::open("/dev/urandom")
         .map_err(|err| format!("failed to open OS random source: {}", err))?;
@@ -124,7 +129,7 @@ fn should_compact_history() -> Result<bool, String> {
     Ok(u16::from_ne_bytes(bytes) % 15 == 0)
 }
 
-fn compact_history(path: &Path) -> Result<(), String> {
+pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }
@@ -151,7 +156,7 @@ fn compact_history(path: &Path) -> Result<(), String> {
         .map_err(|err| format!("failed to flush {}: {}", path.display(), err))
 }
 
-fn rotate_diagnostic_logs_if_needed(log_dir: &Path) -> Result<(), String> {
+pub(crate) fn rotate_diagnostic_logs_if_needed(log_dir: &Path) -> Result<(), String> {
     let active = log_dir.join(DIAGNOSTIC_LOG_FILES[0]);
     let should_rotate = active
         .metadata()

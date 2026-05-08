@@ -1,111 +1,113 @@
+use crate::*;
+
 #[derive(Debug)]
-struct Config {
-    root: PathBuf,
+pub(crate) struct Config {
+    pub(crate) root: PathBuf,
 }
 
 #[derive(Debug)]
-struct Note {
-    key: String,
-    hash: String,
-    path: PathBuf,
+pub(crate) struct Note {
+    pub(crate) key: String,
+    pub(crate) hash: String,
+    pub(crate) path: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CheckConfig {
-    version: u32,
-    agent: AgentConfig,
-    expectations: Vec<Expectation>,
+pub(crate) struct CheckConfig {
+    pub(crate) version: u32,
+    pub(crate) agent: AgentConfig,
+    pub(crate) expectations: Vec<Expectation>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
-struct AgentConfig {
+pub(crate) struct AgentConfig {
     #[serde(default)]
-    model: ModelConfig,
-    instructions: String,
-    ignore: Vec<String>,
-    plugins: Vec<String>,
+    pub(crate) model: ModelConfig,
+    pub(crate) instructions: String,
+    pub(crate) ignore: Vec<String>,
+    pub(crate) plugins: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
 #[serde(deny_unknown_fields)]
-struct ModelConfig {
+pub(crate) struct ModelConfig {
     #[serde(default)]
-    primary: Option<String>,
+    pub(crate) primary: Option<String>,
     #[serde(default)]
-    fallbacks: Vec<String>,
+    pub(crate) fallbacks: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct TokenUsage {
-    total_tokens: u64,
-    input_tokens: u64,
-    cached_input_tokens: u64,
-    output_tokens: u64,
-    reasoning_output_tokens: u64,
+pub(crate) struct TokenUsage {
+    pub(crate) total_tokens: u64,
+    pub(crate) input_tokens: u64,
+    pub(crate) cached_input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) reasoning_output_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Expectation {
-    q: String,
-    a: String,
+pub(crate) struct Expectation {
+    pub(crate) q: String,
+    pub(crate) a: String,
 }
 
 #[derive(Debug, Clone)]
-struct SelectedExpectation {
-    number: usize,
-    id: String,
-    q: String,
-    a: String,
+pub(crate) struct SelectedExpectation {
+    pub(crate) number: usize,
+    pub(crate) id: String,
+    pub(crate) q: String,
+    pub(crate) a: String,
 }
 
 #[derive(Debug)]
-struct ParsedAnswer {
-    answer: String,
-    evidence: String,
-    scope: Vec<String>,
+pub(crate) struct ParsedAnswer {
+    pub(crate) answer: String,
+    pub(crate) evidence: String,
+    pub(crate) scope: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct EvaluatorResponseJson {
-    answer: String,
-    evidence: String,
-    scope: Vec<String>,
+pub(crate) struct EvaluatorResponseJson {
+    pub(crate) answer: String,
+    pub(crate) evidence: String,
+    pub(crate) scope: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CheckRecord {
-    timestamp: String,
-    number: usize,
-    result: String,
-    prompt: String,
-    expected: String,
-    observed: String,
-    evidence: String,
-    scope: Vec<String>,
+pub(crate) struct CheckRecord {
+    pub(crate) timestamp: String,
+    pub(crate) number: usize,
+    pub(crate) result: String,
+    pub(crate) prompt: String,
+    pub(crate) expected: String,
+    pub(crate) observed: String,
+    pub(crate) evidence: String,
+    pub(crate) scope: Vec<String>,
     #[serde(rename = "scopeHash")]
-    scope_hash: String,
+    pub(crate) scope_hash: String,
 }
 
-struct CheckOptions {
-    selected: Vec<SelectedExpectation>,
-    fail_fast: bool,
-    ignore_cache: bool,
+pub(crate) struct CheckOptions {
+    pub(crate) selected: Vec<SelectedExpectation>,
+    pub(crate) fail_fast: bool,
+    pub(crate) ignore_cache: bool,
 }
 
-struct CheckCommandArgs {
-    config_path: PathBuf,
-    option_args: Vec<OsString>,
+pub(crate) struct CheckCommandArgs {
+    pub(crate) config_path: PathBuf,
+    pub(crate) option_args: Vec<OsString>,
 }
 
-struct InterrogationResult {
-    record: CheckRecord,
+pub(crate) struct InterrogationResult {
+    pub(crate) record: CheckRecord,
 }
 
-trait EvaluatorRunner {
+pub(crate) trait EvaluatorRunner {
     fn start_session(
         &mut self,
         root: &Path,
@@ -117,14 +119,14 @@ trait EvaluatorRunner {
     fn ask(&mut self, session_id: &str, prompt: &str) -> Result<String, String>;
 }
 
-fn main() {
+pub(crate) fn main() {
     if let Err(err) = run(env::args_os().skip(1).collect()) {
         eprintln!("canon: {}", err);
         process::exit(1);
     }
 }
 
-fn run(args: Vec<OsString>) -> Result<(), String> {
+pub(crate) fn run(args: Vec<OsString>) -> Result<(), String> {
     if args.is_empty() {
         let config = Config::from_env()?;
         print_root(&config)?;
@@ -207,14 +209,14 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
     Ok(())
 }
 
-fn print_root(config: &Config) -> Result<(), String> {
+pub(crate) fn print_root(config: &Config) -> Result<(), String> {
     ensure_dir(&config.root)?;
     println!("{}", config.root.display());
     Ok(())
 }
 
 impl Config {
-    fn from_env() -> Result<Config, String> {
+    pub(crate) fn from_env() -> Result<Config, String> {
         let thread_id = env::var("CODEX_THREAD_ID")
             .map_err(|_| "CODEX_THREAD_ID is required in v1".to_string())?;
         if thread_id.trim().is_empty() {
@@ -243,14 +245,29 @@ impl Config {
     }
 }
 
-fn project_root_or_current(start: &Path) -> Result<PathBuf, String> {
+pub(crate) fn project_root_or_current(start: &Path) -> Result<PathBuf, String> {
     match git_project_root(start) {
         Ok(root) => Ok(root),
         Err(_) => env::current_dir().map_err(|err| format!("failed to read current dir: {}", err)),
     }
 }
 
-fn git_project_root(start: &Path) -> Result<PathBuf, String> {
+pub(crate) fn command_output_utf8<'a>(
+    bytes: &'a [u8],
+    description: &str,
+) -> Result<&'a str, String> {
+    std::str::from_utf8(bytes)
+        .map_err(|err| format!("{} must be valid UTF-8: {}", description, err))
+}
+
+pub(crate) fn command_output_trimmed<'a>(
+    bytes: &'a [u8],
+    description: &str,
+) -> Result<&'a str, String> {
+    Ok(command_output_utf8(bytes, description)?.trim())
+}
+
+pub(crate) fn git_project_root(start: &Path) -> Result<PathBuf, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(start)
@@ -261,7 +278,7 @@ fn git_project_root(start: &Path) -> Result<PathBuf, String> {
     if !output.status.success() {
         return Err(format!(
             "failed to find git project root: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            command_output_trimmed(&output.stderr, "git rev-parse stderr")?
         ));
     }
     let root = String::from_utf8(output.stdout)

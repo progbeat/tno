@@ -1,24 +1,36 @@
-fn require_key<'a>(args: &'a [OsString], index: usize) -> Result<&'a str, String> {
-    args.get(index)
+use crate::*;
+
+pub(crate) fn require_key<'a>(args: &'a [OsString], index: usize) -> Result<&'a str, String> {
+    let key = args
+        .get(index)
         .ok_or("missing key".to_string())
-        .and_then(|arg| arg.to_str().ok_or("key must be valid UTF-8".to_string()))
+        .and_then(|arg| arg.to_str().ok_or("key must be valid UTF-8".to_string()))?;
+    validate_note_key(key)?;
+    Ok(key)
 }
 
-fn arg_to_string(arg: &OsString) -> Result<String, String> {
+pub(crate) fn arg_to_string(arg: &OsString) -> Result<String, String> {
     arg.to_str()
         .map(|value| value.to_string())
         .ok_or("argument must be valid UTF-8".to_string())
 }
 
-fn collect_text(args: &[OsString], start: usize) -> Result<String, String> {
+pub(crate) fn collect_text(args: &[OsString], start: usize) -> Result<String, String> {
     let mut parts = Vec::new();
-    for arg in &args[start..] {
+    let rest = args.get(start..).ok_or_else(|| {
+        format!(
+            "text start index {} exceeds argument count {}",
+            start,
+            args.len()
+        )
+    })?;
+    for arg in rest {
         parts.push(arg.to_str().ok_or("text must be valid UTF-8".to_string())?);
     }
     Ok(parts.join(" "))
 }
 
-fn collect_text_or_stdin(args: &[OsString], start: usize) -> Result<String, String> {
+pub(crate) fn collect_text_or_stdin(args: &[OsString], start: usize) -> Result<String, String> {
     if args.len() > start {
         return collect_text(args, start);
     }
@@ -29,13 +41,13 @@ fn collect_text_or_stdin(args: &[OsString], start: usize) -> Result<String, Stri
     Ok(text)
 }
 
-fn ensure_dir(path: &Path) -> Result<(), String> {
+pub(crate) fn ensure_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|err| format!("failed to create {}: {}", path.display(), err))
 }
 
-fn ensure_note(config: &Config, key: &str) -> Result<Note, String> {
+pub(crate) fn ensure_note(config: &Config, key: &str) -> Result<Note, String> {
     ensure_dir(&config.root)?;
-    let note = note_for_key(config, key);
+    let note = note_for_key(config, key)?;
     if note.path.exists() {
         verify_note_key(&note.path, key)?;
     } else {
@@ -47,18 +59,19 @@ fn ensure_note(config: &Config, key: &str) -> Result<Note, String> {
     Ok(note)
 }
 
-fn note_for_key(config: &Config, key: &str) -> Note {
+pub(crate) fn note_for_key(config: &Config, key: &str) -> Result<Note, String> {
+    validate_note_key(key)?;
     let hash = hash_key(key);
     let path = config.root.join(format!("{}.md", hash));
-    Note {
+    Ok(Note {
         key: key.to_string(),
         hash,
         path,
-    }
+    })
 }
 
-fn read_note(config: &Config, key: &str) -> Result<(), String> {
-    let note = note_for_key(config, key);
+pub(crate) fn read_note(config: &Config, key: &str) -> Result<(), String> {
+    let note = note_for_key(config, key)?;
     if !note.path.exists() {
         return Err(format!("canon not found for key: {}", key));
     }
@@ -72,7 +85,7 @@ fn read_note(config: &Config, key: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn write_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
+pub(crate) fn write_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
     let note = ensure_note(config, key)?;
     let content = format!(
         "{}{}\n",
@@ -83,7 +96,7 @@ fn write_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
         .map_err(|err| format!("failed to write {}: {}", note.path.display(), err))
 }
 
-fn append_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
+pub(crate) fn append_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
     let note = ensure_note(config, key)?;
     let timestamp = unix_timestamp()?;
     let section = format!("\n## {}\n\n{}\n", timestamp, normalize_body(text));
@@ -95,8 +108,8 @@ fn append_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
         .map_err(|err| format!("failed to append {}: {}", note.path.display(), err))
 }
 
-fn delete_note(config: &Config, key: &str) -> Result<(), String> {
-    let note = note_for_key(config, key);
+pub(crate) fn delete_note(config: &Config, key: &str) -> Result<(), String> {
+    let note = note_for_key(config, key)?;
     if note.path.exists() {
         verify_note_key(&note.path, key)?;
         fs::remove_file(&note.path)
@@ -105,13 +118,24 @@ fn delete_note(config: &Config, key: &str) -> Result<(), String> {
     remove_index(config, &note.hash, key)
 }
 
-fn run_rg(config: &Config, rg_args: &[OsString]) -> Result<(), String> {
+pub(crate) fn validate_note_key(key: &str) -> Result<(), String> {
+    if key.is_empty() {
+        return Err("key must not be empty".to_string());
+    }
+    if key.contains('\t') || key.contains('\n') || key.contains('\r') {
+        return Err("key must not contain tabs or newlines".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn run_rg(config: &Config, rg_args: &[OsString]) -> Result<(), String> {
     if rg_args.is_empty() {
         return Err("missing rg pattern".to_string());
     }
     ensure_dir(&config.root)?;
     let mut command = Command::new("rg");
     command.args(rg_args);
+    command.arg("--");
     command.arg(&config.root);
     let status = command
         .status()
@@ -123,11 +147,11 @@ fn run_rg(config: &Config, rg_args: &[OsString]) -> Result<(), String> {
     }
 }
 
-fn initial_content(key: &str, hash: &str) -> String {
+pub(crate) fn initial_content(key: &str, hash: &str) -> String {
     header(key, hash)
 }
 
-fn header(key: &str, hash: &str) -> String {
+pub(crate) fn header(key: &str, hash: &str) -> String {
     format!(
         "<!-- canon key=\"{}\" hash=\"{}\" -->\n# {}\n",
         escape_attr(key),
@@ -136,7 +160,7 @@ fn header(key: &str, hash: &str) -> String {
     )
 }
 
-fn normalize_body(text: &str) -> String {
+pub(crate) fn normalize_body(text: &str) -> String {
     let mut value = text.to_string();
     while value.ends_with('\n') {
         value.pop();
@@ -144,7 +168,7 @@ fn normalize_body(text: &str) -> String {
     value
 }
 
-fn verify_note_key(path: &Path, expected_key: &str) -> Result<(), String> {
+pub(crate) fn verify_note_key(path: &Path, expected_key: &str) -> Result<(), String> {
     let first = first_line(path)?;
     let actual_key = parse_key_from_header(&first)
         .ok_or_else(|| format!("missing canon metadata in {}", path.display()))?;
@@ -159,13 +183,13 @@ fn verify_note_key(path: &Path, expected_key: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn first_line(path: &Path) -> Result<String, String> {
+pub(crate) fn first_line(path: &Path) -> Result<String, String> {
     let content = fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
     Ok(content.lines().next().unwrap_or("").to_string())
 }
 
-fn parse_key_from_header(line: &str) -> Option<String> {
+pub(crate) fn parse_key_from_header(line: &str) -> Option<String> {
     let prefix = "<!-- canon key=\"";
     let rest = line.strip_prefix(prefix)?;
     let mut out = String::new();
@@ -181,7 +205,7 @@ fn parse_key_from_header(line: &str) -> Option<String> {
                     'n' => out.push('\n'),
                     'r' => out.push('\r'),
                     't' => out.push('\t'),
-                    other => out.push(other),
+                    _ => return None,
                 }
             }
             other => out.push(other),
@@ -190,7 +214,7 @@ fn parse_key_from_header(line: &str) -> Option<String> {
     None
 }
 
-fn escape_attr(value: &str) -> String {
+pub(crate) fn escape_attr(value: &str) -> String {
     let mut out = String::new();
     for ch in value.chars() {
         match ch {
@@ -205,46 +229,68 @@ fn escape_attr(value: &str) -> String {
     out
 }
 
-fn upsert_index(config: &Config, hash: &str, key: &str) -> Result<(), String> {
+pub(crate) fn upsert_index(config: &Config, hash: &str, key: &str) -> Result<(), String> {
     let path = config.root.join("index.tsv");
     let mut entries = read_index(&path)?;
-    entries.retain(|(existing_hash, existing_key)| existing_hash != hash && existing_key != key);
+    entries.retain(|(_, existing_key)| existing_key != key);
     entries.push((hash.to_string(), key.to_string()));
     write_index(&path, &entries)
 }
 
-fn remove_index(config: &Config, hash: &str, key: &str) -> Result<(), String> {
+pub(crate) fn remove_index(config: &Config, _hash: &str, key: &str) -> Result<(), String> {
     ensure_dir(&config.root)?;
     let path = config.root.join("index.tsv");
     let mut entries = read_index(&path)?;
-    entries.retain(|(existing_hash, existing_key)| existing_hash != hash && existing_key != key);
+    entries.retain(|(_, existing_key)| existing_key != key);
     write_index(&path, &entries)
 }
 
-fn read_index(path: &Path) -> Result<Vec<(String, String)>, String> {
+pub(crate) fn read_index(path: &Path) -> Result<Vec<(String, String)>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
     let content = fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
     let mut entries = Vec::new();
-    for line in content.lines() {
+    for (line_number, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        let mut parts = line.splitn(2, '\t');
-        let hash = parts.next().unwrap_or("").to_string();
-        let key = parts.next().unwrap_or("").to_string();
-        if !hash.is_empty() && !key.is_empty() {
-            entries.push((hash, key));
-        }
+        let Some((hash, key)) = line.split_once('\t') else {
+            return Err(format!(
+                "malformed index line {} in {}",
+                line_number + 1,
+                path.display()
+            ));
+        };
+        validate_index_entry(hash, key).map_err(|err| {
+            format!(
+                "malformed index line {} in {}: {}",
+                line_number + 1,
+                path.display(),
+                err
+            )
+        })?;
+        entries.push((hash.to_string(), key.to_string()));
     }
     Ok(entries)
 }
 
-fn write_index(path: &Path, entries: &[(String, String)]) -> Result<(), String> {
+pub(crate) fn validate_index_entry(hash: &str, key: &str) -> Result<(), String> {
+    if hash.is_empty() {
+        return Err("hash must not be empty".to_string());
+    }
+    if hash.contains('\t') || hash.contains('\n') || hash.contains('\r') {
+        return Err("hash must not contain tabs or newlines".to_string());
+    }
+    validate_note_key(key)
+}
+
+pub(crate) fn write_index(path: &Path, entries: &[(String, String)]) -> Result<(), String> {
     let mut content = String::new();
     for (hash, key) in entries {
+        validate_index_entry(hash, key)
+            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
         content.push_str(hash);
         content.push('\t');
         content.push_str(key);
@@ -253,14 +299,14 @@ fn write_index(path: &Path, entries: &[(String, String)]) -> Result<(), String> 
     fs::write(path, content).map_err(|err| format!("failed to write {}: {}", path.display(), err))
 }
 
-fn unix_timestamp() -> Result<u64, String> {
+pub(crate) fn unix_timestamp() -> Result<u64, String> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .map_err(|err| format!("system time is before UNIX_EPOCH: {}", err))
 }
 
-fn hash_key(key: &str) -> String {
+pub(crate) fn hash_key(key: &str) -> String {
     let mut hash = FNV_OFFSET;
     for byte in key.as_bytes() {
         hash ^= *byte as u64;
@@ -269,7 +315,7 @@ fn hash_key(key: &str) -> String {
     encode_60_bits(hash & ((1u64 << 60) - 1))
 }
 
-fn encode_60_bits(value: u64) -> String {
+pub(crate) fn encode_60_bits(value: u64) -> String {
     let mut out = String::with_capacity(10);
     for shift in (0..60).step_by(6).rev() {
         let index = ((value >> shift) & 0x3f) as usize;

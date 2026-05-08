@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Once;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -25,8 +25,10 @@ const GIT_CANON_LOG_DIR: &str = "canon/logs";
 const DIAGNOSTIC_LOG_MAX_BYTES: u64 = 128 * 1024;
 const DIAGNOSTIC_LOG_FILES: [&str; 4] = ["0.jsonl", "1.jsonl", "2.jsonl", "3.jsonl"];
 const DEFAULT_CHECK_TEMPLATE: &str = include_str!("../templates/check.yml");
-const GIT_HOOKS_PATH: &str = ".githooks";
-const PRE_COMMIT_HOOK_PATH: &str = ".githooks/pre-commit";
+const GIT_HOOKS_PATH: &str = ".git/hooks";
+const LEGACY_GIT_HOOKS_PATH: &str = ".githooks";
+const PRE_COMMIT_HOOK_PATH: &str = ".git/hooks/pre-commit";
+const LEGACY_PRE_COMMIT_HOOK_PATH: &str = ".githooks/pre-commit";
 const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../templates/pre-commit");
 const MALFORMED_REVIEW_WARNING: &str =
     "human review required: evaluator marked the expectation question as malformed";
@@ -45,14 +47,31 @@ extern "C" fn handle_sigint(_: i32) {
     CHECK_INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
-include!("cli.rs");
-include!("notes.rs");
-include!("hooks.rs");
-include!("check.rs");
-include!("logging.rs");
-include!("hash.rs");
-include!("git.rs");
-include!("history.rs");
-include!("scope.rs");
-include!("evaluator.rs");
-include!("tests.rs");
+mod check;
+mod cli;
+mod evaluator;
+mod git;
+mod hash;
+mod history;
+mod hooks;
+mod logging;
+mod notes;
+mod scope;
+
+pub(crate) use check::*;
+pub(crate) use cli::*;
+pub(crate) use evaluator::*;
+pub(crate) use git::*;
+pub(crate) use hash::*;
+pub(crate) use history::*;
+pub(crate) use hooks::*;
+pub(crate) use logging::*;
+pub(crate) use notes::*;
+pub(crate) use scope::*;
+
+fn main() {
+    cli::main();
+}
+
+#[cfg(test)]
+mod tests;

@@ -1,4 +1,10 @@
-fn evaluator_thread_config(agent: &AgentConfig, scope: &[String], model: Option<&str>) -> Value {
+use crate::*;
+
+pub(crate) fn evaluator_thread_config(
+    agent: &AgentConfig,
+    scope: &[String],
+    model: Option<&str>,
+) -> Value {
     let root_permissions = evaluator_thread_root_permissions(agent, scope);
     let mut config = evaluator_base_config(Value::Object(root_permissions), "read");
     if let Some(model) = model.or(agent.model.primary.as_deref()) {
@@ -10,7 +16,10 @@ fn evaluator_thread_config(agent: &AgentConfig, scope: &[String], model: Option<
     config
 }
 
-fn evaluator_thread_root_permissions(agent: &AgentConfig, scope: &[String]) -> Map<String, Value> {
+pub(crate) fn evaluator_thread_root_permissions(
+    agent: &AgentConfig,
+    scope: &[String],
+) -> Map<String, Value> {
     let mut root_permissions = Map::new();
     if scope == full_scope() {
         root_permissions.insert(".".to_string(), Value::String("read".to_string()));
@@ -21,22 +30,27 @@ fn evaluator_thread_root_permissions(agent: &AgentConfig, scope: &[String]) -> M
             root_permissions.insert(format!("{}/**", path), Value::String("read".to_string()));
         }
     }
-    for pattern in effective_ignore_patterns(agent) {
-        root_permissions.insert(pattern, Value::String("none".to_string()));
-    }
+    deny_evaluator_project_paths(&mut root_permissions, agent);
     root_permissions
 }
 
-fn evaluator_startup_root_permissions(agent: &AgentConfig) -> Map<String, Value> {
+pub(crate) fn evaluator_startup_root_permissions(agent: &AgentConfig) -> Map<String, Value> {
     let mut root_permissions = Map::new();
     root_permissions.insert(".".to_string(), Value::String("none".to_string()));
-    for pattern in effective_ignore_patterns(agent) {
-        root_permissions.insert(pattern, Value::String("none".to_string()));
-    }
+    deny_evaluator_project_paths(&mut root_permissions, agent);
     root_permissions
 }
 
-fn evaluator_base_config(root_permissions: Value, root_access: &str) -> Value {
+pub(crate) fn deny_evaluator_project_paths(
+    root_permissions: &mut Map<String, Value>,
+    agent: &AgentConfig,
+) {
+    for pattern in effective_ignore_patterns(agent) {
+        root_permissions.insert(pattern, Value::String("none".to_string()));
+    }
+}
+
+pub(crate) fn evaluator_base_config(root_permissions: Value, root_access: &str) -> Value {
     let mut filesystem = Map::new();
     filesystem.insert(":root".to_string(), Value::String(root_access.to_string()));
     filesystem.insert(":project_roots".to_string(), root_permissions);
@@ -66,7 +80,7 @@ fn evaluator_base_config(root_permissions: Value, root_access: &str) -> Value {
     Value::Object(config)
 }
 
-fn evaluator_runtime_permissions() -> Vec<(String, String)> {
+pub(crate) fn evaluator_runtime_permissions() -> Vec<(String, String)> {
     let mut permissions = [
         "/bin/**",
         "/usr/bin/**",
@@ -93,7 +107,7 @@ fn evaluator_runtime_permissions() -> Vec<(String, String)> {
     permissions
 }
 
-fn enabled_plugins_config(agent: &AgentConfig) -> Value {
+pub(crate) fn enabled_plugins_config(agent: &AgentConfig) -> Value {
     let mut plugins = Map::new();
     for plugin in &agent.plugins {
         plugins.insert(plugin.clone(), json!({ "enabled": true }));
@@ -101,7 +115,7 @@ fn enabled_plugins_config(agent: &AgentConfig) -> Value {
     Value::Object(plugins)
 }
 
-fn app_server_args(load_plugins: bool, agent: &AgentConfig) -> Vec<String> {
+pub(crate) fn app_server_args(load_plugins: bool, agent: &AgentConfig) -> Vec<String> {
     let mut args = vec!["app-server".to_string()];
     if !load_plugins {
         args.push("--disable".to_string());
@@ -113,7 +127,7 @@ fn app_server_args(load_plugins: bool, agent: &AgentConfig) -> Vec<String> {
     args
 }
 
-fn app_server_startup_config_args(agent: &AgentConfig) -> Vec<String> {
+pub(crate) fn app_server_startup_config_args(agent: &AgentConfig) -> Vec<String> {
     let mut args = Vec::new();
     push_config_arg(&mut args, "default_permissions=\"canon_check\"");
     push_config_arg(&mut args, "history.persistence=\"none\"");
@@ -123,7 +137,7 @@ fn app_server_startup_config_args(agent: &AgentConfig) -> Vec<String> {
     args
 }
 
-fn app_server_startup_filesystem_arg(agent: &AgentConfig) -> String {
+pub(crate) fn app_server_startup_filesystem_arg(agent: &AgentConfig) -> String {
     let mut entries = Vec::new();
     entries.push(toml_assignment(":root", &toml_string("read")));
     let mut project_root_entries = Vec::new();
@@ -146,23 +160,26 @@ fn app_server_startup_filesystem_arg(agent: &AgentConfig) -> String {
         entries.push(toml_assignment(&path, &toml_string(&permission)));
     }
     entries.push(format!("{}=32", toml_key_segment("glob_scan_max_depth")));
-    format!("permissions.canon_check.filesystem={{{}}}", entries.join(","))
+    format!(
+        "permissions.canon_check.filesystem={{{}}}",
+        entries.join(",")
+    )
 }
 
-fn push_config_arg(args: &mut Vec<String>, value: &str) {
+pub(crate) fn push_config_arg(args: &mut Vec<String>, value: &str) {
     args.push("-c".to_string());
     args.push(value.to_string());
 }
 
-fn toml_key_segment(value: &str) -> String {
+pub(crate) fn toml_key_segment(value: &str) -> String {
     toml_string(value)
 }
 
-fn toml_assignment(key: &str, value: &str) -> String {
+pub(crate) fn toml_assignment(key: &str, value: &str) -> String {
     format!("{}={}", toml_key_segment(key), value)
 }
 
-fn toml_string(value: &str) -> String {
+pub(crate) fn toml_string(value: &str) -> String {
     let mut output = String::from("\"");
     for ch in value.chars() {
         match ch {
@@ -178,9 +195,8 @@ fn toml_string(value: &str) -> String {
     output
 }
 
-struct AppServerRunner {
+pub(crate) struct AppServerRunner {
     child: Child,
-    watchdog: Option<Child>,
     stdin: ChildStdin,
     messages: Receiver<Result<Value, String>>,
     reader: Option<JoinHandle<()>>,
@@ -188,13 +204,13 @@ struct AppServerRunner {
     token_usage_by_turn: BTreeMap<String, TokenUsage>,
 }
 
-struct LazyAppServerRunner {
+pub(crate) struct LazyAppServerRunner {
     load_plugins: bool,
     agent: AgentConfig,
     inner: Option<AppServerRunner>,
 }
 
-fn spawn_app_server_reader(
+pub(crate) fn spawn_app_server_reader(
     stdout: std::process::ChildStdout,
 ) -> (Receiver<Result<Value, String>>, JoinHandle<()>) {
     let (sender, receiver) = mpsc::channel();
@@ -212,10 +228,8 @@ fn spawn_app_server_reader(
                     }
                 }
                 Err(err) => {
-                    let _ = sender.send(Err(format!(
-                        "failed to read app-server response: {}",
-                        err
-                    )));
+                    let _ =
+                        sender.send(Err(format!("failed to read app-server response: {}", err)));
                     return;
                 }
             }
@@ -225,7 +239,7 @@ fn spawn_app_server_reader(
 }
 
 impl LazyAppServerRunner {
-    fn new(load_plugins: bool, agent: &AgentConfig) -> LazyAppServerRunner {
+    pub(crate) fn new(load_plugins: bool, agent: &AgentConfig) -> LazyAppServerRunner {
         LazyAppServerRunner {
             load_plugins,
             agent: agent.clone(),
@@ -256,31 +270,17 @@ impl AppServerRunner {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|err| format!("failed to start codex app-server: {}", err))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| {
-                terminate_app_server_child(&mut child);
-                "failed to open app-server stdin".to_string()
-            })?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| {
-                terminate_app_server_child(&mut child);
-                "failed to open app-server stdout".to_string()
-            })?;
-        let watchdog = match spawn_app_server_watchdog(child.id()) {
-            Ok(watchdog) => watchdog,
-            Err(err) => {
-                terminate_app_server_child(&mut child);
-                return Err(err);
-            }
-        };
+        let stdin = child.stdin.take().ok_or_else(|| {
+            terminate_app_server_child(&mut child);
+            "failed to open app-server stdin".to_string()
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            terminate_app_server_child(&mut child);
+            "failed to open app-server stdout".to_string()
+        })?;
         let (messages, reader) = spawn_app_server_reader(stdout);
         let mut runner = AppServerRunner {
             child,
-            watchdog,
             stdin,
             messages,
             reader: Some(reader),
@@ -527,13 +527,11 @@ impl AppServerRunner {
 }
 
 impl LazyAppServerRunner {
-    fn token_usage(&self) -> Option<TokenUsage> {
-        self.inner
-            .as_ref()
-            .and_then(AppServerRunner::token_usage)
+    pub(crate) fn token_usage(&self) -> Option<TokenUsage> {
+        self.inner.as_ref().and_then(AppServerRunner::token_usage)
     }
 
-    fn drain_token_usage_updates(&mut self) {
+    pub(crate) fn drain_token_usage_updates(&mut self) {
         if let Some(inner) = self.inner.as_mut() {
             inner.drain_token_usage_updates();
         }
@@ -552,7 +550,7 @@ impl TokenUsage {
     }
 }
 
-fn token_usage_update(message: &Value) -> Option<(String, TokenUsage)> {
+pub(crate) fn token_usage_update(message: &Value) -> Option<(String, TokenUsage)> {
     if message.get("method").and_then(Value::as_str) != Some("thread/tokenUsage/updated") {
         return None;
     }
@@ -562,7 +560,7 @@ fn token_usage_update(message: &Value) -> Option<(String, TokenUsage)> {
     Some((turn_id, parse_token_usage(usage)?))
 }
 
-fn turn_started_id(message: &Value) -> Option<String> {
+pub(crate) fn turn_started_id(message: &Value) -> Option<String> {
     if message.get("method").and_then(Value::as_str) != Some("turn/started") {
         return None;
     }
@@ -574,7 +572,7 @@ fn turn_started_id(message: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn parse_token_usage(value: &Value) -> Option<TokenUsage> {
+pub(crate) fn parse_token_usage(value: &Value) -> Option<TokenUsage> {
     Some(TokenUsage {
         total_tokens: value.get("totalTokens").and_then(Value::as_u64)?,
         input_tokens: value.get("inputTokens").and_then(Value::as_u64)?,
@@ -590,7 +588,7 @@ fn parse_token_usage(value: &Value) -> Option<TokenUsage> {
     })
 }
 
-fn render_token_usage_summary(usage: TokenUsage) -> String {
+pub(crate) fn render_token_usage_summary(usage: TokenUsage) -> String {
     format!(
         "Token usage: total={} input={} (+ {} cached) output={} (reasoning {})",
         format_number(usage.total_tokens),
@@ -601,7 +599,7 @@ fn render_token_usage_summary(usage: TokenUsage) -> String {
     )
 }
 
-fn format_number(value: u64) -> String {
+pub(crate) fn format_number(value: u64) -> String {
     let digits = value.to_string();
     let mut output = String::new();
     for (index, ch) in digits.chars().rev().enumerate() {
@@ -613,7 +611,7 @@ fn format_number(value: u64) -> String {
     output.chars().rev().collect()
 }
 
-fn app_server_error_message(message: &Value) -> Option<String> {
+pub(crate) fn app_server_error_message(message: &Value) -> Option<String> {
     let method = message.get("method").and_then(Value::as_str)?;
     if method != "error" && method != "turn/failed" && method != "turn/error" {
         if method == "turn/completed"
@@ -636,7 +634,7 @@ fn app_server_error_message(message: &Value) -> Option<String> {
         .or_else(|| Some(method.to_string()))
 }
 
-fn string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
+pub(crate) fn string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
     let mut current = value;
     for key in path {
         current = current.get(*key)?;
@@ -644,7 +642,7 @@ fn string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
     current.as_str()
 }
 
-fn turn_text(delta_text: String, completed_text: String) -> String {
+pub(crate) fn turn_text(delta_text: String, completed_text: String) -> String {
     if delta_text.trim().is_empty() {
         completed_text
     } else {
@@ -652,7 +650,7 @@ fn turn_text(delta_text: String, completed_text: String) -> String {
     }
 }
 
-fn append_completed_agent_text(message: &Value, output: &mut String) {
+pub(crate) fn append_completed_agent_text(message: &Value, output: &mut String) {
     let Some(params) = message.get("params") else {
         return;
     };
@@ -660,13 +658,12 @@ fn append_completed_agent_text(message: &Value, output: &mut String) {
         if is_assistant_message_item(item) {
             append_text_fields(item, output);
         }
-    } else if message.get("method").and_then(Value::as_str) == Some("item/agentMessage/completed")
-    {
+    } else if message.get("method").and_then(Value::as_str) == Some("item/agentMessage/completed") {
         append_text_fields(params, output);
     }
 }
 
-fn is_assistant_message_item(item: &Value) -> bool {
+pub(crate) fn is_assistant_message_item(item: &Value) -> bool {
     item.get("role").and_then(Value::as_str) == Some("assistant")
         || item
             .get("type")
@@ -675,7 +672,7 @@ fn is_assistant_message_item(item: &Value) -> bool {
             .unwrap_or(false)
 }
 
-fn append_text_fields(value: &Value, output: &mut String) {
+pub(crate) fn append_text_fields(value: &Value, output: &mut String) {
     match value {
         Value::Array(items) => {
             for item in items {
@@ -700,7 +697,6 @@ fn append_text_fields(value: &Value, output: &mut String) {
 impl Drop for AppServerRunner {
     fn drop(&mut self) {
         terminate_app_server_child(&mut self.child);
-        terminate_watchdog_child(&mut self.watchdog);
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
@@ -708,132 +704,42 @@ impl Drop for AppServerRunner {
 }
 
 #[cfg(unix)]
-fn spawn_app_server_watchdog(process_group: u32) -> Result<Option<Child>, String> {
-    let mut command = Command::new("/bin/sh");
-    command
-        .arg("-c")
-        .arg(
-            "kill_tree() { \
-               root=$1; sig=$2; \
-               for child in $(pgrep -P \"$root\" 2>/dev/null); do kill_tree \"$child\" \"$sig\"; done; \
-               kill -\"$sig\" \"$root\" 2>/dev/null || true; \
-             }; \
-             parent=$1; app_pid=$2; pgid=$3; \
-             while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done; \
-             kill_tree \"$app_pid\" TERM; \
-             kill -TERM \"-$pgid\" 2>/dev/null || true; \
-             sleep 1; \
-             kill_tree \"$app_pid\" KILL; \
-             kill -KILL \"-$pgid\" 2>/dev/null || true",
-        )
-        .arg("canon-app-server-watchdog")
-        .arg(process::id().to_string())
-        .arg(process_group.to_string())
-        .arg(process_group.to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    command.process_group(0);
-    command
-        .spawn()
-        .map(Some)
-        .map_err(|err| format!("failed to start app-server watchdog: {}", err))
-}
-
-#[cfg(not(unix))]
-fn spawn_app_server_watchdog(_process_group: u32) -> Result<Option<Child>, String> {
-    Ok(None)
-}
-
-fn terminate_watchdog_child(watchdog: &mut Option<Child>) {
-    let Some(mut child) = watchdog.take() else {
-        return;
-    };
+pub(crate) fn terminate_app_server_child(child: &mut Child) {
     if child.try_wait().ok().flatten().is_some() {
         return;
     }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-#[cfg(unix)]
-fn terminate_app_server_child(child: &mut Child) {
-    if child.try_wait().ok().flatten().is_some() {
-        return;
-    }
-    let app_server_pid = child.id() as i32;
-    let process_group = app_server_pid;
-    signal_process_tree(app_server_pid, 2);
-    signal_process_group(process_group, 2);
-    thread::sleep(Duration::from_millis(200));
-    if child.try_wait().ok().flatten().is_some() {
-        return;
-    }
-    signal_process_tree(app_server_pid, 15);
+    let process_group = child.id() as i32;
     signal_process_group(process_group, 15);
-    thread::sleep(Duration::from_millis(200));
-    if child.try_wait().ok().flatten().is_none() {
-        signal_process_tree(app_server_pid, 9);
-        signal_process_group(process_group, 9);
+    if wait_for_child_exit(child, Duration::from_secs(2)) {
+        return;
     }
+    signal_process_group(process_group, 9);
     let _ = child.wait();
 }
 
 #[cfg(unix)]
-fn signal_process_tree(root_pid: i32, signal_number: i32) {
-    let mut descendants = descendant_pids(root_pid);
-    descendants.reverse();
-    for pid in descendants {
-        signal_pid(pid, signal_number);
-    }
-    signal_pid(root_pid, signal_number);
-}
-
-#[cfg(unix)]
-fn descendant_pids(root_pid: i32) -> Vec<i32> {
-    let mut output = Vec::new();
-    let mut stack = child_pids(root_pid);
-    while let Some(pid) = stack.pop() {
-        stack.extend(child_pids(pid));
-        output.push(pid);
-    }
-    output
-}
-
-#[cfg(unix)]
-fn child_pids(parent_pid: i32) -> Vec<i32> {
-    let output = Command::new("pgrep")
-        .arg("-P")
-        .arg(parent_pid.to_string())
-        .output();
-    let Ok(output) = output else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| line.trim().parse::<i32>().ok())
-        .collect()
-}
-
-#[cfg(unix)]
-fn signal_process_group(process_group: i32, signal_number: i32) {
+pub(crate) fn signal_process_group(process_group: i32, signal_number: i32) {
     unsafe {
         let _ = kill(-process_group, signal_number);
     }
 }
 
 #[cfg(unix)]
-fn signal_pid(pid: i32, signal_number: i32) {
-    unsafe {
-        let _ = kill(pid, signal_number);
+pub(crate) fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait().ok().flatten().is_some() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }
 
 #[cfg(not(unix))]
-fn terminate_app_server_child(child: &mut Child) {
+pub(crate) fn terminate_app_server_child(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -900,7 +806,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
     }
 }
 
-fn print_help() {
+pub(crate) fn print_help() {
     print!(
         "{}",
         "canon - thread-scoped decisions and invariants\n\n\

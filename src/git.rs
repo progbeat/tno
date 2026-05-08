@@ -1,4 +1,6 @@
-fn git_path(root: &Path, path: &str) -> Result<PathBuf, String> {
+use crate::*;
+
+pub(crate) fn git_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -11,7 +13,7 @@ fn git_path(root: &Path, path: &str) -> Result<PathBuf, String> {
         return Err(format!(
             "failed to resolve git path {}: {}",
             path,
-            String::from_utf8_lossy(&output.stderr).trim()
+            command_output_trimmed(&output.stderr, "git rev-parse stderr")?
         ));
     }
     let resolved = String::from_utf8(output.stdout)
@@ -19,7 +21,7 @@ fn git_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     Ok(root.join(resolved.trim()))
 }
 
-fn staged_file_content(root: &Path, path: &str) -> Result<String, String> {
+pub(crate) fn staged_file_content(root: &Path, path: &str) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -31,19 +33,19 @@ fn staged_file_content(root: &Path, path: &str) -> Result<String, String> {
         return Err(format!(
             "failed to read staged {}: {}",
             path,
-            String::from_utf8_lossy(&output.stderr).trim()
+            command_output_trimmed(&output.stderr, "git show stderr")?
         ));
     }
     String::from_utf8(output.stdout).map_err(|_| format!("staged {} must be valid UTF-8", path))
 }
 
-struct StagedWorktreeView {
+pub(crate) struct StagedWorktreeView {
     root: PathBuf,
     stash_ref: Option<String>,
 }
 
 impl StagedWorktreeView {
-    fn apply(root: &Path) -> Result<StagedWorktreeView, String> {
+    pub(crate) fn apply(root: &Path) -> Result<StagedWorktreeView, String> {
         if !has_unstaged_or_untracked_changes(root)? {
             return Ok(StagedWorktreeView {
                 root: root.to_path_buf(),
@@ -68,7 +70,7 @@ impl StagedWorktreeView {
         if !output.status.success() {
             return Err(format!(
                 "failed to prepare staged worktree view: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+                command_output_trimmed(&output.stderr, "git stash stderr")?
             ));
         }
 
@@ -108,7 +110,7 @@ impl Drop for StagedWorktreeView {
     }
 }
 
-fn restore_staged_worktree_view(root: &Path, stash_ref: &str) -> Result<(), String> {
+pub(crate) fn restore_staged_worktree_view(root: &Path, stash_ref: &str) -> Result<(), String> {
     let restore_tracked = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -124,7 +126,7 @@ fn restore_staged_worktree_view(root: &Path, stash_ref: &str) -> Result<(), Stri
     restore_untracked_from_stash(root, stash_ref)
 }
 
-fn restore_untracked_from_stash(root: &Path, stash_ref: &str) -> Result<(), String> {
+pub(crate) fn restore_untracked_from_stash(root: &Path, stash_ref: &str) -> Result<(), String> {
     let source = format!("{}^3", stash_ref);
     if !git_revision_exists(root, &source)? {
         return Ok(());
@@ -139,7 +141,7 @@ fn restore_untracked_from_stash(root: &Path, stash_ref: &str) -> Result<(), Stri
         return Err(format!(
             "failed to inspect untracked stash tree {}: {}",
             source,
-            String::from_utf8_lossy(&output.stderr).trim()
+            command_output_trimmed(&output.stderr, "git ls-tree stderr")?
         ));
     }
     let paths = output
@@ -173,7 +175,7 @@ fn restore_untracked_from_stash(root: &Path, stash_ref: &str) -> Result<(), Stri
     }
 }
 
-fn git_revision_exists(root: &Path, revision: &str) -> Result<bool, String> {
+pub(crate) fn git_revision_exists(root: &Path, revision: &str) -> Result<bool, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -183,7 +185,7 @@ fn git_revision_exists(root: &Path, revision: &str) -> Result<bool, String> {
     if output.status.success() {
         return Ok(true);
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = command_output_utf8(&output.stderr, "git rev-parse stderr")?;
     if stderr.trim().is_empty() || stderr.contains("Needed a single revision") {
         Ok(false)
     } else {
@@ -195,7 +197,7 @@ fn git_revision_exists(root: &Path, revision: &str) -> Result<bool, String> {
     }
 }
 
-fn has_unstaged_or_untracked_changes(root: &Path) -> Result<bool, String> {
+pub(crate) fn has_unstaged_or_untracked_changes(root: &Path) -> Result<bool, String> {
     let diff = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -223,13 +225,13 @@ fn has_unstaged_or_untracked_changes(root: &Path) -> Result<bool, String> {
     if !output.status.success() {
         return Err(format!(
             "failed to inspect untracked changes: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            command_output_trimmed(&output.stderr, "git ls-files stderr")?
         ));
     }
-    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+    Ok(!command_output_trimmed(&output.stdout, "git ls-files stdout")?.is_empty())
 }
 
-fn current_stash_oid(root: &Path) -> Result<Option<String>, String> {
+pub(crate) fn current_stash_oid(root: &Path) -> Result<Option<String>, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -238,7 +240,7 @@ fn current_stash_oid(root: &Path) -> Result<Option<String>, String> {
         .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
     if output.status.success() {
         return Ok(Some(
-            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            command_output_trimmed(&output.stdout, "git rev-parse stdout")?.to_string(),
         ));
     }
     Ok(None)

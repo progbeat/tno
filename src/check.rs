@@ -1,10 +1,14 @@
-fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), String> {
+use crate::*;
+
+pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), String> {
     install_sigint_handler();
     CHECK_INTERRUPTED.store(false, Ordering::SeqCst);
     let command = parse_check_command_args(args)?;
     let config = load_check_config(root, &command.config_path)?;
     let options = parse_check_options(&config, &command.option_args)?;
     fail_on_mixed_canon_changes(root)?;
+    // Apply the index view in-place; evaluator scope is enforced by app-server permissions,
+    // not by copying the repository to a filtered snapshot.
     let _staged_view = StagedWorktreeView::apply(root)?;
     let mut runner = LazyAppServerRunner::new(check_config_loads_plugins(&config), &config.agent);
     let mut diagnostic_log = DiagnosticLogWriter::create(root)?;
@@ -21,7 +25,6 @@ fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), String> {
         Some(&mut result_output),
     );
     runner.drain_token_usage_updates();
-    diagnostic_log.finish()?;
     print_token_usage_summary(runner.token_usage(), check_interrupted());
     let records = records_result?;
     if records.iter().all(CheckRecord::passed) {
@@ -31,7 +34,7 @@ fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), String> {
     }
 }
 
-fn print_token_usage_summary(usage: Option<TokenUsage>, force: bool) {
+pub(crate) fn print_token_usage_summary(usage: Option<TokenUsage>, force: bool) {
     if let Some(usage) = usage {
         eprintln!("{}", render_token_usage_summary(usage));
     } else if force {
@@ -39,7 +42,7 @@ fn print_token_usage_summary(usage: Option<TokenUsage>, force: bool) {
     }
 }
 
-fn install_sigint_handler() {
+pub(crate) fn install_sigint_handler() {
     SIGNAL_HANDLER_INIT.call_once(|| {
         #[cfg(unix)]
         unsafe {
@@ -53,11 +56,11 @@ fn install_sigint_handler() {
     });
 }
 
-fn check_interrupted() -> bool {
+pub(crate) fn check_interrupted() -> bool {
     CHECK_INTERRUPTED.load(Ordering::SeqCst)
 }
 
-fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), String> {
+pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), String> {
     if args.iter().any(|arg| arg.to_str() == Some("--fail-fast")) {
         return Err("canon gate does not accept --fail-fast".to_string());
     }
@@ -76,7 +79,9 @@ fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), String> {
     for expectation in &selected {
         match reusable_history_record(root, &config.agent, expectation)? {
             Some(record) if record.passed() => {}
-            Some(_) if has_reusable_head_failure(root, &config.agent, expectation)? => {}
+            Some(record)
+                if !record.passed()
+                    && has_reusable_head_failure(root, &config.agent, expectation)? => {}
             Some(record) => failing.push(record),
             None => missing.push(expectation.number),
         }
@@ -101,7 +106,7 @@ fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), String> {
     Err("canon gate failed".to_string())
 }
 
-fn has_reusable_head_failure(
+pub(crate) fn has_reusable_head_failure(
     root: &Path,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
@@ -112,7 +117,7 @@ fn has_reusable_head_failure(
     ))
 }
 
-fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommandArgs, String> {
+pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommandArgs, String> {
     let mut config_path = None;
     let mut option_args = Vec::new();
     let mut index = 0;
@@ -146,7 +151,7 @@ fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommandArgs, Strin
     })
 }
 
-fn load_check_config(root: &Path, config_path: &Path) -> Result<CheckConfig, String> {
+pub(crate) fn load_check_config(root: &Path, config_path: &Path) -> Result<CheckConfig, String> {
     let content = if config_path == Path::new(CHECK_PATH) {
         staged_file_content(root, CHECK_PATH).or_else(|_| {
             let path = root.join(CHECK_PATH);
@@ -164,7 +169,10 @@ fn load_check_config(root: &Path, config_path: &Path) -> Result<CheckConfig, Str
     Ok(config)
 }
 
-fn parse_check_options(config: &CheckConfig, args: &[OsString]) -> Result<CheckOptions, String> {
+pub(crate) fn parse_check_options(
+    config: &CheckConfig,
+    args: &[OsString],
+) -> Result<CheckOptions, String> {
     let mut fail_fast = false;
     let mut ignore_cache = false;
     let mut numbers = Vec::new();
@@ -190,7 +198,7 @@ fn parse_check_options(config: &CheckConfig, args: &[OsString]) -> Result<CheckO
     })
 }
 
-fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
+pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
     if config.version != 1 {
         return Err("check.yml version must be 1".to_string());
     }
@@ -228,7 +236,7 @@ fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_plugin_config_key(value: &str) -> Result<(), String> {
+pub(crate) fn validate_plugin_config_key(value: &str) -> Result<(), String> {
     if value.trim().is_empty() {
         return Err("agent has an empty plugin entry".to_string());
     }
@@ -244,7 +252,7 @@ fn validate_plugin_config_key(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_optional_model(value: Option<&str>, label: &str) -> Result<(), String> {
+pub(crate) fn validate_optional_model(value: Option<&str>, label: &str) -> Result<(), String> {
     let Some(model) = value else {
         return Ok(());
     };
@@ -257,17 +265,17 @@ fn validate_optional_model(value: Option<&str>, label: &str) -> Result<(), Strin
     Ok(())
 }
 
-fn check_config_loads_plugins(config: &CheckConfig) -> bool {
+pub(crate) fn check_config_loads_plugins(config: &CheckConfig) -> bool {
     !config.agent.plugins.is_empty()
 }
 
-fn validate_relative_config_path(value: &str, label: &str) -> Result<(), String> {
+pub(crate) fn validate_relative_config_path(value: &str, label: &str) -> Result<(), String> {
     normalize_repo_path(value)
         .map(|_| ())
         .map_err(|err| format!("{}: {}", label, err))
 }
 
-fn select_expectations(
+pub(crate) fn select_expectations(
     config: &CheckConfig,
     args: &[OsString],
 ) -> Result<Vec<SelectedExpectation>, String> {
@@ -310,7 +318,7 @@ fn select_expectations(
         .collect())
 }
 
-fn fail_on_mixed_canon_changes(root: &Path) -> Result<(), String> {
+pub(crate) fn fail_on_mixed_canon_changes(root: &Path) -> Result<(), String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -333,7 +341,7 @@ fn fail_on_mixed_canon_changes(root: &Path) -> Result<(), String> {
     fail_on_mixed_canon_paths(&paths)
 }
 
-fn fail_on_mixed_canon_paths(paths: &[String]) -> Result<(), String> {
+pub(crate) fn fail_on_mixed_canon_paths(paths: &[String]) -> Result<(), String> {
     let has_canon = paths.iter().any(|path| is_canon_project_path(path));
     let has_other = paths.iter().any(|path| !is_canon_project_path(path));
     if has_canon && has_other {
@@ -345,11 +353,11 @@ fn fail_on_mixed_canon_paths(paths: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn is_canon_project_path(path: &str) -> bool {
+pub(crate) fn is_canon_project_path(path: &str) -> bool {
     path == ".canon" || path.starts_with(".canon/")
 }
 
-fn run_check_with_runner<R: EvaluatorRunner>(
+pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     root: &Path,
     snapshot_root: &Path,
     config: &CheckConfig,
@@ -376,7 +384,8 @@ fn run_check_with_runner<R: EvaluatorRunner>(
             }
         }
 
-        let scope = latest_history_scope(root, &config.agent, expectation)?.unwrap_or_else(full_scope);
+        let scope =
+            latest_history_scope(root, &config.agent, expectation)?.unwrap_or_else(full_scope);
         let mut interrogation = interrogate_expectation(
             root,
             snapshot_root,
@@ -387,10 +396,10 @@ fn run_check_with_runner<R: EvaluatorRunner>(
             &mut diagnostic_log,
             &scope,
         )?;
-        if interrogation.record.observed == "idk" && scope != full_scope() {
-            // Widening after a restricted non-answer is not narrowing
-            // verification: it is a separate full-scope interrogation whose
-            // record replaces the restricted `idk` response.
+        if should_retry_full_scope(&interrogation.record, &scope) {
+            // Widening after a restricted non-answer or mismatch is not
+            // narrowing verification: it is a separate full-scope
+            // interrogation whose record replaces the restricted response.
             let full_scope = full_scope();
             interrogation = interrogate_expectation(
                 root,
@@ -440,7 +449,14 @@ fn run_check_with_runner<R: EvaluatorRunner>(
     Ok(records)
 }
 
-fn interrogate_expectation<R: EvaluatorRunner>(
+pub(crate) fn should_retry_full_scope(record: &CheckRecord, scope: &[String]) -> bool {
+    scope != full_scope()
+        && record.observed != UNPARSEABLE_OBSERVED
+        && record.observed != "malformed"
+        && (record.observed == "idk" || !record.passed())
+}
+
+pub(crate) fn interrogate_expectation<R: EvaluatorRunner>(
     root: &Path,
     snapshot_root: &Path,
     config: &CheckConfig,
@@ -479,7 +495,7 @@ fn interrogate_expectation<R: EvaluatorRunner>(
     ))
 }
 
-fn interrogate_expectation_with_model<R: EvaluatorRunner>(
+pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     root: &Path,
     snapshot_root: &Path,
     config: &CheckConfig,
@@ -528,17 +544,17 @@ fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     Ok(InterrogationResult { record })
 }
 
-fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
+pub(crate) fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
     let mut models = vec![agent.model.primary.clone()];
     models.extend(agent.model.fallbacks.iter().cloned().map(Some));
     models
 }
 
-fn model_label(model: Option<&str>) -> &str {
+pub(crate) fn model_label(model: Option<&str>) -> &str {
     model.unwrap_or("<default>")
 }
 
-fn is_model_technical_failure(err: &str) -> bool {
+pub(crate) fn is_model_technical_failure(err: &str) -> bool {
     err.contains("usageLimitExceeded")
         || err.contains("usage limit")
         || err.contains("rate limit")
@@ -546,7 +562,7 @@ fn is_model_technical_failure(err: &str) -> bool {
         || err.contains("model is unavailable")
 }
 
-fn record_from_response(
+pub(crate) fn record_from_response(
     expectation: &SelectedExpectation,
     response: ParsedAnswer,
     enforced_scope: Vec<String>,
@@ -582,11 +598,11 @@ fn record_from_response(
     })
 }
 
-fn is_verified_record(record: &CheckRecord) -> bool {
+pub(crate) fn is_verified_record(record: &CheckRecord) -> bool {
     record.observed != UNPARSEABLE_OBSERVED
 }
 
-fn ask_with_repairs<R: EvaluatorRunner>(
+pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
     runner: &mut R,
     session_id: &str,
     prompt: &str,
@@ -641,7 +657,7 @@ fn ask_with_repairs<R: EvaluatorRunner>(
     Ok(parsed)
 }
 
-fn response_excerpt(text: &str) -> String {
+pub(crate) fn response_excerpt(text: &str) -> String {
     const LIMIT: usize = 600;
     let text = text.trim();
     if text.is_empty() {
@@ -654,7 +670,7 @@ fn response_excerpt(text: &str) -> String {
     excerpt
 }
 
-fn question_prompt(question: &str, scope: &[String]) -> String {
+pub(crate) fn question_prompt(question: &str, scope: &[String]) -> String {
     serde_json::to_string(&json!({
         "scope": scope,
         "question": question,
@@ -662,7 +678,7 @@ fn question_prompt(question: &str, scope: &[String]) -> String {
     .expect("question prompt is serializable")
 }
 
-fn developer_instructions(agent: &AgentConfig) -> String {
+pub(crate) fn developer_instructions(agent: &AgentConfig) -> String {
     format!(
         "{}\n\n{}",
         agent.instructions.trim(),
@@ -670,18 +686,18 @@ fn developer_instructions(agent: &AgentConfig) -> String {
     )
 }
 
-fn malformed_repair_prompt(error: &str, original_prompt: &str) -> String {
+pub(crate) fn malformed_repair_prompt(error: &str, original_prompt: &str) -> String {
     format!(
         "Your previous response could not be parsed: {}.\n\nOriginal prompt:\n{}\n",
         error, original_prompt
     )
 }
 
-fn malformed_answer_repair_prompt() -> String {
+pub(crate) fn malformed_answer_repair_prompt() -> String {
     "Your previous answer was `malformed`. Retry once. If the question is truly malformed, answer `malformed` again.\n".to_string()
 }
 
-fn should_repair_absence_idk(prompt: &str) -> bool {
+pub(crate) fn should_repair_absence_idk(prompt: &str) -> bool {
     let Ok(value) = serde_json::from_str::<Value>(prompt.trim()) else {
         return false;
     };
@@ -693,21 +709,23 @@ fn should_repair_absence_idk(prompt: &str) -> bool {
         || question.starts_with("Can any ")
 }
 
-fn absence_idk_repair_prompt() -> String {
+pub(crate) fn absence_idk_repair_prompt() -> String {
     "Your previous answer was `idk`. For an existence or absence question, concrete evidence of the problem is required for `yes`; if you performed a focused inspection of the allowed files and found no such evidence, answer `no` and cite what you inspected. Keep `idk` only if the allowed scope truly prevents a focused inspection.\n".to_string()
 }
 
-fn evidence_repair_prompt() -> String {
+pub(crate) fn evidence_repair_prompt() -> String {
     "Your previous response had an answer but no evidence. Reply again with evidence if the available files support it.\n".to_string()
 }
 
-fn response_format_block() -> &'static str {
+pub(crate) fn response_format_block() -> &'static str {
     "Response format:\nReturn exactly one valid JSON object and no markdown, code fences, or surrounding prose.\nSchema: {\"answer\":\"<single-line answer>\",\"evidence\":\"<free-form evidence citing supporting files or code>\",\"scope\":[\"<normalized repository-relative path>\"]}\n`scope` is the smallest allowed project context sufficient to answer this question with the same `answer`; it is not the list of evidence citations. Use [\".\"] when the answer depends on project-wide absence, consistency, duplication, garbage, overall quality, or denied/inaccessible paths. Never include denied or inaccessible paths in `scope`.\n"
 }
 
-fn parse_evaluator_response(text: &str, agent: &AgentConfig) -> Result<ParsedAnswer, String> {
-    let response: EvaluatorResponseJson = serde_json::from_str(text.trim())
-        .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))?;
+pub(crate) fn parse_evaluator_response(
+    text: &str,
+    agent: &AgentConfig,
+) -> Result<ParsedAnswer, String> {
+    let response = parse_evaluator_response_json(text)?;
     if response.answer.contains('\n') || response.answer.contains('\r') {
         return Err("answer must be a single-line string".to_string());
     }
@@ -718,8 +736,62 @@ fn parse_evaluator_response(text: &str, agent: &AgentConfig) -> Result<ParsedAns
     })
 }
 
+pub(crate) fn parse_evaluator_response_json(text: &str) -> Result<EvaluatorResponseJson, String> {
+    let trimmed = text.trim();
+    match serde_json::from_str::<EvaluatorResponseJson>(trimmed) {
+        Ok(response) => Ok(response),
+        Err(strict_err) => {
+            let Some(object) = first_json_object(trimmed) else {
+                return Err(format!(
+                    "failed to parse evaluator JSON response: {}",
+                    strict_err
+                ));
+            };
+            serde_json::from_str::<EvaluatorResponseJson>(object).map_err(|embedded_err| {
+                format!(
+                    "failed to parse evaluator JSON response: {}; embedded JSON parse failed: {}",
+                    strict_err, embedded_err
+                )
+            })
+        }
+    }
+}
+
+pub(crate) fn first_json_object(text: &str) -> Option<&str> {
+    let start = text.char_indices().find(|(_, ch)| *ch == '{')?.0;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (relative_index, ch) in text[start..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    let end = start + relative_index + ch.len_utf8();
+                    return Some(&text[start..end]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
-fn parse_scope_json(text: &str, agent: &AgentConfig) -> Result<Vec<String>, String> {
+pub(crate) fn parse_scope_json(text: &str, agent: &AgentConfig) -> Result<Vec<String>, String> {
     let value: Value =
         serde_json::from_str(text).map_err(|err| format!("failed to parse SCOPE JSON: {}", err))?;
     let array = value
@@ -739,7 +811,10 @@ fn parse_scope_json(text: &str, agent: &AgentConfig) -> Result<Vec<String>, Stri
     sanitize_scope(&scope, agent)
 }
 
-fn parse_scope_strings(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, String> {
+pub(crate) fn parse_scope_strings(
+    scope: &[String],
+    agent: &AgentConfig,
+) -> Result<Vec<String>, String> {
     let mut parsed = Vec::new();
     for raw in scope {
         let normalized = normalize_repo_path(raw)?;
@@ -751,7 +826,7 @@ fn parse_scope_strings(scope: &[String], agent: &AgentConfig) -> Result<Vec<Stri
     sanitize_scope(&parsed, agent)
 }
 
-fn write_result_output(
+pub(crate) fn write_result_output(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
 ) -> Result<(), String> {
@@ -768,7 +843,7 @@ fn write_result_output(
 }
 
 impl CheckRecord {
-    fn passed(&self) -> bool {
+    pub(crate) fn passed(&self) -> bool {
         self.result == "pass"
     }
 }

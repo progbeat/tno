@@ -1,4 +1,6 @@
-fn run_init(root: &Path) -> Result<(), String> {
+use crate::*;
+
+pub(crate) fn run_init(root: &Path) -> Result<(), String> {
     let check_path = root.join(CHECK_PATH);
     if check_path.exists() {
         return Err(format!("{} already exists", CHECK_PATH));
@@ -13,7 +15,7 @@ fn run_init(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn run_hook_command(root: &Path, args: &[OsString]) -> Result<(), String> {
+pub(crate) fn run_hook_command(root: &Path, args: &[OsString]) -> Result<(), String> {
     if args.len() != 1 {
         return Err("usage: canon hook install".to_string());
     }
@@ -24,13 +26,13 @@ fn run_hook_command(root: &Path, args: &[OsString]) -> Result<(), String> {
     }
 }
 
-fn run_hook_install(root: &Path) -> Result<(), String> {
+pub(crate) fn run_hook_install(root: &Path) -> Result<(), String> {
     preflight_pre_commit_hook(root)?;
     preflight_git_hooks_path(root)?;
     install_pre_commit_hook(root)
 }
 
-fn preflight_pre_commit_hook(root: &Path) -> Result<(), String> {
+pub(crate) fn preflight_pre_commit_hook(root: &Path) -> Result<(), String> {
     let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
     if !hook_path.exists() {
         return Ok(());
@@ -47,8 +49,14 @@ fn preflight_pre_commit_hook(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn preflight_git_hooks_path(root: &Path) -> Result<(), String> {
+pub(crate) fn preflight_git_hooks_path(root: &Path) -> Result<(), String> {
     if let Some(existing) = current_git_hooks_path(root)? {
+        if existing == GIT_HOOKS_PATH {
+            return Ok(());
+        }
+        if existing == LEGACY_GIT_HOOKS_PATH && legacy_pre_commit_hook_is_reusable(root)? {
+            return Ok(());
+        }
         if existing != GIT_HOOKS_PATH {
             return Err(format!(
                 "git core.hooksPath is already set to {}; set it to {} manually if desired",
@@ -59,7 +67,17 @@ fn preflight_git_hooks_path(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn install_pre_commit_hook(root: &Path) -> Result<(), String> {
+pub(crate) fn legacy_pre_commit_hook_is_reusable(root: &Path) -> Result<bool, String> {
+    let hook_path = root.join(LEGACY_PRE_COMMIT_HOOK_PATH);
+    if !hook_path.exists() {
+        return Ok(true);
+    }
+    let existing = fs::read_to_string(&hook_path)
+        .map_err(|err| format!("failed to read {}: {}", hook_path.display(), err))?;
+    Ok(existing == DEFAULT_PRE_COMMIT_HOOK)
+}
+
+pub(crate) fn install_pre_commit_hook(root: &Path) -> Result<(), String> {
     let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
     if let Some(parent) = hook_path.parent() {
         ensure_dir(parent)?;
@@ -75,7 +93,7 @@ fn install_pre_commit_hook(root: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn make_executable(path: &Path) -> Result<(), String> {
+pub(crate) fn make_executable(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
 
     let mut permissions = fs::metadata(path)
@@ -87,11 +105,11 @@ fn make_executable(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<(), String> {
+pub(crate) fn make_executable(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn configure_git_hooks_path(root: &Path) -> Result<(), String> {
+pub(crate) fn configure_git_hooks_path(root: &Path) -> Result<(), String> {
     if !is_git_worktree(root)? {
         println!(
             "Git worktree not detected; {} was created but core.hooksPath was not set.",
@@ -110,7 +128,7 @@ fn configure_git_hooks_path(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn current_git_hooks_path(root: &Path) -> Result<Option<String>, String> {
+pub(crate) fn current_git_hooks_path(root: &Path) -> Result<Option<String>, String> {
     if !is_git_worktree(root)? {
         return Ok(None);
     }
@@ -126,7 +144,7 @@ fn current_git_hooks_path(root: &Path) -> Result<Option<String>, String> {
         .map_err(|err| format!("failed to run git config: {}", err))?;
     if output.status.success() {
         return Ok(Some(
-            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            command_output_trimmed(&output.stdout, "git config stdout")?.to_string(),
         ));
     }
     if output.status.code() == Some(1) {
@@ -134,11 +152,11 @@ fn current_git_hooks_path(root: &Path) -> Result<Option<String>, String> {
     }
     Err(format!(
         "failed to read git core.hooksPath: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
+        command_output_trimmed(&output.stderr, "git config stderr")?
     ))
 }
 
-fn set_git_hooks_path(root: &Path) -> Result<(), String> {
+pub(crate) fn set_git_hooks_path(root: &Path) -> Result<(), String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -153,11 +171,11 @@ fn set_git_hooks_path(root: &Path) -> Result<(), String> {
     }
     Err(format!(
         "failed to set git core.hooksPath: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
+        command_output_trimmed(&output.stderr, "git config stderr")?
     ))
 }
 
-fn is_git_worktree(root: &Path) -> Result<bool, String> {
+pub(crate) fn is_git_worktree(root: &Path) -> Result<bool, String> {
     let output = match Command::new("git")
         .arg("-C")
         .arg(root)
@@ -169,5 +187,6 @@ fn is_git_worktree(root: &Path) -> Result<bool, String> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(err) => return Err(format!("failed to run git rev-parse: {}", err)),
     };
-    Ok(output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true")
+    Ok(output.status.success()
+        && command_output_trimmed(&output.stdout, "git rev-parse stdout")? == "true")
 }

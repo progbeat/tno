@@ -1,15 +1,21 @@
+use crate::*;
+
 #[derive(Clone, Copy)]
-enum ScopeHashSource {
+pub(crate) enum ScopeHashSource {
     Index,
     Head,
 }
 
-fn staged_scope_hash(root: &Path, agent: &AgentConfig, scope: &[String]) -> Result<String, String> {
+pub(crate) fn staged_scope_hash(
+    root: &Path,
+    agent: &AgentConfig,
+    scope: &[String],
+) -> Result<String, String> {
     scope_hash_for_source(root, agent, scope, ScopeHashSource::Index)?
         .ok_or("failed to hash staged scope".to_string())
 }
 
-fn scope_hash_for_source(
+pub(crate) fn scope_hash_for_source(
     root: &Path,
     agent: &AgentConfig,
     scope: &[String],
@@ -23,7 +29,7 @@ fn scope_hash_for_source(
     Ok(entries.map(|entries| hash_120(entries.join("\n").as_bytes())))
 }
 
-fn staged_scope_entries(
+pub(crate) fn staged_scope_entries(
     root: &Path,
     agent: &AgentConfig,
     scope: &[String],
@@ -46,7 +52,7 @@ fn staged_scope_entries(
     if !output.status.success() {
         return Err(format!(
             "failed to inspect staged scope: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            command_output_trimmed(&output.stderr, "git ls-files stderr")?
         ));
     }
     let stdout = String::from_utf8(output.stdout)
@@ -64,7 +70,7 @@ fn staged_scope_entries(
     Ok(entries)
 }
 
-fn head_scope_entries(
+pub(crate) fn head_scope_entries(
     root: &Path,
     agent: &AgentConfig,
     scope: &[String],
@@ -91,7 +97,7 @@ fn head_scope_entries(
     if !output.status.success() {
         return Err(format!(
             "failed to inspect HEAD scope: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            command_output_trimmed(&output.stderr, "git ls-tree stderr")?
         ));
     }
     let stdout = String::from_utf8(output.stdout)
@@ -109,7 +115,7 @@ fn head_scope_entries(
     Ok(Some(entries))
 }
 
-fn git_has_head(root: &Path) -> Result<bool, String> {
+pub(crate) fn git_has_head(root: &Path) -> Result<bool, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -119,7 +125,7 @@ fn git_has_head(root: &Path) -> Result<bool, String> {
     Ok(output.status.success())
 }
 
-fn normalize_index_metadata(metadata: &str, path: &str) -> Result<String, String> {
+pub(crate) fn normalize_index_metadata(metadata: &str, path: &str) -> Result<String, String> {
     let mut fields = metadata.split_whitespace();
     let mode = fields
         .next()
@@ -137,7 +143,7 @@ fn normalize_index_metadata(metadata: &str, path: &str) -> Result<String, String
     }
 }
 
-fn normalize_head_metadata(metadata: &str, path: &str) -> Result<String, String> {
+pub(crate) fn normalize_head_metadata(metadata: &str, path: &str) -> Result<String, String> {
     let mut fields = metadata.split_whitespace();
     let mode = fields
         .next()
@@ -151,7 +157,7 @@ fn normalize_head_metadata(metadata: &str, path: &str) -> Result<String, String>
     Ok(format!("{} {}\t{}", mode, object, path))
 }
 
-fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, String> {
+pub(crate) fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, String> {
     if scope.is_empty() {
         return Ok(full_scope());
     }
@@ -176,7 +182,7 @@ fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, 
     }
 }
 
-fn canonicalize_scope_paths(mut paths: Vec<String>) -> Vec<String> {
+pub(crate) fn canonicalize_scope_paths(mut paths: Vec<String>) -> Vec<String> {
     paths.sort();
     paths.dedup();
     let mut canonical: Vec<String> = Vec::new();
@@ -193,7 +199,7 @@ fn canonicalize_scope_paths(mut paths: Vec<String>) -> Vec<String> {
     }
 }
 
-fn normalize_repo_path(value: &str) -> Result<String, String> {
+pub(crate) fn normalize_repo_path(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() {
         return Err("path must not be empty".to_string());
@@ -225,13 +231,13 @@ fn normalize_repo_path(value: &str) -> Result<String, String> {
     }
 }
 
-fn is_denied_path(agent: &AgentConfig, path: &str) -> bool {
+pub(crate) fn is_denied_path(agent: &AgentConfig, path: &str) -> bool {
     effective_ignore_patterns(agent)
         .iter()
         .any(|pattern| path_matches_pattern(path, pattern))
 }
 
-fn path_matches_pattern(path: &str, pattern: &str) -> bool {
+pub(crate) fn path_matches_pattern(path: &str, pattern: &str) -> bool {
     let path = path.trim_start_matches("./");
     let pattern = pattern.trim_start_matches("./");
     if let Some(prefix) = pattern.strip_suffix("/**") {
@@ -240,7 +246,7 @@ fn path_matches_pattern(path: &str, pattern: &str) -> bool {
     path == pattern
 }
 
-fn is_strict_scope_subset(proposed: &[String], current: &[String]) -> bool {
+pub(crate) fn is_strict_scope_subset(proposed: &[String], current: &[String]) -> bool {
     if proposed == current {
         return false;
     }
@@ -249,11 +255,11 @@ fn is_strict_scope_subset(proposed: &[String], current: &[String]) -> bool {
         .all(|path| current.iter().any(|base| scope_contains(base, path)))
 }
 
-fn scope_contains(base: &str, path: &str) -> bool {
+pub(crate) fn scope_contains(base: &str, path: &str) -> bool {
     base == "." || path == base || path.starts_with(&format!("{}/", base))
 }
 
-fn format_log_record_timestamp(seconds: u64) -> String {
+pub(crate) fn format_log_record_timestamp(seconds: u64) -> String {
     let (year, month, day, hour, minute, second) = utc_parts_from_unix_seconds(seconds);
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
@@ -261,7 +267,7 @@ fn format_log_record_timestamp(seconds: u64) -> String {
     )
 }
 
-fn utc_parts_from_unix_seconds(seconds: u64) -> (i64, u32, u32, u64, u64, u64) {
+pub(crate) fn utc_parts_from_unix_seconds(seconds: u64) -> (i64, u32, u32, u64, u64, u64) {
     let days = (seconds / 86_400) as i64;
     let seconds_of_day = seconds % 86_400;
     let (year, month, day) = civil_from_days(days);
@@ -271,7 +277,7 @@ fn utc_parts_from_unix_seconds(seconds: u64) -> (i64, u32, u32, u64, u64, u64) {
     (year, month, day, hour, minute, second)
 }
 
-fn civil_from_days(days_since_unix_epoch: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(days_since_unix_epoch: i64) -> (i64, u32, u32) {
     let days = days_since_unix_epoch + 719_468;
     let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
     let day_of_era = days - era * 146_097;
@@ -285,13 +291,11 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i64, u32, u32) {
     (year, month as u32, day as u32)
 }
 
-fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
-    let mut patterns = vec![
-        ".canon".to_string(),
-        ".canon/**".to_string(),
-        ".git/canon".to_string(),
-        ".git/canon/**".to_string(),
-    ];
+pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
+    let mut patterns = MANDATORY_EVALUATOR_DENY_PATTERNS
+        .iter()
+        .map(|pattern| (*pattern).to_string())
+        .collect::<Vec<_>>();
     for pattern in &agent.ignore {
         if !patterns.iter().any(|existing| existing == pattern) {
             patterns.push(pattern.clone());
@@ -299,3 +303,5 @@ fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
     }
     patterns
 }
+pub(crate) const MANDATORY_EVALUATOR_DENY_PATTERNS: &[&str] =
+    &[".canon", ".canon/**", ".git/canon", ".git/canon/**"];
