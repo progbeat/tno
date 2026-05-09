@@ -1,0 +1,62 @@
+# Logs
+
+`canon check` records runtime log events under `.git/canon/logs`.
+
+Runtime logs are JSON Lines files. Each non-empty line is one complete JSON
+object.
+
+The active runtime log file is `.git/canon/logs/0.jsonl`. Older runtime logs may
+be retained as rotated files in the same directory.
+
+Runtime log retention is bounded to four files named `0.jsonl`, `1.jsonl`,
+`2.jsonl`, and `3.jsonl`.
+
+Before the first runtime log event is written during a `canon check` invocation,
+`0.jsonl` is rotated when it is larger than 128 KiB. Rotation deletes `3.jsonl`
+when present, renames `2.jsonl` to `3.jsonl`, renames `1.jsonl` to `2.jsonl`,
+and renames `0.jsonl` to `1.jsonl`. The next runtime log write creates a new
+`0.jsonl`.
+
+Each runtime log event contains these fields:
+
+```text
+timestamp
+level
+event
+```
+
+`timestamp` is UTC and records when the event is produced.
+
+`level` is a single-line severity label.
+
+`event` is a single-line event name.
+
+Additional fields depend on the event type. Event-specific data is recorded as
+structured JSON fields, not encoded into a human-readable message string.
+
+Runtime logs include events for check start, expectation results, warnings,
+model failures, model fallback attempts, token usage, agent communication, and
+check finish.
+
+Events may include a single-line `message` field only when human-readable text
+adds useful context beyond the structured fields.
+
+Agent communication events record the boundary between `canon check` and the
+evaluator agent. The runtime log contains enough structured information to audit
+tasks sent to the evaluator and raw assistant responses received before parsing
+or repair.
+
+Agent communication request payloads do not include hidden expected answers.
+
+This document defines the runtime log container format and required coverage.
+Event-specific schemas are defined by the event types themselves; examples in
+this document illustrate JSON Lines shape, not a complete event registry.
+
+The human-readable stdout contract is defined in [[Check Output]].
+
+Hypothetical log event examples:
+
+```json
+{"timestamp":"2026-05-09T10:00:02Z","level":"warning","event":"model.fallback","from":"gpt-5.3-codex-spark","to":"gpt-5.4-mini","reason":"usageLimitExceeded"}
+{"timestamp":"2026-05-09T10:00:08Z","level":"info","event":"token.usage","total":170522,"input":166088,"cached_input":132352,"output":4434,"reasoning_output":3723}
+```
