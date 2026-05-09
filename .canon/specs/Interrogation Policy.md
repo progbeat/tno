@@ -45,6 +45,14 @@ when full-scope evidence can answer.
 When an interrogation with a full project scope returns `idk`, human review is
 required and that response is not written to reusable history.
 
+When the evaluator response is malformed or unparseable, `canon check` retries
+the same interrogation once before requiring human review.
+
+When the evaluator response has empty evidence, `canon check` retries the same
+interrogation once. If evidence remains empty but the answer is otherwise
+correct, the empty evidence is recorded as a warning and does not fail the
+expectation solely by itself.
+
 If the evaluator returns correct or incorrect answer and a narrower scope,
 `canon check` verifies that strict-subset scope with an independent interrogation
 on that restricted scope. The narrowed scope is accepted only when the observed
@@ -57,5 +65,12 @@ to reusable history.
 `canon check` uses `agent.model.primary` as the primary evaluator model.
 Configured `agent.model.fallbacks` are tried in order only after technical
 app-server or model failures such as `usageLimitExceeded`.
+
+`agent.thinking` configures the default evaluator thinking effort. An explicit
+expectation item may include a `thinking` value to override `agent.thinking` for
+that expectation. Generated expectations inherit the generator item's `thinking`
+when present, otherwise they use `agent.thinking`. The effective thinking effort
+is applied to the evaluator interrogation, but it does not require a separate
+evaluator thread when the enforced scope is the same.
 
 `canon check` requires human review when the evaluator answer is `malformed`.

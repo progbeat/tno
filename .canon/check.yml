@@ -43,8 +43,8 @@ expectations:
     a: "yes"
     cooldown: 7d
 
-  - q: "Can any available `canon check` result be delayed from real-time observation in stdout or any file?"
-    a: "no"
+  - q: "Does `canon check` write and flush every non-skipped per-expectation stdout result, reusable history record, and runtime log event as soon as that result or record is produced?"
+    a: "yes"
     cooldown: 3d
 
   - q: Can you read .canon/check.yml?

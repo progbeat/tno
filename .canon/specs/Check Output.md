@@ -9,7 +9,7 @@ one line:
 N. OK
 ```
 
-For each failing expectation, stdout contains exactly six lines:
+For each failed expectation, stdout contains exactly six lines:
 
 ```text
 N. FAILED
@@ -18,6 +18,16 @@ Expected: <escaped expected>
 Observed: <escaped observed>
 Evidence: <escaped evidence>
 Scope: <compact JSON array>
+```
+
+For each errored expectation, stdout contains exactly five lines:
+
+```text
+N. ERROR
+<escaped question>
+Expected: <escaped expected>
+Observed: <escaped observed>
+Evidence: <escaped evidence>
 ```
 
 `N` is the 1-based expectation number from the active check configuration.
@@ -34,35 +44,41 @@ allows it. Skipped expectations emit no per-expectation stdout and count as
 `skipped`, not `passed`, in the final summary. Failing results are never
 skipped.
 
-After all selected expectation results, stderr contains exactly one token usage
-line:
+After all selected expectation results are written, stderr contains exactly one
+token usage line:
 
 ```text
 Token usage: total=<n> input=<n> (+ <n> cached) output=<n> (reasoning <n>)
 ```
 
-The last line in stdout contains exactly one summary line:
+If token usage data is unavailable, every numeric field is `0`.
+
+After the token usage line is written, stdout contains exactly one summary line.
+This summary line is the last line written by `canon check`:
 
 ```text
 ============================= <outcome-list> in <duration>s =============================
 ```
 
-`outcome-list` is a comma-separated list of non-zero outcome counts using these
-labels: `passed`, `failed` and `skipped`. If every count is zero, the
-outcome list is `0 passed`.
-The outcome text is surrounded by spaces and padded with `=` characters on both sides.
+`outcome-list` is a comma-separated list of non-zero outcome counts in this
+order: failed, error/errors, passed, skipped. If every count is zero, the
+outcome list is `0 passed`. The outcome text is surrounded by spaces and padded
+with `=` characters on both sides.
+
+Outcome labels follow pytest pluralization: `failed`, `passed`, and `skipped`
+are used for both singular and plural counts; `error` is used for one error and
+`errors` for every other error count.
 
 `passed` is the number of non-skipped selected expectations whose final result
 is `pass`.
-`failed` is the number of selected expectations whose final result is `fail`.
+`failed` is the number of selected expectations whose final result is `fail`
+because the evaluator returned an answer that was parsed successfully and did
+not match the expected answer.
+`errors` is the number of selected expectations whose final result requires
+human review because the evaluator returned `malformed`, returned full-scope
+`idk`, or produced an unparseable response.
 `skipped` is the number of selected expectations satisfied by a reused passing
 result without evaluator interrogation or per-expectation stdout.
-
-After a `canon check` run starts writing check output, stderr contains exactly
-one token usage line:
-
-
-If token usage data is unavailable, every numeric field is `0`.
 
 Warnings, model fallback notices, review-required diagnostics, timestamps,
 hashes, and internal diagnostics are recorded in [[Logs]] rather than stdout or
@@ -81,10 +97,11 @@ Expected: yes
 Observed: no
 Evidence: specs/Check Output.md requires human-readable stdout\nsrc/check.rs still writes render_check_log_record(record) to stdout
 Scope: ["specs/Check Output.md","src/check.rs"]
-========================= 1 passed, 1 failed in 0.42s =========================
+========================= 1 failed, 1 passed in 0.42s =========================
 ```
 
-Example stderr for the same check run:
+Example stderr for the same check run, written after the selected expectation
+results and before the stdout summary:
 
 ```text
 Token usage: total=170,522 input=166,088 (+ 132,352 cached) output=4,434 (reasoning 3,723)
@@ -93,5 +110,11 @@ Token usage: total=170,522 input=166,088 (+ 132,352 cached) output=4,434 (reason
 Example summary with a skipped expectation:
 
 ```text
-===================== 1 passed, 1 failed, 1 skipped in 0.42s =====================
+===================== 1 failed, 1 passed, 1 skipped in 0.42s =====================
+```
+
+Example summary with an errored expectation:
+
+```text
+====================== 1 failed, 1 error, 1 passed in 0.42s ======================
 ```
