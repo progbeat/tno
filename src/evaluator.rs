@@ -6,7 +6,11 @@ pub(crate) fn evaluator_thread_config(
     model: Option<&str>,
 ) -> Value {
     let root_permissions = evaluator_thread_root_permissions(agent, scope);
-    let mut config = evaluator_base_config(Value::Object(root_permissions), "read");
+    let mut config = evaluator_base_config(
+        permission_map_value(&root_permissions),
+        "read",
+        codex_reasoning_effort(&agent.thinking),
+    );
     if let Some(model) = model.or(agent.model.primary.as_deref()) {
         config["model"] = Value::String(model.to_string());
     }
@@ -19,36 +23,36 @@ pub(crate) fn evaluator_thread_config(
 pub(crate) fn evaluator_thread_root_permissions(
     agent: &AgentConfig,
     scope: &[String],
-) -> Map<String, Value> {
-    let mut root_permissions = Map::new();
+) -> BTreeMap<String, String> {
+    let mut root_permissions = BTreeMap::new();
     if scope == full_scope() {
-        root_permissions.insert(".".to_string(), Value::String("read".to_string()));
+        root_permissions.insert(".".to_string(), "read".to_string());
     } else {
-        root_permissions.insert(".".to_string(), Value::String("none".to_string()));
+        root_permissions.insert(".".to_string(), "none".to_string());
         for path in scope {
-            root_permissions.insert(path.clone(), Value::String("read".to_string()));
-            root_permissions.insert(format!("{}/**", path), Value::String("read".to_string()));
+            root_permissions.insert(path.clone(), "read".to_string());
+            root_permissions.insert(format!("{}/**", path), "read".to_string());
         }
     }
     deny_evaluator_project_paths(&mut root_permissions, agent);
     root_permissions
 }
 
-pub(crate) fn evaluator_startup_root_permissions(agent: &AgentConfig) -> Map<String, Value> {
-    let mut root_permissions = Map::new();
-    root_permissions.insert(".".to_string(), Value::String("none".to_string()));
+pub(crate) fn evaluator_startup_root_permissions(agent: &AgentConfig) -> BTreeMap<String, String> {
+    let mut root_permissions = BTreeMap::new();
+    root_permissions.insert(".".to_string(), "none".to_string());
     deny_evaluator_project_paths(&mut root_permissions, agent);
     root_permissions
 }
 
 pub(crate) fn deny_evaluator_project_paths(
-    root_permissions: &mut Map<String, Value>,
+    root_permissions: &mut BTreeMap<String, String>,
     agent: &AgentConfig,
 ) {
     // Scope and ignore enforcement must stay in Codex filesystem permissions;
     // do not replace it with filtered project copies or hidden project paths.
     for pattern in evaluator_deny_permission_patterns(agent) {
-        root_permissions.insert(pattern, Value::String("none".to_string()));
+        root_permissions.insert(pattern, "none".to_string());
     }
 }
 
@@ -72,7 +76,19 @@ pub(crate) fn push_unique_permission_pattern(patterns: &mut Vec<String>, pattern
     }
 }
 
-pub(crate) fn evaluator_base_config(root_permissions: Value, root_access: &str) -> Value {
+pub(crate) fn permission_map_value(permissions: &BTreeMap<String, String>) -> Value {
+    let mut object = Map::new();
+    for (path, permission) in permissions {
+        object.insert(path.clone(), Value::String(permission.clone()));
+    }
+    Value::Object(object)
+}
+
+pub(crate) fn evaluator_base_config(
+    root_permissions: Value,
+    root_access: &str,
+    reasoning_effort: Option<&str>,
+) -> Value {
     let mut filesystem = Map::new();
     filesystem.insert(":root".to_string(), Value::String(root_access.to_string()));
     filesystem.insert(":project_roots".to_string(), root_permissions);
@@ -95,10 +111,12 @@ pub(crate) fn evaluator_base_config(root_permissions: Value, root_access: &str) 
     );
     config.insert("permissions".to_string(), Value::Object(permissions));
     config.insert("history".to_string(), json!({ "persistence": "none" }));
-    config.insert(
-        "model_reasoning_effort".to_string(),
-        Value::String("low".to_string()),
-    );
+    if let Some(reasoning_effort) = reasoning_effort {
+        config.insert(
+            "model_reasoning_effort".to_string(),
+            Value::String(reasoning_effort.to_string()),
+        );
+    }
     Value::Object(config)
 }
 
@@ -137,41 +155,53 @@ pub(crate) fn enabled_plugins_config(agent: &AgentConfig) -> Value {
     Value::Object(plugins)
 }
 
-pub(crate) fn app_server_args(load_plugins: bool, agent: &AgentConfig) -> Vec<String> {
+pub(crate) fn app_server_args(
+    load_plugins: bool,
+    agent: &AgentConfig,
+    startup_model: Option<&str>,
+) -> Vec<String> {
     let mut args = vec!["app-server".to_string()];
     if !load_plugins {
         args.push("--disable".to_string());
         args.push("plugins".to_string());
     }
-    args.extend(app_server_startup_config_args(agent));
+    args.extend(app_server_startup_config_args(agent, startup_model));
     args.push("--listen".to_string());
     args.push("stdio://".to_string());
     args
 }
 
-pub(crate) fn app_server_startup_config_args(agent: &AgentConfig) -> Vec<String> {
+pub(crate) fn app_server_startup_config_args(
+    agent: &AgentConfig,
+    startup_model: Option<&str>,
+) -> Vec<String> {
     let mut args = Vec::new();
     push_config_arg(&mut args, "default_permissions=\"canon_check\"");
     push_config_arg(&mut args, "history.persistence=\"none\"");
-    push_config_arg(&mut args, "model_reasoning_effort=\"low\"");
+    if let Some(model) = startup_model {
+        push_config_arg(&mut args, &format!("model={}", toml_string(model)));
+    }
+    if let Some(reasoning_effort) = codex_reasoning_effort(&agent.thinking) {
+        push_config_arg(
+            &mut args,
+            &format!("model_reasoning_effort={}", toml_string(reasoning_effort)),
+        );
+    }
     push_config_arg(&mut args, "permissions.canon_check.network.enabled=false");
     push_config_arg(&mut args, &app_server_startup_filesystem_arg(agent));
     args
+}
+
+pub(crate) fn app_server_model_key(model: Option<&str>) -> String {
+    model.unwrap_or("<default>").to_string()
 }
 
 pub(crate) fn app_server_startup_filesystem_arg(agent: &AgentConfig) -> String {
     let mut entries = Vec::new();
     entries.push(toml_assignment(":root", &toml_string("read")));
     let mut project_root_entries = Vec::new();
-    for (path, value) in evaluator_startup_root_permissions(agent) {
-        project_root_entries.push(toml_assignment(
-            &path,
-            &toml_string(
-                value
-                    .as_str()
-                    .expect("startup project root permissions are strings"),
-            ),
-        ));
+    for (path, permission) in evaluator_startup_root_permissions(agent) {
+        project_root_entries.push(toml_assignment(&path, &toml_string(&permission)));
     }
     entries.push(format!(
         "{}={{{}}}",
@@ -229,7 +259,8 @@ pub(crate) struct AppServerRunner {
 pub(crate) struct LazyAppServerRunner {
     load_plugins: bool,
     agent: AgentConfig,
-    inner: Option<AppServerRunner>,
+    inners: BTreeMap<String, AppServerRunner>,
+    session_models: BTreeMap<String, String>,
 }
 
 pub(crate) fn spawn_app_server_reader(
@@ -265,25 +296,32 @@ impl LazyAppServerRunner {
         LazyAppServerRunner {
             load_plugins,
             agent: agent.clone(),
-            inner: None,
+            inners: BTreeMap::new(),
+            session_models: BTreeMap::new(),
         }
     }
 
-    fn inner(&mut self) -> Result<&mut AppServerRunner, String> {
-        if self.inner.is_none() {
-            self.inner = Some(AppServerRunner::new(self.load_plugins, &self.agent)?);
+    fn inner(&mut self, model: Option<&str>) -> Result<&mut AppServerRunner, String> {
+        let key = app_server_model_key(model);
+        if !self.inners.contains_key(&key) {
+            let runner = AppServerRunner::new(self.load_plugins, &self.agent, model)?;
+            self.inners.insert(key.clone(), runner);
         }
-        Ok(self
-            .inner
-            .as_mut()
-            .expect("app-server runner is initialized"))
+        match self.inners.get_mut(&key) {
+            Some(inner) => Ok(inner),
+            None => Err("app-server runner is not initialized".to_string()),
+        }
     }
 }
 
 impl AppServerRunner {
-    fn new(load_plugins: bool, agent: &AgentConfig) -> Result<AppServerRunner, String> {
+    fn new(
+        load_plugins: bool,
+        agent: &AgentConfig,
+        startup_model: Option<&str>,
+    ) -> Result<AppServerRunner, String> {
         let mut command = Command::new("codex");
-        command.args(app_server_args(load_plugins, agent));
+        command.args(app_server_args(load_plugins, agent, startup_model));
         #[cfg(unix)]
         command.process_group(0);
         let mut child = command
@@ -385,6 +423,7 @@ impl AppServerRunner {
             .get("threadId")
             .and_then(Value::as_str)
             .map(str::to_string);
+        let deadline = Instant::now() + Duration::from_secs(APP_SERVER_TURN_TIMEOUT_SECS);
         let mut turn_id: Option<String> = None;
         let mut interrupted = false;
         let mut interrupt_sent = false;
@@ -396,6 +435,12 @@ impl AppServerRunner {
                 turn_id.as_deref(),
             )?;
             let Some(message) = self.read_message_or_timeout()? else {
+                if Instant::now() >= deadline {
+                    return Err(format!(
+                        "app-server {} timed out after {} seconds",
+                        method, APP_SERVER_TURN_TIMEOUT_SECS
+                    ));
+                }
                 continue;
             };
             self.record_token_usage(&message);
@@ -550,11 +595,21 @@ impl AppServerRunner {
 
 impl LazyAppServerRunner {
     pub(crate) fn token_usage(&self) -> Option<TokenUsage> {
-        self.inner.as_ref().and_then(AppServerRunner::token_usage)
+        let mut total = TokenUsage::default();
+        for runner in self.inners.values() {
+            if let Some(usage) = runner.token_usage() {
+                total = total.add(usage);
+            }
+        }
+        if total.total_tokens == 0 {
+            None
+        } else {
+            Some(total)
+        }
     }
 
     pub(crate) fn drain_token_usage_updates(&mut self) {
-        if let Some(inner) = self.inner.as_mut() {
+        for inner in self.inners.values_mut() {
             inner.drain_token_usage_updates();
         }
     }
@@ -795,6 +850,8 @@ impl EvaluatorRunner for AppServerRunner {
     }
 
     fn ask(&mut self, session_id: &str, prompt: &str) -> Result<String, String> {
+        let input = evaluator_turn_input(prompt)?;
+        let input_text = render_evaluator_turn_input(&input)?;
         self.send_turn_request(
             "turn/start",
             json!({
@@ -802,12 +859,29 @@ impl EvaluatorRunner for AppServerRunner {
                 "input": [
                     {
                         "type": "text",
-                        "text": prompt
+                        "text": input_text
                     }
                 ]
             }),
         )
     }
+}
+
+pub(crate) fn evaluator_turn_input(prompt: &str) -> Result<Value, String> {
+    let input: Value = serde_json::from_str(prompt)
+        .map_err(|err| format!("failed to parse evaluator task input JSON: {}", err))?;
+    let Value::Object(fields) = &input else {
+        return Err("evaluator task input must be a JSON object".to_string());
+    };
+    if fields.len() != 2 || !fields.contains_key("scope") || !fields.contains_key("question") {
+        return Err("evaluator task input must contain only scope and question".to_string());
+    }
+    Ok(input)
+}
+
+pub(crate) fn render_evaluator_turn_input(input: &Value) -> Result<String, String> {
+    serde_json::to_string(input)
+        .map_err(|err| format!("failed to serialize evaluator task input JSON: {}", err))
 }
 
 impl EvaluatorRunner for LazyAppServerRunner {
@@ -819,12 +893,24 @@ impl EvaluatorRunner for LazyAppServerRunner {
         model: Option<&str>,
         scope: &[String],
     ) -> Result<String, String> {
-        self.inner()?
-            .start_session(root, instructions, agent, model, scope)
+        let key = app_server_model_key(model);
+        let session_id =
+            self.inner(model)?
+                .start_session(root, instructions, agent, model, scope)?;
+        self.session_models.insert(session_id.clone(), key);
+        Ok(session_id)
     }
 
     fn ask(&mut self, session_id: &str, prompt: &str) -> Result<String, String> {
-        self.inner()?.ask(session_id, prompt)
+        let key = self
+            .session_models
+            .get(session_id)
+            .cloned()
+            .ok_or("app-server runner does not own session".to_string())?;
+        self.inners
+            .get_mut(&key)
+            .ok_or("app-server runner is not initialized".to_string())?
+            .ask(session_id, prompt)
     }
 }
 

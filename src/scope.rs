@@ -1,11 +1,114 @@
 use crate::*;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ScopeHashSource {
     Index,
     Head,
 }
 
+type ScopeCacheKey = (PathBuf, ScopeHashSource, Vec<String>, Vec<String>);
+
+#[derive(Default)]
+pub(crate) struct ScopeHashCache {
+    values: BTreeMap<ScopeCacheKey, Option<String>>,
+    entries: BTreeMap<ScopeCacheKey, Option<Vec<String>>>,
+    head_exists: BTreeMap<PathBuf, bool>,
+}
+
+impl ScopeHashCache {
+    pub(crate) fn new() -> ScopeHashCache {
+        ScopeHashCache::default()
+    }
+
+    pub(crate) fn staged_scope_hash(
+        &mut self,
+        root: &Path,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<String, String> {
+        self.scope_hash_for_source(root, agent, scope, ScopeHashSource::Index)?
+            .ok_or("failed to hash staged scope".to_string())
+    }
+
+    pub(crate) fn scope_hash_for_source(
+        &mut self,
+        root: &Path,
+        agent: &AgentConfig,
+        scope: &[String],
+        source: ScopeHashSource,
+    ) -> Result<Option<String>, String> {
+        let scope = sanitize_scope(scope, agent)?;
+        let key = scope_cache_key(root, agent, &scope, source);
+        if let Some(hash) = self.values.get(&key) {
+            return Ok(hash.clone());
+        }
+        let hash = self
+            .scope_entries_for_key(root, agent, &scope, source, &key)?
+            .map(|entries| hash_120(entries.join("\n").as_bytes()));
+        self.values.insert(key, hash.clone());
+        Ok(hash)
+    }
+
+    fn scope_entries_for_key(
+        &mut self,
+        root: &Path,
+        agent: &AgentConfig,
+        scope: &[String],
+        source: ScopeHashSource,
+        key: &ScopeCacheKey,
+    ) -> Result<Option<Vec<String>>, String> {
+        if let Some(entries) = self.entries.get(key) {
+            return Ok(entries.clone());
+        }
+        let entries = match source {
+            ScopeHashSource::Index => staged_scope_entries(root, agent, scope).map(Some)?,
+            ScopeHashSource::Head => self.head_scope_entries(root, agent, scope)?,
+        };
+        self.entries.insert(key.clone(), entries.clone());
+        Ok(entries)
+    }
+
+    fn head_scope_entries(
+        &mut self,
+        root: &Path,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<Option<Vec<String>>, String> {
+        if !self.git_has_head(root)? {
+            return Ok(None);
+        }
+        head_scope_entries_for_existing_head(root, agent, scope).map(Some)
+    }
+
+    fn git_has_head(&mut self, root: &Path) -> Result<bool, String> {
+        if let Some(has_head) = self.head_exists.get(root) {
+            return Ok(*has_head);
+        }
+        let has_head = git_has_head(root)?;
+        self.head_exists.insert(root.to_path_buf(), has_head);
+        Ok(has_head)
+    }
+}
+
+pub(crate) fn scope_hash_agent_key(agent: &AgentConfig) -> Vec<String> {
+    effective_ignore_patterns(agent)
+}
+
+fn scope_cache_key(
+    root: &Path,
+    agent: &AgentConfig,
+    scope: &[String],
+    source: ScopeHashSource,
+) -> ScopeCacheKey {
+    (
+        root.to_path_buf(),
+        source,
+        scope.to_vec(),
+        scope_hash_agent_key(agent),
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn staged_scope_hash(
     root: &Path,
     agent: &AgentConfig,
@@ -15,6 +118,7 @@ pub(crate) fn staged_scope_hash(
         .ok_or("failed to hash staged scope".to_string())
 }
 
+#[cfg(test)]
 pub(crate) fn scope_hash_for_source(
     root: &Path,
     agent: &AgentConfig,
@@ -22,6 +126,16 @@ pub(crate) fn scope_hash_for_source(
     source: ScopeHashSource,
 ) -> Result<Option<String>, String> {
     let scope = sanitize_scope(scope, agent)?;
+    scope_hash_for_canonical_scope(root, agent, &scope, source)
+}
+
+#[cfg(test)]
+pub(crate) fn scope_hash_for_canonical_scope(
+    root: &Path,
+    agent: &AgentConfig,
+    scope: &[String],
+    source: ScopeHashSource,
+) -> Result<Option<String>, String> {
     let entries = match source {
         ScopeHashSource::Index => staged_scope_entries(root, agent, &scope).map(Some)?,
         ScopeHashSource::Head => head_scope_entries(root, agent, &scope)?,
@@ -70,6 +184,7 @@ pub(crate) fn staged_scope_entries(
     Ok(entries)
 }
 
+#[cfg(test)]
 pub(crate) fn head_scope_entries(
     root: &Path,
     agent: &AgentConfig,
@@ -78,6 +193,14 @@ pub(crate) fn head_scope_entries(
     if !git_has_head(root)? {
         return Ok(None);
     }
+    head_scope_entries_for_existing_head(root, agent, scope).map(Some)
+}
+
+pub(crate) fn head_scope_entries_for_existing_head(
+    root: &Path,
+    agent: &AgentConfig,
+    scope: &[String],
+) -> Result<Vec<String>, String> {
     let mut command = Command::new("git");
     command
         .arg("-C")
@@ -112,7 +235,7 @@ pub(crate) fn head_scope_entries(
     }
     entries.sort();
     entries.dedup();
-    Ok(Some(entries))
+    Ok(entries)
 }
 
 pub(crate) fn git_has_head(root: &Path) -> Result<bool, String> {

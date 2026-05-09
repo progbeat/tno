@@ -7,7 +7,7 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Once;
 use std::thread::{self, JoinHandle};
@@ -24,16 +24,16 @@ const GIT_CANON_CACHE_DIR: &str = "canon/cache";
 const GIT_CANON_LOG_DIR: &str = "canon/logs";
 const DIAGNOSTIC_LOG_MAX_BYTES: u64 = 128 * 1024;
 const DIAGNOSTIC_LOG_FILES: [&str; 4] = ["0.jsonl", "1.jsonl", "2.jsonl", "3.jsonl"];
+const APP_SERVER_TURN_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_CHECK_TEMPLATE: &str = include_str!("../templates/check.yml");
 const GIT_HOOKS_PATH: &str = ".git/hooks";
-const LEGACY_GIT_HOOKS_PATH: &str = ".githooks";
 const PRE_COMMIT_HOOK_PATH: &str = ".git/hooks/pre-commit";
-const LEGACY_PRE_COMMIT_HOOK_PATH: &str = ".githooks/pre-commit";
 const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../templates/pre-commit");
 const MALFORMED_REVIEW_WARNING: &str =
     "human review required: evaluator marked the expectation question as malformed";
 const UNPARSEABLE_OBSERVED: &str = "unparseable";
 static CHECK_INTERRUPTED: AtomicBool = AtomicBool::new(false);
+static COMPACTION_SAMPLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SIGNAL_HANDLER_INIT: Once = Once::new();
 
 #[cfg(unix)]

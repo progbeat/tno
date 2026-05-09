@@ -4,46 +4,115 @@ pub(crate) fn history_path(
     root: &Path,
     expectation: &SelectedExpectation,
 ) -> Result<PathBuf, String> {
-    git_path(
-        root,
-        &format!("{}/{}/history.jsonl", GIT_CANON_CACHE_DIR, expectation.id),
-    )
+    git_path(root, &history_git_path(expectation))
 }
 
+pub(crate) fn history_git_path(expectation: &SelectedExpectation) -> String {
+    [GIT_CANON_CACHE_DIR, &expectation.id, "history.jsonl"].join("/")
+}
+
+#[cfg(test)]
 pub(crate) fn read_history_records(
     root: &Path,
     expectation: &SelectedExpectation,
 ) -> Result<Vec<CheckRecord>, String> {
     let path = history_path(root, expectation)?;
+    read_history_records_from_path(&path)
+}
+
+pub(crate) fn read_history_records_from_path(path: &Path) -> Result<Vec<CheckRecord>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let content = fs::read_to_string(&path)
-        .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
     let mut records = Vec::new();
-    for (index, line) in content.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let record = serde_json::from_str::<CheckRecord>(line).map_err(|err| {
+    let file = fs::File::open(path)
+        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
+    for (index, line) in BufReader::new(file).lines().enumerate() {
+        let line = line.map_err(|err| {
             format!(
-                "failed to parse {} line {}: {}",
+                "failed to read {} line {}: {}",
                 path.display(),
                 index + 1,
                 err
             )
         })?;
-        records.push(record);
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<CheckRecord>(&line) {
+            Ok(record) => records.push(record),
+            Err(err) => {
+                // Invalid history lines are not reusable cache evidence. Warn
+                // and skip them so a corrupt old cache entry cannot block a
+                // fresh evaluator interrogation for the current staged tree.
+                eprintln!(
+                    "canon check: warning: malformed history record is not reusable in {} line {}: {}",
+                    path.display(),
+                    index + 1,
+                    err
+                );
+            }
+        }
     }
     Ok(records)
 }
 
+#[derive(Default)]
+pub(crate) struct HistoryCache {
+    paths: BTreeMap<(PathBuf, String), PathBuf>,
+    records: BTreeMap<PathBuf, Vec<CheckRecord>>,
+}
+
+impl HistoryCache {
+    pub(crate) fn new() -> HistoryCache {
+        HistoryCache::default()
+    }
+
+    pub(crate) fn read_records(
+        &mut self,
+        root: &Path,
+        expectation: &SelectedExpectation,
+    ) -> Result<Vec<CheckRecord>, String> {
+        let path = self.path(root, expectation)?;
+        if let Some(records) = self.records.get(&path) {
+            return Ok(records.clone());
+        }
+        let records = read_history_records_from_path(&path)?;
+        self.records.insert(path, records.clone());
+        Ok(records)
+    }
+
+    pub(crate) fn path(
+        &mut self,
+        root: &Path,
+        expectation: &SelectedExpectation,
+    ) -> Result<PathBuf, String> {
+        let key = (root.to_path_buf(), expectation.id.clone());
+        if let Some(path) = self.paths.get(&key) {
+            return Ok(path.clone());
+        }
+        let path = history_path(root, expectation)?;
+        self.paths.insert(key, path.clone());
+        Ok(path)
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn reusable_history_record(
     root: &Path,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
 ) -> Result<Option<CheckRecord>, String> {
-    reusable_history_record_for_source(root, agent, expectation, ScopeHashSource::Index)
+    let mut scope_hash_cache = ScopeHashCache::new();
+    let mut history_cache = HistoryCache::new();
+    reusable_history_record_for_source(
+        root,
+        agent,
+        expectation,
+        ScopeHashSource::Index,
+        &mut history_cache,
+        &mut scope_hash_cache,
+    )
 }
 
 pub(crate) fn reusable_history_record_for_source(
@@ -51,8 +120,10 @@ pub(crate) fn reusable_history_record_for_source(
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
     source: ScopeHashSource,
+    history_cache: &mut HistoryCache,
+    scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<Option<CheckRecord>, String> {
-    let records = read_history_records(root, expectation)?;
+    let records = history_cache.read_records(root, expectation)?;
     for mut record in records.into_iter().rev() {
         if record.observed == UNPARSEABLE_OBSERVED {
             continue;
@@ -61,8 +132,10 @@ pub(crate) fn reusable_history_record_for_source(
             Ok(scope) => scope,
             Err(_) => continue,
         };
-        let Some(current_hash) = scope_hash_for_source(root, agent, &scope, source)? else {
-            return Ok(None);
+        let Some(current_hash) =
+            scope_hash_cache.scope_hash_for_source(root, agent, &scope, source)?
+        else {
+            continue;
         };
         if current_hash == record.scope_hash {
             record.scope = scope;
@@ -75,13 +148,17 @@ pub(crate) fn reusable_history_record_for_source(
     Ok(None)
 }
 
-pub(crate) fn latest_history_scope(
+pub(crate) fn latest_history_scope_with_cache(
     root: &Path,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
 ) -> Result<Option<Vec<String>>, String> {
-    let records = read_history_records(root, expectation)?;
+    let records = history_cache.read_records(root, expectation)?;
     for record in records.into_iter().rev() {
+        if record.result != "pass" {
+            continue;
+        }
         if record.observed == "idk"
             || record.observed == "malformed"
             || record.observed == UNPARSEABLE_OBSERVED
@@ -95,12 +172,23 @@ pub(crate) fn latest_history_scope(
     Ok(None)
 }
 
+#[cfg(test)]
 pub(crate) fn append_history_record(
     root: &Path,
     expectation: &SelectedExpectation,
     record: &CheckRecord,
 ) -> Result<(), String> {
-    let path = history_path(root, expectation)?;
+    let mut cache = HistoryCache::new();
+    append_history_record_with_cache(root, expectation, record, &mut cache)
+}
+
+pub(crate) fn append_history_record_with_cache(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    record: &CheckRecord,
+    history_cache: &mut HistoryCache,
+) -> Result<(), String> {
+    let path = history_cache.path(root, expectation)?;
     if let Some(parent) = path.parent() {
         ensure_dir(parent)?;
     }
@@ -114,46 +202,97 @@ pub(crate) fn append_history_record(
         .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
     file.flush()
         .map_err(|err| format!("failed to flush {}: {}", path.display(), err))?;
-    if should_compact_history()? {
+    let had_cached_records = history_cache.records.contains_key(&path);
+    let compacted = should_compact_history()?;
+    if compacted {
         compact_history(&path)?;
+    }
+    if had_cached_records {
+        if compacted {
+            let records = read_history_records_from_path(&path)?;
+            history_cache.records.insert(path, records);
+        } else if let Some(records) = history_cache.records.get_mut(&path) {
+            records.push(record.clone());
+        }
     }
     Ok(())
 }
 
 pub(crate) fn should_compact_history() -> Result<bool, String> {
-    let mut bytes = [0_u8; 2];
-    let mut file = fs::File::open("/dev/urandom")
-        .map_err(|err| format!("failed to open OS random source: {}", err))?;
-    file.read_exact(&mut bytes)
-        .map_err(|err| format!("failed to read OS random source: {}", err))?;
-    Ok(u16::from_ne_bytes(bytes) % 15 == 0)
+    let append_index = COMPACTION_SAMPLE_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+    Ok(append_index % 15 == 0)
 }
 
 pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }
-    let content = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
-    let mut lines = content
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if lines.len() <= 5 {
+    let file = fs::File::open(path)
+        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
+    let mut total_lines = 0usize;
+    let mut saw_invalid_line = false;
+    let mut lines = std::collections::VecDeque::new();
+    for (index, line) in BufReader::new(file).lines().enumerate() {
+        let line = line.map_err(|err| {
+            format!(
+                "failed to read {} line {}: {}",
+                path.display(),
+                index + 1,
+                err
+            )
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if !is_valid_json_object_line(&line) {
+            saw_invalid_line = true;
+            continue;
+        }
+        total_lines += 1;
+        lines.push_back(line);
+        if lines.len() > 5 {
+            lines.pop_front();
+        }
+    }
+    if total_lines <= 5 && !saw_invalid_line {
         return Ok(());
     }
-    lines = lines.split_off(lines.len() - 5);
-    let mut file = fs::File::create(path)
-        .map_err(|err| format!("failed to rewrite {}: {}", path.display(), err))?;
+    let temp_path = compact_history_temp_path(path)?;
+    let mut file = fs::File::create(&temp_path)
+        .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
     for line in lines {
         file.write_all(line.as_bytes())
-            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+            .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
         file.write_all(b"\n")
-            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+            .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
     }
     file.flush()
-        .map_err(|err| format!("failed to flush {}: {}", path.display(), err))
+        .map_err(|err| format!("failed to flush {}: {}", temp_path.display(), err))?;
+    drop(file);
+    fs::rename(&temp_path, path).map_err(|err| {
+        format!(
+            "failed to replace {} with {}: {}",
+            path.display(),
+            temp_path.display(),
+            err
+        )
+    })
+}
+
+pub(crate) fn is_valid_json_object_line(line: &str) -> bool {
+    match serde_json::from_str::<Value>(line) {
+        Ok(value) => value.is_object(),
+        Err(_) => false,
+    }
+}
+
+pub(crate) fn compact_history_temp_path(path: &Path) -> Result<PathBuf, String> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("history path has no file name: {}", path.display()))?;
+    let mut temp_name = file_name.to_os_string();
+    temp_name.push(".tmp");
+    Ok(path.with_file_name(temp_name))
 }
 
 pub(crate) fn rotate_diagnostic_logs_if_needed(log_dir: &Path) -> Result<(), String> {

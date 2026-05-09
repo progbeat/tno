@@ -5,6 +5,7 @@ agent:
     primary: gpt-5.4-mini
     fallbacks:
       - gpt-5.3-codex-spark
+  thinking: low
   instructions: |
     Use the following response policy:
     Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
@@ -14,8 +15,8 @@ agent:
     If the question is malformed, answer exactly `malformed`.
     Scoring policy:
     * Correct answer: +5
-    * Incorrect answer: -5
-    * `idk`: 0
+    * Incorrect answer: -10
+    * `idk`: -1 + retry on full project scope
     * `malformed`: N/A, human review required
     Scope policy:
     * `scope` is the smallest allowed project context sufficient to answer the expectation with the same answer.

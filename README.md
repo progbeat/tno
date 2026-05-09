@@ -147,6 +147,7 @@ agent:
     primary: gpt-5.4-mini
     fallbacks:
       - gpt-5.3-codex-spark
+  thinking: low
   instructions: |
     Use the following response policy:
     Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
@@ -156,8 +157,8 @@ agent:
     If the question is malformed, answer exactly `malformed`.
     Scoring policy:
     * Correct answer: +5
-    * Incorrect answer: -5
-    * `idk`: 0
+    * Incorrect answer: -10
+    * `idk`: -1 + retry on full project scope
     * `malformed`: N/A, human review required
     Scope policy:
     * `scope` is the smallest allowed project context sufficient to answer the expectation with the same answer.
@@ -175,20 +176,28 @@ expectations:
     a: "yes"
 ```
 
-The single configured agent answers every selected expectation. `model` selects
-the evaluator model. `ignore` lists repository-relative files or globs that the
-evaluator must not read, and `.canon/**` plus `.git/canon/**` are always added
-to the effective ignore list. `plugins` lists Codex plugin config keys such as
-`canon@codex-plugins`; when the list is empty, `canon check` starts
-`codex app-server` with plugin loading disabled. Expected answers are
-single-line strings compared by exact equality; `idk` is just an ordinary answer
-string.
+The check schema has exactly one evaluator agent, configured through a single
+top-level `agent` section. That section contains `instructions`, `model`
+(`primary` and `fallbacks`), `ignore`, and `plugins`; there is no multiple-agent
+schema. `thinking` controls the Codex reasoning effort used for that model.
+`ignore` lists repository-relative files or globs that the evaluator must not
+read, and `.canon/**` plus `.git/canon/**` are always added to the effective
+ignore list. `plugins` lists Codex plugin config keys such as
+`canon@codex-plugins`; when the list is empty, `canon check` starts `codex
+app-server` with plugin loading disabled. Expected answers are single-line
+strings compared by exact equality; `idk` is just an ordinary answer string.
+Although evaluator threads cannot read `.canon/check.yml`, `canon check` parses
+that file before starting the evaluator. The accepted configuration shape is
+therefore verified by the Rust schema and validation code in `src/cli.rs` and
+`src/check.rs`, while the embedded default file lives in `templates/check.yml`.
 
 `canon check` supplies the evaluator response protocol through thread developer
-instructions, asks one question at a time as a JSON object with `scope` and
-`question`, restricts ignored paths and narrowed scopes through Codex filesystem
-permissions, and prints one JSON object per selected expectation to stdout as
-soon as that result is available. The stdout object includes `timestamp`,
+instructions, asks one question at a time with a task payload that is exactly a
+JSON object containing only `scope` and `question`, transports that payload
+through the required Codex app-server text input envelope, restricts ignored
+paths and narrowed scopes through Codex filesystem permissions, and prints one
+JSON object per selected expectation to stdout as soon as that result is
+available. The stdout object includes `timestamp`,
 `number`, `result`, `prompt`, `expected`, `observed`, `evidence`, `scope`, and
 `scopeHash`. `evidence` cites supporting files or code; `scope` is the smallest
 allowed project context sufficient to answer with the same result, not a list of
@@ -206,12 +215,22 @@ Global diagnostic interrogation records are appended to
 to `3`, `1` to `2`, and `0` to `1`. The next diagnostic write creates a fresh
 `0.jsonl`.
 
-`canon gate` is cache-only and side-effect-free. It passes when every
-expectation either has a reusable cached `pass` record for the current staged
-snapshot or has reusable cached `fail` records for both the current staged
-snapshot and `HEAD`, which means the failure was already present before the
-staged change. It asks you to run `canon check` when cache records are missing
-and prints new cached failures when they are present.
+The staged Git snapshot is exposed at the real project root by temporarily
+preserving unstaged and untracked worktree changes with Git's own stash/index
+machinery, then restoring them on drop. This is a deliberate in-place index-view
+mechanism rather than a filtered copy of the project, because file visibility is
+enforced by Codex filesystem permissions. App-server cleanup deliberately uses a
+Unix process group so
+`Ctrl+C`, normal completion, and failures terminate and reap the whole evaluator
+process tree instead of leaving child commands behind.
+
+After command/config/staged-change preflight, `canon gate` is cache-only and
+side-effect-free. It passes when every expectation either has a reusable cached
+`pass` record for the current staged snapshot or has reusable cached `fail`
+records for both the current staged snapshot and `HEAD`, which means the failure
+was already present before the staged change. It asks you to run `canon check`
+when cache records are missing and prints new cached failures when they are
+present.
 
 If an evaluator answers `malformed`, `canon check` retries once. If the final
 answer is still `malformed`, the expectation fails and `canon check` prints a

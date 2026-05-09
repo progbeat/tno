@@ -27,20 +27,17 @@ pub(crate) fn run_hook_command(root: &Path, args: &[OsString]) -> Result<(), Str
 }
 
 pub(crate) fn run_hook_install(root: &Path) -> Result<(), String> {
-    preflight_pre_commit_hook(root)?;
-    preflight_git_hooks_path(root)?;
-    install_pre_commit_hook(root)
+    let state = HookInstallState::load(root)?;
+    preflight_pre_commit_hook_content(state.pre_commit_hook.as_deref())?;
+    preflight_git_hooks_path_state(&state)?;
+    install_pre_commit_hook_with_state(root, &state)
 }
 
-pub(crate) fn preflight_pre_commit_hook(root: &Path) -> Result<(), String> {
-    let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
-    if !hook_path.exists() {
-        return Ok(());
-    }
-
-    let existing = fs::read_to_string(&hook_path)
-        .map_err(|err| format!("failed to read {}: {}", hook_path.display(), err))?;
-    if !pre_commit_hook_is_reusable(&existing) {
+pub(crate) fn preflight_pre_commit_hook_content(content: Option<&str>) -> Result<(), String> {
+    if let Some(existing) = content {
+        if pre_commit_hook_is_reusable(existing) {
+            return Ok(());
+        }
         return Err(format!(
             "{} already exists with different content",
             PRE_COMMIT_HOOK_PATH
@@ -49,12 +46,9 @@ pub(crate) fn preflight_pre_commit_hook(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn preflight_git_hooks_path(root: &Path) -> Result<(), String> {
-    if let Some(existing) = current_git_hooks_path(root)? {
+pub(crate) fn preflight_git_hooks_path_state(state: &HookInstallState) -> Result<(), String> {
+    if let Some(existing) = state.current_git_hooks_path.as_deref() {
         if existing == GIT_HOOKS_PATH {
-            return Ok(());
-        }
-        if existing == LEGACY_GIT_HOOKS_PATH && legacy_pre_commit_hook_is_reusable(root)? {
             return Ok(());
         }
         if existing != GIT_HOOKS_PATH {
@@ -67,37 +61,25 @@ pub(crate) fn preflight_git_hooks_path(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn legacy_pre_commit_hook_is_reusable(root: &Path) -> Result<bool, String> {
-    let hook_path = root.join(LEGACY_PRE_COMMIT_HOOK_PATH);
-    if !hook_path.exists() {
-        return Ok(true);
-    }
-    let existing = fs::read_to_string(&hook_path)
-        .map_err(|err| format!("failed to read {}: {}", hook_path.display(), err))?;
-    Ok(pre_commit_hook_is_reusable(&existing))
-}
-
 pub(crate) fn pre_commit_hook_is_reusable(content: &str) -> bool {
     content == DEFAULT_PRE_COMMIT_HOOK
-        || (content.contains("canon pre-commit:")
-            && content.contains("canon gate")
-            && content.contains("git status --porcelain -- .canon/"))
 }
 
-pub(crate) fn install_pre_commit_hook(root: &Path) -> Result<(), String> {
+pub(crate) fn install_pre_commit_hook_with_state(
+    root: &Path,
+    state: &HookInstallState,
+) -> Result<(), String> {
     let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
     if let Some(parent) = hook_path.parent() {
         ensure_dir(parent)?;
     }
-    let hook_needs_write = !hook_path.exists()
-        || fs::read_to_string(&hook_path).ok().as_deref() != Some(DEFAULT_PRE_COMMIT_HOOK);
-    if hook_needs_write {
+    if state.pre_commit_hook.as_deref() != Some(DEFAULT_PRE_COMMIT_HOOK) {
         fs::write(&hook_path, DEFAULT_PRE_COMMIT_HOOK)
             .map_err(|err| format!("failed to write {}: {}", hook_path.display(), err))?;
         println!("Installed {}", PRE_COMMIT_HOOK_PATH);
     }
     make_executable(&hook_path)?;
-    configure_git_hooks_path(root)?;
+    configure_git_hooks_path_with_state(root, state)?;
     Ok(())
 }
 
@@ -118,8 +100,11 @@ pub(crate) fn make_executable(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn configure_git_hooks_path(root: &Path) -> Result<(), String> {
-    if !is_git_worktree(root)? {
+pub(crate) fn configure_git_hooks_path_with_state(
+    root: &Path,
+    state: &HookInstallState,
+) -> Result<(), String> {
+    if !state.is_git_worktree {
         println!(
             "Git worktree not detected; {} was created but core.hooksPath was not set.",
             PRE_COMMIT_HOOK_PATH
@@ -127,7 +112,7 @@ pub(crate) fn configure_git_hooks_path(root: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    if current_git_hooks_path(root)?.as_deref() == Some(GIT_HOOKS_PATH) {
+    if state.current_git_hooks_path.as_deref() == Some(GIT_HOOKS_PATH) {
         println!("Git core.hooksPath already = {}", GIT_HOOKS_PATH);
         return Ok(());
     }
@@ -137,11 +122,7 @@ pub(crate) fn configure_git_hooks_path(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn current_git_hooks_path(root: &Path) -> Result<Option<String>, String> {
-    if !is_git_worktree(root)? {
-        return Ok(None);
-    }
-
+pub(crate) fn current_git_hooks_path_for_worktree(root: &Path) -> Result<Option<String>, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -198,4 +179,33 @@ pub(crate) fn is_git_worktree(root: &Path) -> Result<bool, String> {
     };
     Ok(output.status.success()
         && command_output_trimmed(&output.stdout, "git rev-parse stdout")? == "true")
+}
+
+pub(crate) struct HookInstallState {
+    pre_commit_hook: Option<String>,
+    current_git_hooks_path: Option<String>,
+    is_git_worktree: bool,
+}
+
+impl HookInstallState {
+    pub(crate) fn load(root: &Path) -> Result<HookInstallState, String> {
+        let is_git_worktree = is_git_worktree(root)?;
+        Ok(HookInstallState {
+            pre_commit_hook: read_optional_file(&root.join(PRE_COMMIT_HOOK_PATH))?,
+            current_git_hooks_path: if is_git_worktree {
+                current_git_hooks_path_for_worktree(root)?
+            } else {
+                None
+            },
+            is_git_worktree,
+        })
+    }
+}
+
+pub(crate) fn read_optional_file(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("failed to read {}: {}", path.display(), err)),
+    }
 }

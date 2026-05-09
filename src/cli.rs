@@ -12,7 +12,7 @@ pub(crate) struct Note {
     pub(crate) path: PathBuf,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CheckConfig {
     pub(crate) version: u32,
@@ -25,6 +25,8 @@ pub(crate) struct CheckConfig {
 pub(crate) struct AgentConfig {
     #[serde(default)]
     pub(crate) model: ModelConfig,
+    #[serde(default = "default_thinking")]
+    pub(crate) thinking: String,
     pub(crate) instructions: String,
     pub(crate) ignore: Vec<String>,
     pub(crate) plugins: Vec<String>,
@@ -39,6 +41,10 @@ pub(crate) struct ModelConfig {
     pub(crate) fallbacks: Vec<String>,
 }
 
+pub(crate) fn default_thinking() -> String {
+    "low".to_string()
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct TokenUsage {
     pub(crate) total_tokens: u64,
@@ -48,7 +54,7 @@ pub(crate) struct TokenUsage {
     pub(crate) reasoning_output_tokens: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Expectation {
     pub(crate) q: String,
@@ -63,7 +69,7 @@ pub(crate) struct SelectedExpectation {
     pub(crate) a: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ParsedAnswer {
     pub(crate) answer: String,
     pub(crate) evidence: String,
@@ -222,7 +228,11 @@ impl Config {
         if thread_id.trim().is_empty() {
             return Err("CODEX_THREAD_ID is empty".to_string());
         }
-        if thread_id.contains('/') || thread_id.contains('\\') {
+        if thread_id == "."
+            || thread_id == ".."
+            || thread_id.contains('/')
+            || thread_id.contains('\\')
+        {
             return Err("CODEX_THREAD_ID must be a single path segment".to_string());
         }
 
@@ -281,7 +291,20 @@ pub(crate) fn git_project_root(start: &Path) -> Result<PathBuf, String> {
             command_output_trimmed(&output.stderr, "git rev-parse stderr")?
         ));
     }
-    let root = String::from_utf8(output.stdout)
-        .map_err(|_| "git project root must be valid UTF-8".to_string())?;
-    Ok(PathBuf::from(root.trim()))
+    Ok(path_from_git_stdout(output.stdout))
+}
+
+pub(crate) fn path_from_git_stdout(mut bytes: Vec<u8>) -> PathBuf {
+    while matches!(bytes.last(), Some(b'\n' | b'\r')) {
+        bytes.pop();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        PathBuf::from(std::ffi::OsString::from_vec(bytes))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(&bytes).to_string())
+    }
 }

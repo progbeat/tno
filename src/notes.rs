@@ -75,12 +75,9 @@ pub(crate) fn read_note(config: &Config, key: &str) -> Result<(), String> {
     if !note.path.exists() {
         return Err(format!("canon not found for key: {}", key));
     }
-    verify_note_key(&note.path, key)?;
-    let mut file = fs::File::open(&note.path)
-        .map_err(|err| format!("failed to open {}: {}", note.path.display(), err))?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)
+    let content = fs::read_to_string(&note.path)
         .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
+    verify_note_key_from_first_line(&note.path, content.lines().next().unwrap_or(""), key)?;
     print!("{}", content);
     Ok(())
 }
@@ -170,6 +167,14 @@ pub(crate) fn normalize_body(text: &str) -> String {
 
 pub(crate) fn verify_note_key(path: &Path, expected_key: &str) -> Result<(), String> {
     let first = first_line(path)?;
+    verify_note_key_from_first_line(path, &first, expected_key)
+}
+
+pub(crate) fn verify_note_key_from_first_line(
+    path: &Path,
+    first: &str,
+    expected_key: &str,
+) -> Result<(), String> {
     let actual_key = parse_key_from_header(&first)
         .ok_or_else(|| format!("missing canon metadata in {}", path.display()))?;
     if actual_key != expected_key {
@@ -184,9 +189,13 @@ pub(crate) fn verify_note_key(path: &Path, expected_key: &str) -> Result<(), Str
 }
 
 pub(crate) fn first_line(path: &Path) -> Result<String, String> {
-    let content = fs::read_to_string(path)
+    let file = fs::File::open(path)
+        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
+    let mut line = String::new();
+    BufReader::new(file)
+        .read_line(&mut line)
         .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
-    Ok(content.lines().next().unwrap_or("").to_string())
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
 }
 
 pub(crate) fn parse_key_from_header(line: &str) -> Option<String> {
@@ -249,10 +258,18 @@ pub(crate) fn read_index(path: &Path) -> Result<Vec<(String, String)>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let content = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
     let mut entries = Vec::new();
-    for (line_number, line) in content.lines().enumerate() {
+    let file = fs::File::open(path)
+        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
+    for (line_number, line) in BufReader::new(file).lines().enumerate() {
+        let line = line.map_err(|err| {
+            format!(
+                "failed to read line {} in {}: {}",
+                line_number + 1,
+                path.display(),
+                err
+            )
+        })?;
         if line.trim().is_empty() {
             continue;
         }
