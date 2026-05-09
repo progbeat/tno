@@ -4,6 +4,10 @@ agent:
   model:
     primary: gpt-5.3-codex-spark
     fallbacks: [gpt-5.4-mini]
+  thinking: medium  # off | minimal | low | medium | high | xhigh | adaptive | max
+  plugins: []
+  ignore:
+    - "target/**"
   instructions: |
     Use the following response policy:
     Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
@@ -17,15 +21,14 @@ agent:
     * `idk`: 0
     * `malformed`: N/A, human review required
     Scope policy:
-    * `scope` is the smallest allowed project context sufficient to answer the expectation with the same answer.
+    * `scope` is the smallest allowed project context sufficient to determine the correct answer to the question among all valid answers, not merely to support the answer you gave.
     * `scope` is not the list of evidence citations; cite supporting files or code inside `EVIDENCE`.
-    * Use `["."]` for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it.
-    * Propose a narrower scope of at most 4 paths only when the same answer remains fully supported inside it.
+    * Do not choose `scope` because it happens to support your observed answer; choose the scope that would let an evaluator decide the question correctly without relying on inaccessible files.
+    * `scope` must be `["."]` for questions about project-wide search, absence, consistency, duplication, garbage, overall quality, architectural debt, idiomaticity, or repository-wide maintainability, unless the question explicitly limits itself to narrower paths.
+    * If the allowed scope is narrower than the context required to determine the correct answer among all valid answers, answer exactly `idk`.
+    * Propose a narrower scope of at most 4 paths only when that narrower scope is sufficient to determine the correct answer among all valid answers.
     * Successful scope narrowing: +1
     * Failed scope narrowing: -5
-  ignore:
-    - "target/**"
-  plugins: []
 
 expectations:
   - q: Does `canon check` copy the staged Git snapshot before evaluation?
