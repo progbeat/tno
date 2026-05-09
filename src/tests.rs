@@ -1538,6 +1538,7 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
     assert_eq!(root_permissions[".canon/**"], "none");
     assert_eq!(root_permissions[".git/canon"], "none");
     assert_eq!(root_permissions[".git/canon/**"], "none");
+    assert_eq!(root_permissions["target"], "none");
     assert_eq!(root_permissions["target/**"], "none");
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"][":root"],
@@ -1550,6 +1551,25 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
     );
     assert_eq!(config["history"]["persistence"], "none");
     assert!(config.get("plugins").is_none());
+}
+
+#[test]
+fn restricted_evaluator_scope_is_enforced_by_filesystem_permissions() {
+    let agent = AgentConfig {
+        model: ModelConfig::default(),
+        instructions: "Answer from files only.".to_string(),
+        ignore: vec!["target/**".to_string()],
+        plugins: Vec::new(),
+    };
+    let root_permissions = evaluator_thread_root_permissions(&agent, &["src".to_string()]);
+
+    assert_eq!(root_permissions["."], "none");
+    assert_eq!(root_permissions["src"], "read");
+    assert_eq!(root_permissions["src/**"], "read");
+    assert_eq!(root_permissions[".canon"], "none");
+    assert_eq!(root_permissions[".canon/**"], "none");
+    assert_eq!(root_permissions["target"], "none");
+    assert_eq!(root_permissions["target/**"], "none");
 }
 
 #[test]
@@ -1694,6 +1714,7 @@ fn app_server_starts_with_plugins_disabled_by_default() {
         .unwrap();
     assert!(filesystem_arg.contains(r#"":project_roots"={"."="none""#));
     assert!(filesystem_arg.contains(r#"".canon/**"="none""#));
+    assert!(filesystem_arg.contains(r#""target"="none""#));
     assert!(filesystem_arg.contains(r#""target/**"="none""#));
     assert!(filesystem_arg.contains(r#"":root"="read""#));
     assert!(filesystem_arg.contains(r#""glob_scan_max_depth"=32"#));

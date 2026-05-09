@@ -45,8 +45,30 @@ pub(crate) fn deny_evaluator_project_paths(
     root_permissions: &mut Map<String, Value>,
     agent: &AgentConfig,
 ) {
-    for pattern in effective_ignore_patterns(agent) {
+    // Scope and ignore enforcement must stay in Codex filesystem permissions;
+    // do not replace it with filtered project copies or hidden project paths.
+    for pattern in evaluator_deny_permission_patterns(agent) {
         root_permissions.insert(pattern, Value::String("none".to_string()));
+    }
+}
+
+pub(crate) fn evaluator_deny_permission_patterns(agent: &AgentConfig) -> Vec<String> {
+    let mut patterns = Vec::new();
+    for pattern in effective_ignore_patterns(agent) {
+        let pattern = normalize_repo_path(&pattern).unwrap_or(pattern);
+        // A recursive deny must also deny the directory entry itself, otherwise
+        // root listings can still reveal ignored directories like `target/`.
+        if let Some(prefix) = pattern.strip_suffix("/**") {
+            push_unique_permission_pattern(&mut patterns, prefix.to_string());
+        }
+        push_unique_permission_pattern(&mut patterns, pattern);
+    }
+    patterns
+}
+
+pub(crate) fn push_unique_permission_pattern(patterns: &mut Vec<String>, pattern: String) {
+    if !patterns.iter().any(|existing| existing == &pattern) {
+        patterns.push(pattern);
     }
 }
 
