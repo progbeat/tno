@@ -40,7 +40,7 @@ pub(crate) fn preflight_pre_commit_hook(root: &Path) -> Result<(), String> {
 
     let existing = fs::read_to_string(&hook_path)
         .map_err(|err| format!("failed to read {}: {}", hook_path.display(), err))?;
-    if existing != DEFAULT_PRE_COMMIT_HOOK {
+    if !pre_commit_hook_is_reusable(&existing) {
         return Err(format!(
             "{} already exists with different content",
             PRE_COMMIT_HOOK_PATH
@@ -74,7 +74,14 @@ pub(crate) fn legacy_pre_commit_hook_is_reusable(root: &Path) -> Result<bool, St
     }
     let existing = fs::read_to_string(&hook_path)
         .map_err(|err| format!("failed to read {}: {}", hook_path.display(), err))?;
-    Ok(existing == DEFAULT_PRE_COMMIT_HOOK)
+    Ok(pre_commit_hook_is_reusable(&existing))
+}
+
+pub(crate) fn pre_commit_hook_is_reusable(content: &str) -> bool {
+    content == DEFAULT_PRE_COMMIT_HOOK
+        || (content.contains("canon pre-commit:")
+            && content.contains("canon gate")
+            && content.contains("git status --porcelain -- .canon/"))
 }
 
 pub(crate) fn install_pre_commit_hook(root: &Path) -> Result<(), String> {
@@ -82,10 +89,12 @@ pub(crate) fn install_pre_commit_hook(root: &Path) -> Result<(), String> {
     if let Some(parent) = hook_path.parent() {
         ensure_dir(parent)?;
     }
-    if !hook_path.exists() {
+    let hook_needs_write = !hook_path.exists()
+        || fs::read_to_string(&hook_path).ok().as_deref() != Some(DEFAULT_PRE_COMMIT_HOOK);
+    if hook_needs_write {
         fs::write(&hook_path, DEFAULT_PRE_COMMIT_HOOK)
             .map_err(|err| format!("failed to write {}: {}", hook_path.display(), err))?;
-        println!("Created {}", PRE_COMMIT_HOOK_PATH);
+        println!("Installed {}", PRE_COMMIT_HOOK_PATH);
     }
     make_executable(&hook_path)?;
     configure_git_hooks_path(root)?;

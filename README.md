@@ -54,9 +54,8 @@ canon hook install
 `canon init` creates `.canon/check.yml` from the embedded default template and
 fails if that file already exists. `canon hook install` installs or reuses
 `.git/hooks/pre-commit` and sets the local Git `core.hooksPath` to `.git/hooks`.
-The pre-commit hook refuses dirty `.canon/` changes and runs `canon gate`, a
-fast cache-only check that asks you to run `canon check` when the staged snapshot
-has not been checked yet.
+The pre-commit hook runs `canon gate`, a fast cache-only check that asks you to
+run `canon check` when the staged snapshot has not been checked yet.
 
 ---
 

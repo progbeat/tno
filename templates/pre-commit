@@ -32,13 +32,6 @@ if ! "$canon_bin" help 2>/dev/null | grep -q "canon gate"; then
   exit 1
 fi
 
-if [ -n "$(git status --porcelain -- .canon/)" ]; then
-  echo "canon pre-commit: .canon/ has uncommitted changes" >&2
-  git status --porcelain -- .canon/ >&2
-  echo "Clean .canon/ before committing." >&2
-  exit 1
-fi
-
 echo "canon pre-commit: running canon gate"
 if ! "$canon_bin" gate; then
   echo "canon pre-commit: canon gate failed; run canon check before committing or fix cached failures." >&2

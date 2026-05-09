@@ -575,6 +575,7 @@ fn hook_install_creates_reusable_pre_commit_hook() {
     let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
     assert!(!root.join(CHECK_PATH).exists());
     assert!(!root.join(".gitignore").exists());
+    assert!(!DEFAULT_PRE_COMMIT_HOOK.contains("git status --porcelain -- .canon/"));
     assert_eq!(
         fs::read_to_string(&hook_path).unwrap(),
         DEFAULT_PRE_COMMIT_HOOK
@@ -589,6 +590,26 @@ fn hook_install_creates_reusable_pre_commit_hook() {
     }
 
     run_hook_install(&root).unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_install_updates_previous_canon_pre_commit_hook() {
+    let root = temp_home("hook-install-update");
+    let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
+    fs::create_dir_all(hook_path.parent().unwrap()).unwrap();
+    let previous_hook = DEFAULT_PRE_COMMIT_HOOK.replace(
+        "echo \"canon pre-commit: running canon gate\"",
+        "if [ -n \"$(git status --porcelain -- .canon/)\" ]; then\n  echo \"canon pre-commit: .canon/ has uncommitted changes\" >&2\n  git status --porcelain -- .canon/ >&2\n  echo \"Clean .canon/ before committing.\" >&2\n  exit 1\nfi\n\necho \"canon pre-commit: running canon gate\"",
+    );
+    fs::write(&hook_path, previous_hook).unwrap();
+
+    run_hook_install(&root).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(&hook_path).unwrap(),
+        DEFAULT_PRE_COMMIT_HOOK
+    );
     let _ = fs::remove_dir_all(root);
 }
 
