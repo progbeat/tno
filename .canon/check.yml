@@ -31,6 +31,12 @@ agent:
     * Failed scope narrowing: -5
 
 expectations:
+  - q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
+    a: "yes"
+
+  - q: "Across all evaluator turns for an expectation, including retries and repairs, is each task input exactly one JSON object with only `scope` and `question` fields, where `scope` is the enforced scope and `question` is the expectation question?"
+    a: "yes"
+
   - q: Does `canon check` copy the staged Git snapshot before evaluation?
     a: "no"
 
