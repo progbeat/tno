@@ -1,7 +1,6 @@
 # Cooldown
 
-An explicit expectation item may include an optional `cooldown` field next to
-`q` and `a`:
+An expectation item may include an optional `cooldown` field:
 
 ```yaml
 expectations:

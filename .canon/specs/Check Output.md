@@ -44,7 +44,7 @@ allows it. Skipped expectations emit no per-expectation stdout and count as
 `skipped`, not `passed`, in the final summary. Failing results are never
 skipped.
 
-After all selected expectation results are written, stderr contains exactly one
+After all selected expectations have been processed, stderr contains exactly one
 token usage line:
 
 ```text
