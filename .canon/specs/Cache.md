@@ -59,8 +59,11 @@ current staged Git contents for that record's `scope`.
 
 Reusable cached pass and fail records are both valid cache hits.
 
+Cooldown is a separate cache-only reuse path for expensive checks. Cooldown
+semantics are defined in [[Cooldown]].
+
 `canon check --ignore-cache` forces evaluator interrogation even when reusable
-history records exist.
+exact-cache history records or cooldown-eligible history records exist.
 
 If the evaluator returns a narrower scope with the same answer, `canon check`
 verifies that strict-subset scope with an independent interrogation on that
@@ -69,9 +72,9 @@ is unchanged. Failed narrowing attempts that change the answer are not written
 to history.
 
 The `canon gate` command is cache-only. It passes only when every selected
-expectation has a reusable cached pass result for the current staged Git tree, or
-has reusable cached fail results for both the current staged Git tree and the
-`HEAD` tree.
+expectation has a reusable cached pass result for the current staged Git tree, a
+fresh cooldown pass, or reusable cached fail results for both the current staged
+Git tree and the `HEAD` tree.
 
 When `canon gate` fails because reusable cache records are missing, it prints an
 actionable message asking the user to run `canon check`. When `canon gate` fails

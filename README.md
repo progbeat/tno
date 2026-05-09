@@ -194,20 +194,17 @@ therefore verified by the Rust schema and validation code in `src/cli.rs` and
 `canon check` supplies the evaluator response protocol through thread developer
 instructions, asks one question at a time with a task payload that is exactly a
 JSON object containing only `scope` and `question`, transports that payload
-through the required Codex app-server text input envelope, restricts ignored
-paths and narrowed scopes through Codex filesystem permissions, and prints one
-JSON object per selected expectation to stdout as soon as that result is
-available. The stdout object includes `timestamp`,
-`number`, `result`, `prompt`, `expected`, `observed`, `evidence`, `scope`, and
-`scopeHash`. `evidence` cites supporting files or code; `scope` is the smallest
-allowed project context sufficient to answer with the same result, not a list of
-evidence citations.
+through the required Codex app-server text input envelope, and restricts ignored
+paths and narrowed scopes through Codex filesystem permissions. The
+human-readable check output contract is specified in `.canon/specs/Check
+Output.md`.
 
 Per-expectation reusable results are stored in the Git directory under
 `canon/cache/<ID>/history.jsonl`, where `ID` is a 120-bit base64url hash of the
 expectation prompt and expected answer. `scopeHash` is a 120-bit base64url hash
 of the staged Git contents visible through the record's scope. `canon check`
 reuses matching cached pass and fail records, unless `--ignore-cache` is set.
+Optional expectation cooldowns are specified in `.canon/specs/Cooldown.md`.
 
 Global diagnostic interrogation records are appended to
 `git rev-parse --git-path canon/logs/0.jsonl`. At the start of `canon check`,
@@ -226,11 +223,11 @@ process tree instead of leaving child commands behind.
 
 After command/config/staged-change preflight, `canon gate` is cache-only and
 side-effect-free. It passes when every expectation either has a reusable cached
-`pass` record for the current staged snapshot or has reusable cached `fail`
-records for both the current staged snapshot and `HEAD`, which means the failure
-was already present before the staged change. It asks you to run `canon check`
-when cache records are missing and prints new cached failures when they are
-present.
+`pass` record for the current staged snapshot, has a fresh cooldown pass, or has
+reusable cached `fail` records for both the current staged snapshot and `HEAD`,
+which means the failure was already present before the staged change. It asks
+you to run `canon check` when cache records are missing and prints new cached
+failures when they are present.
 
 If an evaluator answers `malformed`, `canon check` retries once. If the final
 answer is still `malformed`, the expectation fails and `canon check` prints a

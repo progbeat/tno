@@ -93,7 +93,7 @@ expectations:
   - q: "Does the pre-commit hook fail quickly when `canon gate` reports missing cached answers or cached failing expectation results?"
     a: "yes"
 
-  - q: "Does `canon check` run all expectations when no numbers are provided, report all selected results by default, support rerunning selected expectations by 1-based numbers such as `canon check 4 5 42`, and reject invalid, zero, duplicate, or out-of-range numbers before evaluator interrogation?"
+  - q: "Does `canon check` consider all expectations when no numbers are provided, report newly evaluated results and all failing results by default while counting reused passing results as skipped without per-expectation stdout, support rerunning selected expectations by 1-based numbers such as `canon check 4 5 42`, and reject invalid, zero, duplicate, or out-of-range numbers before evaluator interrogation?"
     a: "yes"
 
   - q: "Does `canon check` support `--fail-fast` to stop after the first failure, while continuing remaining expectations after failures by default?"

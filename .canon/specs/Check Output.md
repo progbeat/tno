@@ -2,7 +2,8 @@
 
 `canon check` writes human-readable check output to stdout.
 
-For each passing expectation, stdout contains exactly one line:
+For each passing expectation that is written to stdout, stdout contains exactly
+one line:
 
 ```text
 N. OK
@@ -28,6 +29,11 @@ lines.
 
 `Scope` is rendered as a compact JSON array on one line.
 
+Reused passing results may be skipped when a reuse policy such as [[Cooldown]]
+allows it. Skipped expectations emit no per-expectation stdout and count as
+`skipped`, not `passed`, in the final summary. Failing results are never
+skipped.
+
 After all selected expectation results, stderr contains exactly one token usage
 line:
 
@@ -46,9 +52,11 @@ labels: `passed`, `failed` and `skipped`. If every count is zero, the
 outcome list is `0 passed`.
 The outcome text is surrounded by spaces and padded with `=` characters on both sides.
 
-`passed` is the number of selected expectations whose final result is `pass`.
+`passed` is the number of non-skipped selected expectations whose final result
+is `pass`.
 `failed` is the number of selected expectations whose final result is `fail`.
-`skipped` is the number of skipped expectations.
+`skipped` is the number of selected expectations satisfied by a reused passing
+result without evaluator interrogation or per-expectation stdout.
 
 After a `canon check` run starts writing check output, stderr contains exactly
 one token usage line:
