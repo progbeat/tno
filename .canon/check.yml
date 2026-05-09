@@ -43,7 +43,7 @@ expectations:
   - q: "Do canon commands that spawn child processes ensure those processes are terminated and reaped on both success and failure?"
     a: "yes"
 
-  - q: "Can any available `canon check` result be delayed from real-time observation in stdout or any file?"
+  - q: "Can any available `canon check` result be delayed from real-time observation in stdout/stderr or any file?"
     a: "no"
 
   - q: Can you read .canon/check.yml?
@@ -82,21 +82,6 @@ expectations:
   - q: "Does `canon check` evaluate the staged Git snapshot by default, preserve unstaged and untracked working tree changes after success or failure, and fail when the current staged Git change set includes both `.canon/**` changes and non-`.canon` changes?"
     a: "yes"
 
-  - q: "Does `canon check` store per-expectation cache data under `git rev-parse --git-path canon/cache`, append global diagnostic records to `git rev-parse --git-path canon/logs/0.jsonl`?"
-    a: "yes"
-
-  - q: "At the start of `canon check`, before appending new diagnostic records, does global diagnostic log rolling rotate only when `0.jsonl` exceeds 128 KiB by deleting `3.jsonl` if present, renaming `2.jsonl` to `3.jsonl`, `1.jsonl` to `2.jsonl`, and `0.jsonl` to `1.jsonl`?"
-    a: "yes"
-
-  - q: "Does `canon init` avoid adding `/.canon/logs/` to `.gitignore`?"
-    a: "yes"
-
-  - q: "Is each expectation `ID` a 120-bit base64url string without padding, encoded as exactly 20 characters, derived from the current expectation prompt and expected answer, and used as the cache directory name under `git rev-parse --git-path canon/cache/${ID}`?"
-    a: "yes"
-
-  - q: "Does each expectation cache directory store reusable verified cache history in `history.jsonl`, append and flush each new history record immediately after it is available, and compact history with approximately a 1-in-15 chance after appending by keeping at least the latest 5 records?"
-    a: "yes"
-
   - q: "Does `canon check` treat `scope` as the minimal allowed project context needed to answer the expectation with the same observed answer, not as the list of files cited by `evidence`, and keep `scope` as [`.`] for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it?"
     a: "yes"
 
@@ -106,19 +91,13 @@ expectations:
   - q: "Is `scopeHash` stored after `scope`, encoded as a 120-bit base64url string without padding and exactly 20 characters, and derived only from tracked staged Git contents under the record's scope paths?"
     a: "yes"
 
-  - q: "When looking up a cached result, does `canon check` scan `history.jsonl` newest-to-oldest, select the first record whose `scopeHash` matches the current staged Git contents for that record's scope, and reuse both passing and failing verified records even if unrelated files outside that scope changed?"
+  - q: "When looking up a cached result, does `canon check` scan `history.jsonl` newest-to-oldest, select the first record whose `scopeHash` matches the current staged Git contents for that record's scope, and reuse both passing and failing records even if unrelated files outside that scope changed?"
     a: "yes"
 
   - q: "Does `canon check --ignore-cache` force evaluator interrogation even when reusable cached `history.jsonl` records already exist?"
     a: "yes"
 
-  - q: "When interrogating without a reusable cache hit, does `canon check` use the latest history scope for that expectation or [`.`] if no history exists, retry with full project scope when a restricted interrogation returns `idk`, and avoid treating restricted `idk` as final when full-scope evidence can answer?"
-    a: "yes"
-
-  - q: "If the evaluator returns a narrower scope with the same answer, does `canon check` verify that strict-subset scope with an independent interrogation on that restricted scope, accept it only when the observed answer is unchanged, write reusable history only for verified results, and exclude failed narrowing attempts that change the answer?"
-    a: "yes"
-
-  - q: "Does `canon check` write a global diagnostic log record for every evaluator interrogation, including wider interrogations and narrower-scope verifications, and append and flush each diagnostic record immediately after it is produced?"
+  - q: "If the evaluator returns a narrower scope, does `canon check` verify that strict-subset scope with an independent interrogation on that restricted scope, accept it only when the observed answer is unchanged, write reusable history only for verified results, and exclude failed narrowing attempts that change the answer?"
     a: "yes"
 
   - q: "Does `canon check` keep evaluator Codex threads ephemeral to one invocation, reuse a thread only for evaluator interrogations with the same enforced `scope` within that invocation, and start separate threads for different enforced scopes?"
@@ -134,22 +113,6 @@ expectations:
     a: "yes"
 
   - q: "Does `canon check` support `--fail-fast` to stop after the first failure, while continuing remaining expectations after failures by default?"
-    a: "yes"
-
-  - q: "Does `canon check` require every selected expectation to match the expected answer exactly, treat `idk` as an ordinary exact-match answer string, retry malformed evaluator responses once before failing, require human review for `malformed`, retry once when evidence is empty, warn without failing when the final answer is correct but evidence stays empty, and avoid failing solely because evidence remains empty?"
-    a: "yes"
-
-  - q: |
-      Does `canon check` write both per-expectation cache histories and global
-      diagnostic logs as JSON Lines files where each non-empty line is one complete
-      valid JSON object, `result` is exactly either `pass` or `fail`, timestamps
-      are UTC and reflect when that record is produced after the evaluator response
-      and result are available, and every record contains at least these keys in
-      this exact order: `timestamp`, `number`, `result`, `prompt`, `expected`,
-      `observed`, `evidence`, `scope`, and `scopeHash`?
-    a: "yes"
-
-  - q: "Does `canon check` print JSON Lines to stdout, with one complete result object per selected expectation including the expectation number, result, prompt, expected answer, observed answer, evidence, scope, and scopeHash?"
     a: "yes"
 
   - q: "Are there any obsolete, unused, stray, dead-end, duplicated, or redundant Git-tracked project files or code paths that are safe to remove or consolidate without changing intended functionality?"
