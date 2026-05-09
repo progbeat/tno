@@ -72,9 +72,6 @@ expectations:
   - q: "Can `canon check` use `--config <path>` or `-c <path>` to read checks from a custom YAML config file?"
     a: "yes"
 
-  - q: "Does `canon check` hide expected answers from the evaluator, supply the runtime answer/evidence/scope response format with evidence citations separate from scope, ask one expectation at a time through `codex app-server`, use the configured `agent.model.primary`, start without plugins unless configured, and suppress codex app-server stderr noise?"
-    a: "yes"
-
   - q: "Does `canon check` use `agent.model.primary` as the primary evaluator model and retry with configured `agent.model.fallbacks` in order only after a technical app-server/model failure such as `usageLimitExceeded`, without falling back for `idk`, `malformed`, incorrect answers, or evidence quality?"
     a: "yes"
 
@@ -90,22 +87,7 @@ expectations:
   - q: "Does the evaluator-response parser either reject the evaluator-provided scope or produce the final `scope`, where `scope` is exactly [`.`] for full project scope or a lexicographically sorted, duplicate-free list of normalized repository-relative paths with redundant child paths removed when a parent directory path already covers them?"
     a: "yes"
 
-  - q: "Is `scopeHash` stored after `scope`, encoded as a 120-bit base64url string without padding and exactly 20 characters, and derived only from tracked staged Git contents under the record's scope paths?"
-    a: "yes"
-
-  - q: "When looking up a cached result, does `canon check` scan `history.jsonl` newest-to-oldest, select the first record whose `scopeHash` matches the current staged Git contents for that record's scope, and reuse both passing and failing records even if unrelated files outside that scope changed?"
-    a: "yes"
-
-  - q: "Does `canon check --ignore-cache` force evaluator interrogation even when reusable cached `history.jsonl` records already exist?"
-    a: "yes"
-
-  - q: "If the evaluator returns a narrower scope, does `canon check` verify that strict-subset scope with an independent interrogation on that restricted scope, accept it only when the observed answer is unchanged, write reusable history only for verified results, and exclude failed narrowing attempts that change the answer?"
-    a: "yes"
-
   - q: "Does `canon check` keep evaluator Codex threads ephemeral to one invocation, reuse a thread only for evaluator interrogations with the same enforced `scope` within that invocation, and start separate threads for different enforced scopes?"
-    a: "yes"
-
-  - q: "Is `canon gate` cache-only and side-effect-free, passing when every selected expectation either has a reusable cached `pass` result for the current staged Git tree or has reusable cached `fail` results for both the current staged Git tree and the HEAD tree, failing only for missing cache records or new failures?"
     a: "yes"
 
   - q: "Does the pre-commit hook fail quickly when `canon gate` reports missing cached answers or cached failing expectation results?"
@@ -139,3 +121,10 @@ expectations:
     a: "no"
     cooldown: 7d
     thinking: xhigh
+
+  - path: "specs/*.md"
+    q_template: |
+      {content}
+      ---
+      Is this specification implemented?
+    a: "yes"

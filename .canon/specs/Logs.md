@@ -38,8 +38,9 @@ Additional fields depend on the event type. Event-specific data is recorded as
 structured JSON fields, not encoded into a human-readable message string.
 
 Runtime logs include events for check start, expectation results, warnings,
-model failures, model fallback attempts, token usage, agent communication, and
-check finish.
+model failures, model fallback attempts, token usage, agent communication,
+evaluator thread creation, evaluator thread reuse, review-required diagnostics,
+and check finish.
 
 Events may include a single-line `message` field only when human-readable text
 adds useful context beyond the structured fields.
@@ -62,11 +63,13 @@ used for a thread should be inspectable from the logs.
 
 Evaluator agent sessions do not have read access to `LOGS_DIR`.
 
+Warnings, model fallback notices, malformed-answer notices, full-project `idk`
+review-required diagnostics, timestamps, hashes, and internal diagnostics are
+recorded in runtime logs instead of stdout or stderr.
+
 This document defines the runtime log container format and required coverage.
 Event-specific schemas are defined by the event types themselves; examples in
 this document illustrate JSON Lines shape, not a complete event registry.
-
-The human-readable stdout contract is defined in [[Check Output]].
 
 Hypothetical log event examples:
 

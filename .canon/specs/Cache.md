@@ -34,6 +34,10 @@ scopeHash
 records are written only for correct or incorrect answers. Non-answer states
 such as `idk` and `malformed` are not written to history.
 
+Reusable history consists only of verified answer records. `idk`, `malformed`,
+and unparseable evaluator responses are not reusable history records, even when
+they produce a failed check result.
+
 `timestamp` is UTC and records when the history record is produced.
 
 `scope` is the scope for the cached result. It is either `["."]` or a
@@ -68,3 +72,8 @@ The `canon gate` command is cache-only. It passes only when every selected
 expectation has a reusable cached pass result for the current staged Git tree, or
 has reusable cached fail results for both the current staged Git tree and the
 `HEAD` tree.
+
+When `canon gate` fails because reusable cache records are missing, it prints an
+actionable message asking the user to run `canon check`. When `canon gate` fails
+because there are new cached failures, it reports those failures and does not
+suggest rerunning `canon check` as the fix.
