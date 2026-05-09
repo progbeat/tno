@@ -35,8 +35,7 @@ records are written only for correct or incorrect answers. Non-answer states
 such as `idk` and `malformed` are not written to history.
 
 Reusable history consists only of verified answer records. `idk`, `malformed`,
-and unparseable evaluator responses are not reusable history records, even when
-they produce a failed check result.
+and unparseable evaluator responses are not reusable history records.
 
 `timestamp` is UTC and records when the history record is produced.
 

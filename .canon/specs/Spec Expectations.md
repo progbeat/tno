@@ -29,9 +29,8 @@ expectations:
 items.
 
 Expectation items may include optional fields defined by other specs, such as
-`cooldown` and `thinking`. Optional fields on a generator item are inherited by
-the expectations generated from that item unless the field's spec says
-otherwise.
+`cooldown`. Optional fields on a generator item are inherited by the
+expectations generated from that item unless the field's spec says otherwise.
 
 Each `path` is relative to the directory containing the active check
 configuration file.

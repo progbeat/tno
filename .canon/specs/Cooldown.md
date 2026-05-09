@@ -10,6 +10,9 @@ expectations:
     cooldown: 7d
 ```
 
+`cooldown` is optional and intended only for expensive expectations where
+rechecking on every run is not worth the cost.
+
 `cooldown` values use compact positive duration syntax with exactly one integer
 and one unit. Supported units are `s`, `m`, `h`, `d`, and `w`, for seconds,
 minutes, hours, days, and weeks. Examples include `30m`, `4h`, `3d`, and `2w`.
