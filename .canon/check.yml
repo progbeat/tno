@@ -17,7 +17,7 @@ agent:
     If the question is malformed, answer exactly `malformed`.
     Scoring policy:
     * Correct answer: +5
-    * Incorrect answer: -5
+    * Incorrect answer: -10
     * `idk`: 0
     * `malformed`: N/A, human review required
     Scope policy:
