@@ -37,6 +37,28 @@ impl DiagnosticLogWriter {
     }
 
     pub(crate) fn write_record(&mut self, record: &CheckRecord) -> Result<(), String> {
+        self.write_event(
+            "info",
+            "expectation.result",
+            &[
+                ("number", json!(record.number)),
+                ("result", json!(record.result)),
+                ("prompt", json!(record.prompt)),
+                ("expected", json!(record.expected)),
+                ("observed", json!(record.observed)),
+                ("evidence", json!(record.evidence)),
+                ("scope", json!(record.scope)),
+                ("scopeHash", json!(record.scope_hash)),
+            ],
+        )
+    }
+
+    pub(crate) fn write_event(
+        &mut self,
+        level: &str,
+        event: &str,
+        fields: &[(&str, Value)],
+    ) -> Result<(), String> {
         if self.file.is_none() {
             self.file = Some(
                 fs::OpenOptions::new()
@@ -46,7 +68,7 @@ impl DiagnosticLogWriter {
                     .map_err(|err| format!("failed to open {}: {}", self.path.display(), err))?,
             );
         }
-        let line = render_check_log_record(record);
+        let line = render_runtime_log_event(level, event, fields)?;
         let Some(file) = self.file.as_mut() else {
             return Err("diagnostic log file is not open".to_string());
         };
@@ -55,6 +77,35 @@ impl DiagnosticLogWriter {
         file.flush()
             .map_err(|err| format!("failed to flush {}: {}", self.path.display(), err))
     }
+}
+
+pub(crate) fn render_runtime_log_event(
+    level: &str,
+    event: &str,
+    fields: &[(&str, Value)],
+) -> Result<String, String> {
+    let mut output = String::new();
+    output.push('{');
+    let mut first = true;
+    append_json_string_field(
+        &mut output,
+        &mut first,
+        "timestamp",
+        &format_log_record_timestamp(unix_timestamp()?),
+    );
+    append_json_string_field(&mut output, &mut first, "level", level);
+    append_json_string_field(&mut output, &mut first, "event", event);
+    for (key, value) in fields {
+        append_json_separator(&mut output, &mut first);
+        push_json_string(&mut output, key);
+        output.push(':');
+        output.push_str(
+            &serde_json::to_string(value)
+                .map_err(|err| format!("failed to serialize runtime log field: {}", err))?,
+        );
+    }
+    output.push_str("}\n");
+    Ok(output)
 }
 
 pub(crate) fn render_check_log_record(record: &CheckRecord) -> String {

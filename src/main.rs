@@ -32,6 +32,7 @@ const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../templates/pre-commit");
 const MALFORMED_REVIEW_WARNING: &str =
     "human review required: evaluator marked the expectation question as malformed";
 const UNPARSEABLE_OBSERVED: &str = "unparseable";
+const CHECK_FAILED_EXIT: &str = "__canon_check_failed_exit__";
 static CHECK_INTERRUPTED: AtomicBool = AtomicBool::new(false);
 static COMPACTION_SAMPLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SIGNAL_HANDLER_INIT: Once = Once::new();
@@ -48,6 +49,7 @@ extern "C" fn handle_sigint(_: i32) {
 }
 
 mod check;
+mod check_config;
 mod cli;
 mod evaluator;
 mod git;
@@ -59,6 +61,7 @@ mod notes;
 mod scope;
 
 pub(crate) use check::*;
+pub(crate) use check_config::*;
 pub(crate) use cli::*;
 pub(crate) use evaluator::*;
 pub(crate) use git::*;

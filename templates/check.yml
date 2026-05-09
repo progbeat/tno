@@ -19,10 +19,10 @@ agent:
     * `idk`: -1 + retry on full project scope
     * `malformed`: N/A, human review required
     Scope policy:
-    * `scope` is the smallest allowed project context sufficient to answer the expectation with the same answer.
-    * `scope` is not the list of evidence citations; cite supporting files or code inside `EVIDENCE`.
+    * `scope` is the smallest allowed project context sufficient to determine the correct answer among all valid answers.
+    * `scope` is not the list of evidence citations; cite supporting files or code inside the `evidence` response field.
     * Use `["."]` for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it.
-    * Propose a narrower scope of at most 4 paths only when the same answer remains fully supported inside it.
+    * Propose a narrower scope of at most 4 paths only when that narrower scope is sufficient to determine the correct answer among all valid answers.
     * Successful scope narrowing: +1
     * Failed scope narrowing: -5
   ignore:

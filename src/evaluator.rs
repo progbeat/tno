@@ -4,12 +4,13 @@ pub(crate) fn evaluator_thread_config(
     agent: &AgentConfig,
     scope: &[String],
     model: Option<&str>,
+    thinking: &str,
 ) -> Value {
     let root_permissions = evaluator_thread_root_permissions(agent, scope);
     let mut config = evaluator_base_config(
         permission_map_value(&root_permissions),
         "read",
-        codex_reasoning_effort(&agent.thinking),
+        codex_reasoning_effort(thinking),
     );
     if let Some(model) = model.or(agent.model.primary.as_deref()) {
         config["model"] = Value::String(model.to_string());
@@ -828,6 +829,7 @@ impl EvaluatorRunner for AppServerRunner {
         instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
+        thinking: &str,
         scope: &[String],
     ) -> Result<String, String> {
         let result = self.send_request(
@@ -836,7 +838,7 @@ impl EvaluatorRunner for AppServerRunner {
                 "cwd": root.display().to_string(),
                 "developerInstructions": instructions,
                 "approvalPolicy": "never",
-                "config": evaluator_thread_config(agent, scope, model),
+                "config": evaluator_thread_config(agent, scope, model, thinking),
                 "ephemeral": true,
                 "sessionStartSource": "startup"
             }),
@@ -868,20 +870,14 @@ impl EvaluatorRunner for AppServerRunner {
 }
 
 pub(crate) fn evaluator_turn_input(prompt: &str) -> Result<Value, String> {
-    let input: Value = serde_json::from_str(prompt)
-        .map_err(|err| format!("failed to parse evaluator task input JSON: {}", err))?;
-    let Value::Object(fields) = &input else {
-        return Err("evaluator task input must be a JSON object".to_string());
-    };
-    if fields.len() != 2 || !fields.contains_key("scope") || !fields.contains_key("question") {
-        return Err("evaluator task input must contain only scope and question".to_string());
-    }
-    Ok(input)
+    Ok(Value::String(prompt.to_string()))
 }
 
 pub(crate) fn render_evaluator_turn_input(input: &Value) -> Result<String, String> {
-    serde_json::to_string(input)
-        .map_err(|err| format!("failed to serialize evaluator task input JSON: {}", err))
+    input
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| "evaluator task input must be a string".to_string())
 }
 
 impl EvaluatorRunner for LazyAppServerRunner {
@@ -891,12 +887,13 @@ impl EvaluatorRunner for LazyAppServerRunner {
         instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
+        thinking: &str,
         scope: &[String],
     ) -> Result<String, String> {
         let key = app_server_model_key(model);
         let session_id =
             self.inner(model)?
-                .start_session(root, instructions, agent, model, scope)?;
+                .start_session(root, instructions, agent, model, thinking, scope)?;
         self.session_models.insert(session_id.clone(), key);
         Ok(session_id)
     }

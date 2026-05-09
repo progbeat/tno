@@ -41,17 +41,7 @@ pub(crate) fn read_history_records_from_path(path: &Path) -> Result<Vec<CheckRec
         }
         match serde_json::from_str::<CheckRecord>(&line) {
             Ok(record) => records.push(record),
-            Err(err) => {
-                // Invalid history lines are not reusable cache evidence. Warn
-                // and skip them so a corrupt old cache entry cannot block a
-                // fresh evaluator interrogation for the current staged tree.
-                eprintln!(
-                    "canon check: warning: malformed history record is not reusable in {} line {}: {}",
-                    path.display(),
-                    index + 1,
-                    err
-                );
-            }
+            Err(_err) => {}
         }
     }
     Ok(records)
@@ -125,7 +115,7 @@ pub(crate) fn reusable_history_record_for_source(
 ) -> Result<Option<CheckRecord>, String> {
     let records = history_cache.read_records(root, expectation)?;
     for mut record in records.into_iter().rev() {
-        if record.observed == UNPARSEABLE_OBSERVED {
+        if !is_reusable_history_record(&record) {
             continue;
         }
         let scope = match sanitize_scope(&record.scope, agent) {
@@ -148,6 +138,37 @@ pub(crate) fn reusable_history_record_for_source(
     Ok(None)
 }
 
+pub(crate) fn cooldown_history_record(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+    now: u64,
+) -> Result<Option<CheckRecord>, String> {
+    let Some(cooldown) = expectation.cooldown else {
+        return Ok(None);
+    };
+    let records = history_cache.read_records(root, expectation)?;
+    for mut record in records.into_iter().rev() {
+        if !is_reusable_history_record(&record) {
+            continue;
+        }
+        if !record.passed() {
+            return Ok(None);
+        }
+        let Some(timestamp) = parse_log_record_timestamp(&record.timestamp) else {
+            return Ok(None);
+        };
+        if now.saturating_sub(timestamp) >= cooldown.seconds {
+            return Ok(None);
+        }
+        record.number = expectation.number;
+        record.prompt = expectation.q.clone();
+        record.expected = expectation.a.clone();
+        return Ok(Some(record));
+    }
+    Ok(None)
+}
+
 pub(crate) fn latest_history_scope_with_cache(
     root: &Path,
     agent: &AgentConfig,
@@ -156,13 +177,7 @@ pub(crate) fn latest_history_scope_with_cache(
 ) -> Result<Option<Vec<String>>, String> {
     let records = history_cache.read_records(root, expectation)?;
     for record in records.into_iter().rev() {
-        if record.result != "pass" {
-            continue;
-        }
-        if record.observed == "idk"
-            || record.observed == "malformed"
-            || record.observed == UNPARSEABLE_OBSERVED
-        {
+        if !is_reusable_history_record(&record) {
             continue;
         }
         if let Ok(scope) = sanitize_scope(&record.scope, agent) {
@@ -170,6 +185,13 @@ pub(crate) fn latest_history_scope_with_cache(
         }
     }
     Ok(None)
+}
+
+pub(crate) fn is_reusable_history_record(record: &CheckRecord) -> bool {
+    matches!(record.result.as_str(), "pass" | "fail")
+        && record.observed != "idk"
+        && record.observed != "malformed"
+        && record.observed != UNPARSEABLE_OBSERVED
 }
 
 #[cfg(test)]

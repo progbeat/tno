@@ -70,7 +70,7 @@ impl RepoInspectionCache {
         if let Some(cached) = self.check_configs.get(&key) {
             return cached.clone();
         }
-        let parsed = parse_check_config_content(config_path, &content);
+        let parsed = parse_check_config_content_with_root(root, config_path, &content, self);
         self.check_configs.insert(key, parsed.clone());
         parsed
     }

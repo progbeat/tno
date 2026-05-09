@@ -161,10 +161,10 @@ agent:
     * `idk`: -1 + retry on full project scope
     * `malformed`: N/A, human review required
     Scope policy:
-    * `scope` is the smallest allowed project context sufficient to answer the expectation with the same answer.
+    * `scope` is the smallest allowed project context sufficient to determine the correct answer among all valid answers.
     * `scope` is not the list of evidence citations; cite supporting files or code inside the `evidence` response field.
     * Use `["."]` for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it.
-    * Propose a narrower scope of at most 4 paths only when the same answer remains fully supported inside it.
+    * Propose a narrower scope of at most 4 paths only when that narrower scope is sufficient to determine the correct answer among all valid answers.
     * Successful scope narrowing: +1
     * Failed scope narrowing: -5
   ignore:
@@ -192,25 +192,50 @@ therefore verified by the Rust schema and validation code in `src/cli.rs` and
 `src/check.rs`, while the embedded default file lives in `templates/check.yml`.
 
 `canon check` supplies the evaluator response protocol through thread developer
-instructions, asks one question at a time with a task payload that is exactly a
-JSON object containing only `scope` and `question`, transports that payload
-through the required Codex app-server text input envelope, and restricts ignored
-paths and narrowed scopes through Codex filesystem permissions. The
-human-readable check output contract is specified in `.canon/specs/Check
-Output.md`.
+instructions, puts the current enforced `scope` in those developer instructions,
+asks one question at a time as a plain string, transports that question through
+the required Codex app-server text input envelope, and restricts ignored paths
+and narrowed scopes through Codex filesystem permissions. The evaluator must
+answer with exactly one JSON object containing `answer`, `evidence`, and
+`scope`, in that order. The human-readable check output contract is specified in
+`.canon/specs/Check Output.md`.
 
-Per-expectation reusable results are stored in the Git directory under
+Expectation items may also be generated from spec files:
+
+```yaml
+expectations:
+  - path: "specs/*.md"
+    q_template: |
+      {content}
+      ---
+      Is this specification implemented?
+    a: "yes"
+```
+
+Generator paths are relative to the active config file directory. Matched spec
+files are expanded lexicographically at the generator's position in the
+expectation list, and the generated expectations use the same numbering,
+selection, cache, check, and gate behavior as explicit `q`/`a` expectations.
+
+Per-expectation reusable history is stored in the Git directory under
 `canon/cache/<ID>/history.jsonl`, where `ID` is a 120-bit base64url hash of the
 expectation prompt and expected answer. `scopeHash` is a 120-bit base64url hash
-of the staged Git contents visible through the record's scope. `canon check`
-reuses matching cached pass and fail records, unless `--ignore-cache` is set.
-Optional expectation cooldowns are specified in `.canon/specs/Cooldown.md`.
+of the staged Git contents visible through the record's scope. History contains
+only reusable answer records: `pass` and `fail` results with actual answers.
+`idk`, `malformed`, and unparseable responses require review or retry behavior
+and are not written as reusable history. `canon check` reuses matching cached
+pass and fail records, unless `--ignore-cache` is set. Optional expectation
+cooldowns are specified in `.canon/specs/Cooldown.md`; fresh cooldown passes are
+counted as skipped without per-expectation stdout.
 
-Global diagnostic interrogation records are appended to
-`git rev-parse --git-path canon/logs/0.jsonl`. At the start of `canon check`,
+Runtime logs are appended to `git rev-parse --git-path canon/logs/0.jsonl`. At
+the start of `canon check`,
 `0.jsonl` rotates only when it exceeds 128 KiB: `3.jsonl` is removed, `2` moves
-to `3`, `1` to `2`, and `0` to `1`. The next diagnostic write creates a fresh
-`0.jsonl`.
+to `3`, `1` to `2`, and `0` to `1`. The next runtime log write creates a fresh
+`0.jsonl`. Runtime logs include check start/finish, expectation results,
+warnings, model failures/fallbacks, token usage, agent communication, and thread
+creation/reuse. Warnings and internal diagnostics go there rather than to
+normal stdout/stderr.
 
 The staged Git snapshot is exposed at the real project root by temporarily
 preserving unstaged and untracked worktree changes with Git's own stash/index
@@ -230,8 +255,8 @@ you to run `canon check` when cache records are missing and prints new cached
 failures when they are present.
 
 If an evaluator answers `malformed`, `canon check` retries once. If the final
-answer is still `malformed`, the expectation fails and `canon check` prints a
-human-review warning so a person can fix the expectation or prompt.
+answer is still `malformed`, the expectation is reported as a human-review
+error so a person can fix the expectation or prompt.
 
 ---
 

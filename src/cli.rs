@@ -22,6 +22,14 @@ pub(crate) struct CheckConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct RawCheckConfig {
+    pub(crate) version: u32,
+    pub(crate) agent: AgentConfig,
+    pub(crate) expectations: Vec<RawExpectationItem>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct AgentConfig {
     #[serde(default)]
     pub(crate) model: ModelConfig,
@@ -45,7 +53,7 @@ pub(crate) fn default_thinking() -> String {
     "low".to_string()
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct TokenUsage {
     pub(crate) total_tokens: u64,
     pub(crate) input_tokens: u64,
@@ -59,6 +67,26 @@ pub(crate) struct TokenUsage {
 pub(crate) struct Expectation {
     pub(crate) q: String,
     pub(crate) a: String,
+    #[serde(default)]
+    pub(crate) cooldown: Option<String>,
+    #[serde(default)]
+    pub(crate) thinking: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawExpectationItem {
+    #[serde(default)]
+    pub(crate) q: Option<String>,
+    #[serde(default)]
+    pub(crate) q_template: Option<String>,
+    pub(crate) a: String,
+    #[serde(default)]
+    pub(crate) path: Option<String>,
+    #[serde(default)]
+    pub(crate) cooldown: Option<String>,
+    #[serde(default)]
+    pub(crate) thinking: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +95,13 @@ pub(crate) struct SelectedExpectation {
     pub(crate) id: String,
     pub(crate) q: String,
     pub(crate) a: String,
+    pub(crate) cooldown: Option<Cooldown>,
+    pub(crate) thinking: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Cooldown {
+    pub(crate) seconds: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +148,19 @@ pub(crate) struct InterrogationResult {
     pub(crate) record: CheckRecord,
 }
 
+pub(crate) struct CheckRunReport {
+    pub(crate) records: Vec<CheckRecord>,
+    pub(crate) skipped: usize,
+}
+
+impl std::ops::Deref for CheckRunReport {
+    type Target = [CheckRecord];
+
+    fn deref(&self) -> &Self::Target {
+        &self.records
+    }
+}
+
 pub(crate) trait EvaluatorRunner {
     fn start_session(
         &mut self,
@@ -120,6 +168,7 @@ pub(crate) trait EvaluatorRunner {
         instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
+        thinking: &str,
         scope: &[String],
     ) -> Result<String, String>;
     fn ask(&mut self, session_id: &str, prompt: &str) -> Result<String, String>;
@@ -127,6 +176,9 @@ pub(crate) trait EvaluatorRunner {
 
 pub(crate) fn main() {
     if let Err(err) = run(env::args_os().skip(1).collect()) {
+        if err == CHECK_FAILED_EXIT {
+            process::exit(1);
+        }
         eprintln!("canon: {}", err);
         process::exit(1);
     }

@@ -1,6 +1,7 @@
 use crate::*;
 
 pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), String> {
+    let started = Instant::now();
     install_sigint_handler();
     CHECK_INTERRUPTED.store(false, Ordering::SeqCst);
     let command = parse_check_command_args(args)?;
@@ -17,6 +18,18 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), St
     let _staged_view = StagedWorktreeView::apply(root)?;
     let mut runner = LazyAppServerRunner::new(check_config_loads_plugins(&config), &config.agent);
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
+    diagnostic_log.write_event(
+        "info",
+        "check.start",
+        &[(
+            "selected",
+            json!(options
+                .selected
+                .iter()
+                .map(|expectation| expectation.number)
+                .collect::<Vec<_>>()),
+        )],
+    )?;
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     let mut result_output: &mut dyn Write = &mut stdout;
@@ -36,21 +49,52 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), St
         .flush()
         .map_err(|err| format!("failed to flush check result to stdout: {}", err))?;
     runner.drain_token_usage_updates();
-    print_token_usage_summary(runner.token_usage(), check_interrupted());
-    let records = records_result?;
-    if records.iter().all(CheckRecord::passed) {
+    let usage = runner.token_usage().unwrap_or_default();
+    diagnostic_log.write_event("info", "token.usage", &[("usage", json!(usage))])?;
+    print_token_usage_summary(Some(usage));
+    let report = records_result?;
+    diagnostic_log.write_event(
+        "info",
+        "check.finish",
+        &[
+            (
+                "passed",
+                json!(report
+                    .records
+                    .iter()
+                    .filter(|record| record.passed())
+                    .count()
+                    .saturating_sub(report.skipped)),
+            ),
+            (
+                "failed",
+                json!(report
+                    .records
+                    .iter()
+                    .filter(|record| !record.passed() && !record_requires_human_review(record))
+                    .count()),
+            ),
+            (
+                "errors",
+                json!(report
+                    .records
+                    .iter()
+                    .filter(|record| record_requires_human_review(record))
+                    .count()),
+            ),
+            ("skipped", json!(report.skipped)),
+        ],
+    )?;
+    write_summary_line(&mut result_output, &report, started.elapsed())?;
+    if report.records.iter().all(CheckRecord::passed) {
         Ok(())
     } else {
-        Err("canon check failed".to_string())
+        Err(CHECK_FAILED_EXIT.to_string())
     }
 }
 
-pub(crate) fn print_token_usage_summary(usage: Option<TokenUsage>, force: bool) {
-    if let Some(usage) = usage {
-        eprintln!("{}", render_token_usage_summary(usage));
-    } else if force {
-        eprintln!("{}", render_token_usage_summary(TokenUsage::default()));
-    }
+pub(crate) fn print_token_usage_summary(usage: Option<TokenUsage>) {
+    eprintln!("{}", render_token_usage_summary(usage.unwrap_or_default()));
 }
 
 pub(crate) fn install_sigint_handler() {
@@ -113,7 +157,19 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Str
                         &mut scope_hash_cache,
                     )? => {}
             Some(record) => failing.push(record),
-            None => missing.push(expectation.number),
+            None => {
+                if let Some(record) = cooldown_history_record(
+                    root,
+                    expectation,
+                    &mut history_cache,
+                    unix_timestamp()?,
+                )? {
+                    if record.passed() {
+                        continue;
+                    }
+                }
+                missing.push(expectation.number)
+            }
         }
     }
 
@@ -154,233 +210,6 @@ pub(crate) fn has_reusable_head_failure(
         )?,
         Some(record) if !record.passed()
     ))
-}
-
-pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommandArgs, String> {
-    let mut config_path = None;
-    let mut option_args = Vec::new();
-    let mut index = 0;
-    while index < args.len() {
-        let arg = arg_to_string(&args[index])?;
-        if arg == "--config" || arg == "-c" {
-            if config_path.is_some() {
-                return Err("duplicate --config".to_string());
-            }
-            index += 1;
-            let value = args
-                .get(index)
-                .ok_or_else(|| format!("{} requires a path", arg))?;
-            let value = arg_to_string(value)?;
-            config_path = Some(normalize_check_config_path(&value)?);
-        } else if let Some(value) = arg.strip_prefix("--config=") {
-            if config_path.is_some() {
-                return Err("duplicate --config".to_string());
-            }
-            if value.is_empty() {
-                return Err("--config requires a path".to_string());
-            }
-            config_path = Some(normalize_check_config_path(value)?);
-        } else {
-            option_args.push(args[index].clone());
-        }
-        index += 1;
-    }
-    Ok(CheckCommandArgs {
-        config_path: config_path.unwrap_or_else(|| PathBuf::from(CHECK_PATH)),
-        option_args,
-    })
-}
-
-pub(crate) fn normalize_check_config_path(value: &str) -> Result<PathBuf, String> {
-    let normalized = normalize_repo_path(value).map_err(|err| format!("--config path: {}", err))?;
-    if normalized == "." {
-        return Err("--config path must name a file".to_string());
-    }
-    Ok(PathBuf::from(normalized))
-}
-
-pub(crate) fn parse_check_config_content(
-    config_path: &Path,
-    content: &str,
-) -> Result<CheckConfig, String> {
-    let config: CheckConfig = serde_yaml::from_str(&content)
-        .map_err(|err| format!("failed to parse {}: {}", config_path.display(), err))?;
-    validate_check_config(&config)?;
-    Ok(config)
-}
-
-pub(crate) fn parse_check_options(
-    config: &CheckConfig,
-    args: &[OsString],
-) -> Result<CheckOptions, String> {
-    let mut fail_fast = false;
-    let mut ignore_cache = false;
-    let mut numbers = Vec::new();
-    for arg in args {
-        if arg.to_str() == Some("--fail-fast") {
-            if fail_fast {
-                return Err("duplicate --fail-fast".to_string());
-            }
-            fail_fast = true;
-        } else if arg.to_str() == Some("--ignore-cache") {
-            if ignore_cache {
-                return Err("duplicate --ignore-cache".to_string());
-            }
-            ignore_cache = true;
-        } else {
-            numbers.push(arg.clone());
-        }
-    }
-    Ok(CheckOptions {
-        selected: select_expectations(config, &numbers)?,
-        fail_fast,
-        ignore_cache,
-    })
-}
-
-pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
-    if config.version != 1 {
-        return Err("check.yml version must be 1".to_string());
-    }
-    if config.agent.instructions.trim().is_empty() {
-        return Err("check.yml agent.instructions must not be empty".to_string());
-    }
-    validate_optional_model(config.agent.model.primary.as_deref(), "agent.model.primary")?;
-    for (index, model) in config.agent.model.fallbacks.iter().enumerate() {
-        validate_optional_model(
-            Some(model.as_str()),
-            &format!("agent.model.fallbacks[{}]", index),
-        )?;
-    }
-    validate_thinking(&config.agent.thinking)?;
-    for path in &config.agent.ignore {
-        validate_relative_config_path(path, "agent ignore pattern")?;
-    }
-    for plugin in &config.agent.plugins {
-        validate_plugin_config_key(plugin)?;
-    }
-    if config.expectations.is_empty() {
-        return Err("check.yml expectations must not be empty".to_string());
-    }
-    for (index, expectation) in config.expectations.iter().enumerate() {
-        let number = index + 1;
-        if expectation.q.trim().is_empty() {
-            return Err(format!("expectation {} has an empty q", number));
-        }
-        if expectation.a.contains('\n') || expectation.a.contains('\r') {
-            return Err(format!(
-                "expectation {} expected answer must be single-line",
-                number
-            ));
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_plugin_config_key(value: &str) -> Result<(), String> {
-    if value.trim().is_empty() {
-        return Err("agent has an empty plugin entry".to_string());
-    }
-    if value.contains('\n') || value.contains('\r') {
-        return Err("agent plugin entries must be single-line strings".to_string());
-    }
-    if !value.contains('@') {
-        return Err(format!(
-            "agent plugin entry must use Codex plugin key <plugin>@<marketplace>: {}",
-            value
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_optional_model(value: Option<&str>, label: &str) -> Result<(), String> {
-    let Some(model) = value else {
-        return Ok(());
-    };
-    if model.trim().is_empty() {
-        return Err(format!("check.yml {} must not be empty", label));
-    }
-    if model.contains('\n') || model.contains('\r') {
-        return Err(format!("check.yml {} must be a single-line string", label));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_thinking(value: &str) -> Result<(), String> {
-    if value.trim().is_empty() {
-        return Err("check.yml agent.thinking must not be empty".to_string());
-    }
-    if value.contains('\n') || value.contains('\r') {
-        return Err("check.yml agent.thinking must be a single-line string".to_string());
-    }
-    match value {
-        "off" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max" => {
-            Ok(())
-        }
-        _ => Err(format!("unsupported check.yml agent.thinking: {}", value)),
-    }
-}
-
-pub(crate) fn codex_reasoning_effort(thinking: &str) -> Option<&str> {
-    match thinking {
-        "adaptive" => None,
-        "off" | "none" => Some("none"),
-        "max" => Some("xhigh"),
-        value => Some(value),
-    }
-}
-
-pub(crate) fn check_config_loads_plugins(config: &CheckConfig) -> bool {
-    !config.agent.plugins.is_empty()
-}
-
-pub(crate) fn validate_relative_config_path(value: &str, label: &str) -> Result<(), String> {
-    normalize_repo_path(value)
-        .map(|_| ())
-        .map_err(|err| format!("{}: {}", label, err))
-}
-
-pub(crate) fn select_expectations(
-    config: &CheckConfig,
-    args: &[OsString],
-) -> Result<Vec<SelectedExpectation>, String> {
-    let mut selected_numbers = Vec::new();
-    if args.is_empty() {
-        selected_numbers.extend(1..=config.expectations.len());
-    } else {
-        let mut seen = BTreeSet::new();
-        for arg in args {
-            let text = arg
-                .to_str()
-                .ok_or("expectation number must be valid UTF-8".to_string())?;
-            let number = text
-                .parse::<usize>()
-                .map_err(|_| format!("invalid expectation number: {}", text))?;
-            if number == 0 {
-                return Err("expectation numbers are 1-based".to_string());
-            }
-            if number > config.expectations.len() {
-                return Err(format!("expectation number out of range: {}", number));
-            }
-            if !seen.insert(number) {
-                return Err(format!("duplicate expectation number: {}", number));
-            }
-            selected_numbers.push(number);
-        }
-    }
-
-    Ok(selected_numbers
-        .into_iter()
-        .map(|number| {
-            let expectation = &config.expectations[number - 1];
-            SelectedExpectation {
-                number,
-                id: expectation_id(&expectation.q, &expectation.a),
-                q: expectation.q.clone(),
-                a: expectation.a.clone(),
-            }
-        })
-        .collect())
 }
 
 pub(crate) fn fail_on_mixed_canon_changes(root: &Path) -> Result<(), String> {
@@ -430,8 +259,9 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     runner: &mut R,
     mut diagnostic_log: Option<&mut DiagnosticLogWriter>,
     mut result_output: Option<&mut dyn Write>,
-) -> Result<Vec<CheckRecord>, String> {
+) -> Result<CheckRunReport, String> {
     let mut records = Vec::new();
+    let mut skipped = 0usize;
     let mut sessions = BTreeMap::new();
     let mut scope_hash_cache = ScopeHashCache::new();
     let mut history_cache = HistoryCache::new();
@@ -449,14 +279,48 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 &mut history_cache,
                 &mut scope_hash_cache,
             )? {
-                // Cache hits are result reuse, not evaluator interrogations, so
-                // they print stdout but do not create diagnostic interrogation logs.
                 let should_stop = options.fail_fast && !record.passed();
-                write_and_flush_result_output(&mut result_output, &record)?;
+                if let Some(writer) = diagnostic_log.as_deref_mut() {
+                    writer.write_event(
+                        "info",
+                        "cache.exact_hit",
+                        &[
+                            ("number", json!(record.number)),
+                            ("result", json!(record.result)),
+                            ("scope", json!(record.scope)),
+                            ("scopeHash", json!(record.scope_hash)),
+                        ],
+                    )?;
+                    writer.write_record(&record)?;
+                }
+                if record.passed() {
+                    skipped += 1;
+                } else {
+                    write_and_flush_result_output(&mut result_output, &record)?;
+                }
                 records.push(record);
                 if should_stop {
-                    return Ok(records);
+                    return Ok(CheckRunReport { records, skipped });
                 }
+                continue;
+            }
+            if let Some(record) =
+                cooldown_history_record(root, expectation, &mut history_cache, unix_timestamp()?)?
+            {
+                if let Some(writer) = diagnostic_log.as_deref_mut() {
+                    writer.write_event(
+                        "info",
+                        "cache.cooldown_hit",
+                        &[
+                            ("number", json!(record.number)),
+                            ("scope", json!(record.scope)),
+                            ("scopeHash", json!(record.scope_hash)),
+                        ],
+                    )?;
+                    writer.write_record(&record)?;
+                }
+                skipped += 1;
+                records.push(record);
                 continue;
             }
         }
@@ -533,10 +397,10 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         write_and_flush_result_output(&mut result_output, &interrogation.record)?;
         records.push(interrogation.record);
         if should_stop {
-            return Ok(records);
+            return Ok(CheckRunReport { records, skipped });
         }
     }
-    Ok(records)
+    Ok(CheckRunReport { records, skipped })
 }
 
 pub(crate) fn should_retry_full_scope(record: &CheckRecord, scope: &[String]) -> bool {
@@ -556,7 +420,8 @@ pub(crate) fn interrogate_expectation<R: EvaluatorRunner>(
     enforced_scope: &[String],
 ) -> Result<InterrogationResult, String> {
     let mut failures = Vec::new();
-    for model in evaluator_models(&config.agent) {
+    let models = evaluator_models(&config.agent);
+    for (model_index, model) in models.iter().enumerate() {
         if check_interrupted() {
             return Err("interrupted".to_string());
         }
@@ -575,6 +440,29 @@ pub(crate) fn interrogate_expectation<R: EvaluatorRunner>(
         ) {
             Ok(result) => return Ok(result),
             Err(err) if is_model_technical_failure(&err) => {
+                if let Some(writer) = diagnostic_log.as_deref_mut() {
+                    writer.write_event(
+                        "warn",
+                        "model.failure",
+                        &[
+                            ("number", json!(expectation.number)),
+                            ("model", json!(model_label(model.as_deref()))),
+                            ("error", json!(err)),
+                        ],
+                    )?;
+                    if let Some(next_model) = models.get(model_index + 1) {
+                        writer.write_event(
+                            "warn",
+                            "model.fallback",
+                            &[
+                                ("number", json!(expectation.number)),
+                                ("from", json!(model_label(model.as_deref()))),
+                                ("to", json!(model_label(next_model.as_deref()))),
+                                ("reason", json!(err.clone())),
+                            ],
+                        )?;
+                    }
+                }
                 failures.push(format!("{}: {}", model_label(model.as_deref()), err));
             }
             Err(err) => return Err(err),
@@ -603,21 +491,65 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     // Threads are reused only for the same canonical enforced scope. When
     // checking a narrower scope returned by an evaluator response, that
     // canonical record scope is passed back here unchanged as enforced_scope.
-    let session_key = format!("{}\n{}", model_label(model), enforced_scope.join("\n"));
+    let session_key = enforced_scope.join("\n");
     let existing_session = sessions.get(&session_key).cloned();
     let session_id = match existing_session {
-        Some(existing) => existing,
-        None => runner.start_session(
-            snapshot_root,
-            &developer_instructions(&config.agent),
-            &config.agent,
-            model,
-            &enforced_scope,
-        )?,
+        Some(existing) => {
+            if let Some(writer) = diagnostic_log.as_deref_mut() {
+                writer.write_event(
+                    "info",
+                    "thread.reuse",
+                    &[
+                        ("scope", json!(enforced_scope)),
+                        ("model", json!(model_label(model))),
+                        (
+                            "thinking",
+                            json!(effective_thinking(&config.agent, expectation)),
+                        ),
+                    ],
+                )?;
+            }
+            existing
+        }
+        None => {
+            if let Some(writer) = diagnostic_log.as_deref_mut() {
+                writer.write_event(
+                    "info",
+                    "thread.start",
+                    &[
+                        ("scope", json!(enforced_scope)),
+                        ("model", json!(model_label(model))),
+                        (
+                            "thinking",
+                            json!(effective_thinking(&config.agent, expectation)),
+                        ),
+                        (
+                            "developerInstructions",
+                            json!(developer_instructions(&config.agent, &enforced_scope)),
+                        ),
+                    ],
+                )?;
+            }
+            runner.start_session(
+                snapshot_root,
+                &developer_instructions(&config.agent, &enforced_scope),
+                &config.agent,
+                model,
+                effective_thinking(&config.agent, expectation),
+                &enforced_scope,
+            )?
+        }
     };
     let prompt = question_prompt(&expectation.q, &enforced_scope)?;
-    let response = match ask_with_repairs(runner, &session_id, &prompt, &config.agent, parse_cache)
-    {
+    let response = match ask_with_repairs(
+        runner,
+        &session_id,
+        &prompt,
+        &config.agent,
+        parse_cache,
+        diagnostic_log,
+        expectation.number,
+    ) {
         Ok(response) => response,
         Err(err) => {
             if is_model_technical_failure(&err) {
@@ -629,9 +561,53 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     sessions
         .entry(session_key)
         .or_insert_with(|| session_id.clone());
+    let mut response = response;
+    if !scope_is_within(&response.scope, &enforced_scope) {
+        response = ParsedAnswer {
+            answer: UNPARSEABLE_OBSERVED.to_string(),
+            evidence: format!(
+                "evaluator response scope {:?} widens enforced scope {:?}",
+                response.scope, enforced_scope
+            ),
+            scope: enforced_scope.to_vec(),
+        };
+    }
     let record_scope = response.scope.clone();
     let scope_hash = scope_hash_cache.staged_scope_hash(root, &config.agent, &record_scope)?;
     let record = record_from_response(expectation, response, record_scope, scope_hash)?;
+    if record.observed == "malformed" {
+        if let Some(writer) = diagnostic_log.as_deref_mut() {
+            writer.write_event(
+                "warn",
+                "review.required",
+                &[
+                    ("number", json!(expectation.number)),
+                    ("reason", json!(MALFORMED_REVIEW_WARNING)),
+                ],
+            )?;
+        }
+    }
+    if record.observed == "idk" && enforced_scope == full_scope() {
+        if let Some(writer) = diagnostic_log.as_deref_mut() {
+            writer.write_event(
+                "warn",
+                "review.required",
+                &[
+                    ("number", json!(expectation.number)),
+                    ("reason", json!("full-scope idk")),
+                ],
+            )?;
+        }
+    }
+    if record.evidence.trim().is_empty() {
+        if let Some(writer) = diagnostic_log.as_deref_mut() {
+            writer.write_event(
+                "warn",
+                "evidence.empty",
+                &[("number", json!(expectation.number))],
+            )?;
+        }
+    }
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_record(&record)?;
     }
@@ -642,6 +618,13 @@ pub(crate) fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
     let mut models = vec![agent.model.primary.clone()];
     models.extend(agent.model.fallbacks.iter().cloned().map(Some));
     models
+}
+
+pub(crate) fn effective_thinking<'a>(
+    agent: &'a AgentConfig,
+    expectation: &'a SelectedExpectation,
+) -> &'a str {
+    expectation.thinking.as_deref().unwrap_or(&agent.thinking)
 }
 
 pub(crate) fn model_label(model: Option<&str>) -> &str {
@@ -663,18 +646,6 @@ pub(crate) fn record_from_response(
     enforced_scope: Vec<String>,
     scope_hash: String,
 ) -> Result<CheckRecord, String> {
-    if response.answer == "malformed" {
-        eprintln!(
-            "canon check: expectation {}: {}",
-            expectation.number, MALFORMED_REVIEW_WARNING
-        );
-    }
-    if response.evidence.trim().is_empty() {
-        eprintln!(
-            "canon check: expectation {}: evidence is empty after retry",
-            expectation.number
-        );
-    }
     let result = if response.answer == expectation.a && response.answer != "malformed" {
         "pass"
     } else {
@@ -694,7 +665,7 @@ pub(crate) fn record_from_response(
 }
 
 pub(crate) fn is_verified_record(record: &CheckRecord) -> bool {
-    record.observed != UNPARSEABLE_OBSERVED
+    is_reusable_history_record(record)
 }
 
 pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
@@ -703,13 +674,31 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
     prompt: &str,
     agent: &AgentConfig,
     parser_cache: &mut EvaluatorResponseParseCache,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    expectation_number: usize,
 ) -> Result<ParsedAnswer, String> {
-    let first = runner.ask(session_id, prompt)?;
+    let first = ask_and_log(
+        runner,
+        session_id,
+        prompt,
+        diagnostic_log,
+        expectation_number,
+        1,
+        "initial",
+    )?;
     let mut parsed = match parser_cache.parse(&first, agent) {
         Ok(answer) => answer,
         Err(_err) => {
             let first_excerpt = response_excerpt(&first);
-            let repaired = runner.ask(session_id, prompt)?;
+            let repaired = ask_and_log(
+                runner,
+                session_id,
+                prompt,
+                diagnostic_log,
+                expectation_number,
+                2,
+                "parse-retry",
+            )?;
             match parser_cache.parse(&repaired, agent) {
                 Ok(answer) => answer,
                 Err(err) => ParsedAnswer {
@@ -727,27 +716,88 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
     };
 
     if parsed.answer == "malformed" {
-        let repaired = runner.ask(session_id, prompt)?;
+        let repaired = ask_and_log(
+            runner,
+            session_id,
+            prompt,
+            diagnostic_log,
+            expectation_number,
+            2,
+            "malformed-retry",
+        )?;
         if let Ok(answer) = parser_cache.parse(&repaired, agent) {
             parsed = answer;
         }
     }
 
     if parsed.answer == "idk" && should_repair_absence_idk(prompt) {
-        let repaired = runner.ask(session_id, prompt)?;
+        let repaired = ask_and_log(
+            runner,
+            session_id,
+            prompt,
+            diagnostic_log,
+            expectation_number,
+            2,
+            "idk-retry",
+        )?;
         if let Ok(answer) = parser_cache.parse(&repaired, agent) {
             parsed = answer;
         }
     }
 
     if parsed.evidence.trim().is_empty() {
-        let repaired = runner.ask(session_id, prompt)?;
+        let repaired = ask_and_log(
+            runner,
+            session_id,
+            prompt,
+            diagnostic_log,
+            expectation_number,
+            2,
+            "evidence-retry",
+        )?;
         if let Ok(answer) = parser_cache.parse(&repaired, agent) {
             parsed = answer;
         }
     }
 
     Ok(parsed)
+}
+
+pub(crate) fn ask_and_log<R: EvaluatorRunner>(
+    runner: &mut R,
+    session_id: &str,
+    prompt: &str,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    expectation_number: usize,
+    attempt: usize,
+    reason: &str,
+) -> Result<String, String> {
+    if let Some(writer) = diagnostic_log.as_deref_mut() {
+        writer.write_event(
+            "info",
+            "agent.request",
+            &[
+                ("number", json!(expectation_number)),
+                ("attempt", json!(attempt)),
+                ("reason", json!(reason)),
+                ("raw", json!(prompt)),
+            ],
+        )?;
+    }
+    let response = runner.ask(session_id, prompt)?;
+    if let Some(writer) = diagnostic_log.as_deref_mut() {
+        writer.write_event(
+            "info",
+            "agent.response",
+            &[
+                ("number", json!(expectation_number)),
+                ("attempt", json!(attempt)),
+                ("reason", json!(reason)),
+                ("raw", json!(response.clone())),
+            ],
+        )?;
+    }
+    Ok(response)
 }
 
 #[derive(Default)]
@@ -788,29 +838,21 @@ pub(crate) fn response_excerpt(text: &str) -> String {
     excerpt
 }
 
-pub(crate) fn question_prompt(question: &str, scope: &[String]) -> Result<String, String> {
-    serde_json::to_string(&json!({
-        "scope": scope,
-        "question": question,
-    }))
-    .map_err(|err| format!("failed to serialize evaluator question prompt: {}", err))
+pub(crate) fn question_prompt(question: &str, _scope: &[String]) -> Result<String, String> {
+    Ok(question.to_string())
 }
 
-pub(crate) fn developer_instructions(agent: &AgentConfig) -> String {
+pub(crate) fn developer_instructions(agent: &AgentConfig, scope: &[String]) -> String {
     format!(
-        "{}\n\n{}",
+        "{}\n\nEnforced scope: {}\n\nAnswer-selection policy:\n{}\n\nWhen the answer-selection policy says to answer exactly `yes`, `no`, `idk`, `malformed`, or an option letter, put that exact string in the JSON `answer` field. Never output the raw answer as the whole response.",
+        response_format_block(),
+        compact_json_string_array(scope),
         agent.instructions.trim(),
-        response_format_block()
     )
 }
 
 pub(crate) fn should_repair_absence_idk(prompt: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<Value>(prompt.trim()) else {
-        return false;
-    };
-    let Some(question) = value.get("question").and_then(Value::as_str) else {
-        return false;
-    };
+    let question = prompt.trim();
     question.starts_with("Are there any ")
         || question.starts_with("Is there any ")
         || question.starts_with("Can any ")
@@ -821,6 +863,7 @@ pub(crate) fn response_format_block() -> &'static str {
         "Response format:\n",
         "Return exactly one valid JSON object and no markdown, code fences, or surrounding prose.\n",
         "Schema: {\"answer\":\"<single-line answer>\",\"evidence\":\"<free-form evidence citing supporting files or code>\",\"scope\":[\"<normalized repository-relative path>\"]}\n",
+        "The `answer` field is where the exact yes/no/idk/malformed/option-letter answer goes; do not write that answer outside the JSON object. ",
         "`scope` is the smallest allowed project context sufficient to answer this question with the same `answer`; it is not the list of evidence citations. ",
         "Use [\".\"] when the answer depends on project-wide absence, consistency, duplication, garbage, overall quality, or denied/inaccessible paths. ",
         "If the enforced task `scope` is narrower than [\".\"] and the question requires repository-wide or cross-module evidence, answer `idk` instead of drawing a positive or negative conclusion from incomplete context. ",
@@ -839,19 +882,7 @@ pub(crate) fn parse_evaluator_response(
     text: &str,
     agent: &AgentConfig,
 ) -> Result<ParsedAnswer, String> {
-    let response = match parse_evaluator_response_json(text) {
-        Ok(response) => response,
-        Err(err) => {
-            if let Some(answer) = parse_plain_evaluator_answer(text) {
-                return Ok(ParsedAnswer {
-                    answer,
-                    evidence: String::new(),
-                    scope: full_scope(),
-                });
-            }
-            return Err(err);
-        }
-    };
+    let response = parse_evaluator_response_json(text)?;
     if response.answer.contains('\n') || response.answer.contains('\r') {
         return Err("answer must be a single-line string".to_string());
     }
@@ -862,71 +893,167 @@ pub(crate) fn parse_evaluator_response(
     })
 }
 
-pub(crate) fn parse_plain_evaluator_answer(text: &str) -> Option<String> {
-    let answer = text.trim();
-    if answer.contains('\n') || answer.contains('\r') {
-        return None;
-    }
-    if matches!(answer, "yes" | "no" | "idk" | "malformed")
-        || (answer.len() == 1 && answer.as_bytes()[0].is_ascii_lowercase())
-    {
-        return Some(answer.to_string());
-    }
-    None
-}
-
 pub(crate) fn parse_evaluator_response_json(text: &str) -> Result<EvaluatorResponseJson, String> {
     let trimmed = text.trim();
-    match serde_json::from_str::<EvaluatorResponseJson>(trimmed) {
-        Ok(response) => Ok(response),
-        Err(strict_err) => {
-            let Some(object) = first_json_object(trimmed) else {
-                return Err(format!(
-                    "failed to parse evaluator JSON response: {}",
-                    strict_err
-                ));
-            };
-            serde_json::from_str::<EvaluatorResponseJson>(object).map_err(|embedded_err| {
-                format!(
-                    "failed to parse evaluator JSON response: {}; embedded JSON parse failed: {}",
-                    strict_err, embedded_err
-                )
-            })
-        }
+    validate_evaluator_response_key_order(trimmed)?;
+    serde_json::from_str::<EvaluatorResponseJson>(trimmed)
+        .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))
+}
+
+pub(crate) fn validate_evaluator_response_key_order(text: &str) -> Result<(), String> {
+    let keys = top_level_json_object_keys(text)?;
+    if keys == ["answer", "evidence", "scope"] {
+        Ok(())
+    } else {
+        Err(format!(
+            "evaluator JSON response must contain keys in order answer, evidence, scope; got {}",
+            keys.join(", ")
+        ))
     }
 }
 
-pub(crate) fn first_json_object(text: &str) -> Option<&str> {
-    let start = text.char_indices().find(|(_, ch)| *ch == '{')?.0;
-    let mut depth = 0usize;
+pub(crate) fn top_level_json_object_keys(text: &str) -> Result<Vec<String>, String> {
+    let bytes = text.as_bytes();
+    let mut index = skip_json_ws(bytes, 0);
+    if bytes.get(index) != Some(&b'{') {
+        return Err("evaluator response must be a JSON object".to_string());
+    }
+    index += 1;
+    let mut keys = Vec::new();
+    loop {
+        index = skip_json_ws(bytes, index);
+        if bytes.get(index) == Some(&b'}') {
+            index += 1;
+            break;
+        }
+        let (key, next) = parse_json_string_at(bytes, index)?;
+        keys.push(key);
+        index = skip_json_ws(bytes, next);
+        if bytes.get(index) != Some(&b':') {
+            return Err("evaluator JSON object key must be followed by ':'".to_string());
+        }
+        index = skip_json_value(bytes, index + 1)?;
+        index = skip_json_ws(bytes, index);
+        match bytes.get(index) {
+            Some(b',') => index += 1,
+            Some(b'}') => {
+                index += 1;
+                break;
+            }
+            _ => return Err("evaluator JSON object contains trailing content".to_string()),
+        }
+    }
+    if skip_json_ws(bytes, index) != bytes.len() {
+        return Err("evaluator response must not contain surrounding prose".to_string());
+    }
+    Ok(keys)
+}
+
+pub(crate) fn skip_json_ws(bytes: &[u8], mut index: usize) -> usize {
+    while matches!(bytes.get(index), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+        index += 1;
+    }
+    index
+}
+
+pub(crate) fn parse_json_string_at(
+    bytes: &[u8],
+    mut index: usize,
+) -> Result<(String, usize), String> {
+    if bytes.get(index) != Some(&b'"') {
+        return Err("expected JSON string key".to_string());
+    }
+    index += 1;
+    let mut output = String::new();
+    while let Some(byte) = bytes.get(index).copied() {
+        index += 1;
+        match byte {
+            b'"' => return Ok((output, index)),
+            b'\\' => {
+                let escaped = bytes
+                    .get(index)
+                    .copied()
+                    .ok_or_else(|| "unterminated JSON escape".to_string())?;
+                index += 1;
+                output.push(escaped as char);
+            }
+            byte => output.push(byte as char),
+        }
+    }
+    Err("unterminated JSON string".to_string())
+}
+
+pub(crate) fn skip_json_value(bytes: &[u8], mut index: usize) -> Result<usize, String> {
+    index = skip_json_ws(bytes, index);
+    let mut stack = Vec::new();
     let mut in_string = false;
     let mut escaped = false;
-    for (relative_index, ch) in text[start..].char_indices() {
+    let mut saw_scalar = false;
+    while let Some(byte) = bytes.get(index).copied() {
         if in_string {
+            index += 1;
             if escaped {
                 escaped = false;
-            } else if ch == '\\' {
+            } else if byte == b'\\' {
                 escaped = true;
-            } else if ch == '"' {
+            } else if byte == b'"' {
                 in_string = false;
+                saw_scalar = true;
             }
             continue;
         }
-
-        match ch {
-            '"' => in_string = true,
-            '{' => depth += 1,
-            '}' => {
-                depth = depth.checked_sub(1)?;
-                if depth == 0 {
-                    let end = start + relative_index + ch.len_utf8();
-                    return Some(&text[start..end]);
+        match byte {
+            b'"' => {
+                in_string = true;
+                index += 1;
+            }
+            b'{' | b'[' => {
+                stack.push(byte);
+                index += 1;
+            }
+            b'}' => {
+                if stack.last() == Some(&b'{') {
+                    stack.pop();
+                    index += 1;
+                    if stack.is_empty() {
+                        saw_scalar = true;
+                    }
+                } else if stack.is_empty() && saw_scalar {
+                    return Ok(index);
+                } else {
+                    return Err("unbalanced JSON object".to_string());
                 }
             }
-            _ => {}
+            b']' => {
+                if stack.last() == Some(&b'[') {
+                    stack.pop();
+                    index += 1;
+                    if stack.is_empty() {
+                        saw_scalar = true;
+                    }
+                } else {
+                    return Err("unbalanced JSON array".to_string());
+                }
+            }
+            b',' if stack.is_empty() && saw_scalar => return Ok(index),
+            b' ' | b'\n' | b'\r' | b'\t' if stack.is_empty() && saw_scalar => return Ok(index),
+            _ => {
+                saw_scalar = true;
+                index += 1;
+            }
+        }
+        if stack.is_empty() && saw_scalar && !in_string {
+            let next = skip_json_ws(bytes, index);
+            if matches!(bytes.get(next), Some(b',' | b'}')) {
+                return Ok(next);
+            }
         }
     }
-    None
+    if saw_scalar && stack.is_empty() && !in_string {
+        Ok(index)
+    } else {
+        Err("unterminated JSON value".to_string())
+    }
 }
 
 #[cfg(test)]
@@ -973,9 +1100,7 @@ pub(crate) fn write_and_flush_result_output(
     record: &CheckRecord,
 ) -> Result<(), String> {
     if let Some(writer) = result_output.as_mut() {
-        // This is the real-time stdout boundary: one complete JSONL result is
-        // written and flushed before the next expectation is evaluated.
-        let line = render_check_log_record(record);
+        let line = render_check_output_record(record);
         writer
             .write_all(line.as_bytes())
             .map_err(|err| format!("failed to write check result to stdout: {}", err))?;
@@ -984,6 +1109,136 @@ pub(crate) fn write_and_flush_result_output(
             .map_err(|err| format!("failed to flush check result to stdout: {}", err))?;
     }
     Ok(())
+}
+
+pub(crate) fn write_summary_line(
+    result_output: &mut dyn Write,
+    report: &CheckRunReport,
+    elapsed: Duration,
+) -> Result<(), String> {
+    let line = render_check_summary(report, elapsed);
+    result_output
+        .write_all(line.as_bytes())
+        .map_err(|err| format!("failed to write check summary to stdout: {}", err))?;
+    result_output
+        .flush()
+        .map_err(|err| format!("failed to flush check summary to stdout: {}", err))
+}
+
+pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
+    if record.passed() {
+        return format!("{}. OK\n", record.number);
+    }
+    let status = if record_requires_human_review(record) {
+        "ERROR"
+    } else {
+        "FAILED"
+    };
+    let mut output = String::new();
+    output.push_str(&format!("{}. {}\n", record.number, status));
+    output.push_str(&escape_check_output_text(&record.prompt));
+    output.push('\n');
+    output.push_str("Expected: ");
+    output.push_str(&escape_check_output_text(&record.expected));
+    output.push('\n');
+    output.push_str("Observed: ");
+    output.push_str(&escape_check_output_text(&record.observed));
+    output.push('\n');
+    output.push_str("Evidence: ");
+    output.push_str(&escape_check_output_text(&record.evidence));
+    output.push('\n');
+    if status == "FAILED" {
+        output.push_str("Scope: ");
+        output.push_str(&compact_json_string_array(&record.scope));
+        output.push('\n');
+    }
+    output
+}
+
+pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    let mut errors = 0usize;
+    for record in &report.records {
+        if record.passed() {
+            passed += 1;
+        } else if record_requires_human_review(record) {
+            errors += 1;
+        } else {
+            failed += 1;
+        }
+    }
+    passed = passed.saturating_sub(report.skipped);
+    let mut outcomes = Vec::new();
+    if failed > 0 {
+        outcomes.push(format!("{} failed", failed));
+    }
+    if errors > 0 {
+        outcomes.push(format!(
+            "{} {}",
+            errors,
+            if errors == 1 { "error" } else { "errors" }
+        ));
+    }
+    if passed > 0 {
+        outcomes.push(format!("{} passed", passed));
+    }
+    if report.skipped > 0 {
+        outcomes.push(format!("{} skipped", report.skipped));
+    }
+    if outcomes.is_empty() {
+        outcomes.push("0 passed".to_string());
+    }
+    let inner = format!(" {} in {:.2}s ", outcomes.join(", "), elapsed.as_secs_f64());
+    format!("{}\n", pad_summary_line(&inner))
+}
+
+pub(crate) fn pad_summary_line(inner: &str) -> String {
+    const WIDTH: usize = 80;
+    if inner.len() >= WIDTH {
+        return format!("={}=", inner.trim());
+    }
+    let padding = WIDTH - inner.len();
+    let left = padding / 2;
+    let right = padding - left;
+    format!("{}{}{}", "=".repeat(left), inner, "=".repeat(right))
+}
+
+pub(crate) fn record_requires_human_review(record: &CheckRecord) -> bool {
+    record.observed == "malformed"
+        || record.observed == UNPARSEABLE_OBSERVED
+        || record.observed == "idk"
+}
+
+pub(crate) fn compact_json_string_array(values: &[String]) -> String {
+    let mut output = String::new();
+    output.push('[');
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            output.push(',');
+        }
+        push_json_string(&mut output, value);
+    }
+    output.push(']');
+    output
+}
+
+pub(crate) fn escape_check_output_text(value: &str) -> String {
+    let mut output = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            ch if ch <= '\u{1f}' => {
+                let mut escaped = String::new();
+                push_json_control_escape(&mut escaped, ch);
+                output.push_str(&escaped);
+            }
+            ch => output.push(ch),
+        }
+    }
+    output
 }
 
 impl CheckRecord {

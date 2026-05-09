@@ -116,9 +116,7 @@ expectations:
 }
 
 fn parse_check_config(yaml: &str) -> Result<CheckConfig, String> {
-    let config: CheckConfig = serde_yaml::from_str(yaml).map_err(|err| err.to_string())?;
-    validate_check_config(&config)?;
-    Ok(config)
+    parse_check_config_content(Path::new(".canon/check.yml"), yaml)
 }
 
 struct FakeRunner {
@@ -128,6 +126,7 @@ struct FakeRunner {
     start_roots: Vec<PathBuf>,
     start_ignores: Vec<Vec<String>>,
     start_models: Vec<Option<String>>,
+    start_thinking: Vec<String>,
     start_plugins: Vec<Vec<String>>,
     start_scopes: Vec<Vec<String>>,
     starts: usize,
@@ -145,6 +144,7 @@ impl FakeRunner {
             start_roots: Vec::new(),
             start_ignores: Vec::new(),
             start_models: Vec::new(),
+            start_thinking: Vec::new(),
             start_plugins: Vec::new(),
             start_scopes: Vec::new(),
             starts: 0,
@@ -162,6 +162,7 @@ impl FakeRunner {
             start_roots: Vec::new(),
             start_ignores: Vec::new(),
             start_models: Vec::new(),
+            start_thinking: Vec::new(),
             start_plugins: Vec::new(),
             start_scopes: Vec::new(),
             starts: 0,
@@ -176,6 +177,7 @@ impl EvaluatorRunner for FakeRunner {
         _instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
+        thinking: &str,
         scope: &[String],
     ) -> Result<String, String> {
         self.starts += 1;
@@ -183,6 +185,7 @@ impl EvaluatorRunner for FakeRunner {
         self.start_ignores.push(effective_ignore_patterns(agent));
         self.start_models
             .push(model.or(agent.model.primary.as_deref()).map(str::to_string));
+        self.start_thinking.push(thinking.to_string());
         self.start_plugins.push(agent.plugins.clone());
         self.start_scopes.push(scope.to_vec());
         Ok(format!("session-{}", self.starts))
@@ -863,13 +866,11 @@ fn parser_handles_json_answer_and_free_form_evidence() {
     .unwrap();
     assert_eq!(canonicalized.answer, "no");
     assert_eq!(canonicalized.scope, vec!["src"]);
-    let wrapped = parse_evaluator_response(
+    assert!(parse_evaluator_response(
         r#"I checked the files first. {"answer":"yes","evidence":"README.md has evidence","scope":["."]}"#,
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
-    .unwrap();
-    assert_eq!(wrapped.answer, "yes");
-    assert_eq!(wrapped.scope, vec!["."]);
+    .is_err());
     assert!(parse_evaluator_response(
         "ANSWER: yes\nEVIDENCE:\nok\nSCOPE: [\".\"]",
         &parse_check_config(check_config_yaml()).unwrap().agent,
@@ -880,14 +881,11 @@ fn parser_handles_json_answer_and_free_form_evidence() {
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
     .is_err());
-    let plain = parse_evaluator_response(
+    assert!(parse_evaluator_response(
         "yes",
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
-    .unwrap();
-    assert_eq!(plain.answer, "yes");
-    assert_eq!(plain.evidence, "");
-    assert_eq!(plain.scope, full_scope());
+    .is_err());
 }
 
 #[test]
@@ -1174,7 +1172,7 @@ fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
 }
 
 #[test]
-fn check_runner_does_not_start_from_failed_history_scope() {
+fn check_runner_starts_from_latest_reusable_history_scope_even_when_failed() {
     let root = git_project("check-failed-history-scope");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -1195,13 +1193,17 @@ fn check_runner_does_not_start_from_failed_history_scope() {
         },
     )
     .unwrap();
-    let mut runner = FakeRunner::new(&[&answer("yes", "full scope answers it", &["."])]);
+    let mut runner = FakeRunner::new(&[&answer(
+        "yes",
+        "restricted scope now answers it",
+        &["src/main.rs"],
+    )]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert!(records[0].passed());
-    assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
+    assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1383,6 +1385,65 @@ fn reusable_history_record_uses_current_expectation_metadata() {
     assert_eq!(record.number, 7);
     assert_eq!(record.prompt, expectation.q);
     assert_eq!(record.expected, expectation.a);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn cooldown_reuse_stops_at_latest_reusable_failure() {
+    let root = git_project("history-cooldown-latest-fail");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#,
+    )
+    .unwrap();
+    let expectation = check_options(&config, &["1"], false, false).selected[0].clone();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "1970-01-01T00:00:10Z".to_string(),
+            number: 1,
+            result: "pass".to_string(),
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: "yes".to_string(),
+            evidence: "old pass".to_string(),
+            scope: full_scope(),
+            scope_hash: "old".to_string(),
+        },
+    )
+    .unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "1970-01-01T00:00:20Z".to_string(),
+            number: 1,
+            result: "fail".to_string(),
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: "no".to_string(),
+            evidence: "latest fail".to_string(),
+            scope: full_scope(),
+            scope_hash: "new".to_string(),
+        },
+    )
+    .unwrap();
+    let mut history_cache = HistoryCache::new();
+    assert!(
+        cooldown_history_record(&root, &expectation, &mut history_cache, 30)
+            .unwrap()
+            .is_none()
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1707,8 +1768,8 @@ fn check_runner_streams_result_output() {
     assert_eq!(output.flushes, 2);
     let lines = String::from_utf8(output.bytes).unwrap();
     assert_eq!(lines.lines().count(), 2);
-    assert!(lines.contains("\"number\":1"));
-    assert!(lines.contains("\"number\":2"));
+    assert!(lines.contains("1. OK"));
+    assert!(lines.contains("2. OK"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1716,10 +1777,7 @@ fn check_runner_streams_result_output() {
 fn question_prompt_includes_only_current_context() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let prompt = question_prompt("Permission question?", &full_scope()).unwrap();
-    assert_eq!(
-        prompt,
-        r#"{"question":"Permission question?","scope":["."]}"#
-    );
+    assert_eq!(prompt, "Permission question?");
     assert!(!prompt.contains("Response format:"));
     assert!(!prompt.contains("ANSWER: <single-line answer>"));
     assert!(!prompt.contains("Instructions:"));
@@ -1735,12 +1793,10 @@ fn question_prompt_includes_only_current_context() {
 }
 
 #[test]
-fn evaluator_turn_input_is_scope_question_object() {
+fn evaluator_turn_input_is_plain_question_string() {
     let prompt = question_prompt("Permission question?", &["src".to_string()]).unwrap();
     let input = evaluator_turn_input(&prompt).unwrap();
-    assert_eq!(input["scope"], json!(["src"]));
-    assert_eq!(input["question"], "Permission question?");
-    assert_eq!(input.as_object().unwrap().len(), 2);
+    assert_eq!(input, json!("Permission question?"));
     assert_eq!(render_evaluator_turn_input(&input).unwrap(), prompt);
 }
 
@@ -1752,15 +1808,13 @@ fn absence_repair_detection_reads_json_question_prompt() {
     assert!(!should_repair_absence_idk(
         &question_prompt("Does README exist?", &full_scope()).unwrap()
     ));
-    assert!(!should_repair_absence_idk(
-        "QUESTION: Are there any unused files?"
-    ));
+    assert!(should_repair_absence_idk("Are there any unused files?"));
 }
 
 #[test]
 fn developer_instructions_include_agent_instructions_and_response_format() {
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let instructions = developer_instructions(&config.agent);
+    let instructions = developer_instructions(&config.agent, &full_scope());
     assert!(instructions.contains(config.agent.instructions.trim()));
     assert!(instructions.contains("Response format:\nReturn exactly one valid JSON object"));
     assert!(instructions.contains(r#""answer":"<single-line answer>""#));
@@ -1776,7 +1830,7 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
         ignore: vec!["target/**".to_string()],
         plugins: Vec::new(),
     };
-    let config = evaluator_thread_config(&agent, &full_scope(), None);
+    let config = evaluator_thread_config(&agent, &full_scope(), None, &agent.thinking);
     let root_permissions = config["permissions"]["canon_check"]["filesystem"][":project_roots"]
         .as_object()
         .unwrap();
@@ -1910,10 +1964,15 @@ fn token_usage_update_is_rendered_like_codex_summary() {
 #[test]
 fn evaluator_model_is_configured_when_present() {
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let thread_config = evaluator_thread_config(&config.agent, &full_scope(), None);
+    let thread_config =
+        evaluator_thread_config(&config.agent, &full_scope(), None, &config.agent.thinking);
     assert_eq!(thread_config["model"], "gpt-5.4-mini");
-    let fallback_config =
-        evaluator_thread_config(&config.agent, &full_scope(), Some("gpt-5.3-codex-spark"));
+    let fallback_config = evaluator_thread_config(
+        &config.agent,
+        &full_scope(),
+        Some("gpt-5.3-codex-spark"),
+        &config.agent.thinking,
+    );
     assert_eq!(fallback_config["model"], "gpt-5.3-codex-spark");
 }
 
@@ -1934,7 +1993,8 @@ expectations:
     )
     .unwrap();
     assert!(check_config_loads_plugins(&config));
-    let thread_config = evaluator_thread_config(&config.agent, &full_scope(), None);
+    let thread_config =
+        evaluator_thread_config(&config.agent, &full_scope(), None, &config.agent.thinking);
     assert_eq!(
         thread_config["plugins"]["canon@codex-plugins"]["enabled"],
         json!(true)
