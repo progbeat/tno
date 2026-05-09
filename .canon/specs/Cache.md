@@ -59,9 +59,6 @@ current staged Git contents for that record's `scope`.
 
 Reusable cached pass and fail records are both valid cache hits.
 
-Cooldown is a separate cache-only reuse path for expensive checks. Cooldown
-semantics are defined in [[Cooldown]].
-
 `canon check --ignore-cache` forces evaluator interrogation even when reusable
 exact-cache history records or cooldown-eligible history records exist.
 
