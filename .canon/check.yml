@@ -2,8 +2,8 @@ version: 1
 
 agent:
   model:
-    primary: gpt-5.4-mini
-    fallbacks: [gpt-5.3-codex-spark]
+    primary: gpt-5.3-codex-spark
+    fallbacks: [gpt-5.4-mini]
   instructions: |
     Use the following response policy:
     Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
