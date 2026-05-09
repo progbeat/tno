@@ -15,11 +15,6 @@ agent:
     Do not guess.
     If there is not enough evidence to answer a valid question, answer exactly `idk`.
     If the question is malformed, answer exactly `malformed`.
-    Scoring policy:
-    * Correct answer: +5
-    * Incorrect answer: -10
-    * `idk`: 0
-    * `malformed`: N/A, human review required
     Scope policy:
     * `scope` is the smallest allowed project context sufficient to determine the correct answer to the question among all valid answers, not merely to support the answer you gave.
     * `scope` is not the list of evidence citations; cite supporting files or code inside `EVIDENCE`.
@@ -27,6 +22,11 @@ agent:
     * `scope` must be `["."]` for questions about project-wide search, absence, consistency, duplication, garbage, overall quality, architectural debt, idiomaticity, or repository-wide maintainability, unless the question explicitly limits itself to narrower paths.
     * If the allowed scope is narrower than the context required to determine the correct answer among all valid answers, answer exactly `idk`.
     * Propose a narrower scope of at most 4 paths only when that narrower scope is sufficient to determine the correct answer among all valid answers.
+    Scoring policy:
+    * Correct answer: +5
+    * Incorrect answer: -10
+    * `idk`: -1 + retry on full project scope
+    * `malformed`: N/A, human review required
     * Successful scope narrowing: +1
     * Failed scope narrowing: -5
 
