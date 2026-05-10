@@ -140,5 +140,5 @@ expectations:
     q_template: |
       {content}
       ---
-      Is this specification implemented?
+      Does the implementation fully satisfy this specification?
     a: "yes"
