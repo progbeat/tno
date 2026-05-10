@@ -135,7 +135,7 @@ expectations:
   - q: "Does `canon check` keep evaluator Codex threads ephemeral to one invocation, reuse a thread only for evaluator interrogations with the same enforced `scope` within that invocation, and start separate threads for different enforced scopes?"
     a: "yes"
 
-  # Generated specs
+  # Expectations from specs
   - path: "specs/*.md"
     q_template: |
       {content}
