@@ -288,7 +288,9 @@ side-effect-free. It passes when every expectation either has a reusable cached
 reusable cached `fail` records for both the current staged snapshot and `HEAD`,
 which means the failure was already present before the staged change. It asks
 you to run `canon check` when cache records are missing and prints new cached
-failures when they are present.
+failures when they are present. `.canon/**`-only staged changes pass without
+cache lookup when the full-project `scopeHash` is unchanged from `HEAD`, because
+the visible project content cannot regress.
 
 If an evaluator answers `malformed`, `canon check` retries once. If the final
 answer is still `malformed`, the expectation is reported as a human-review

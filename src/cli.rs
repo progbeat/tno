@@ -189,7 +189,7 @@ pub(crate) trait EvaluatorRunner {
 
 pub(crate) fn main() {
     if let Err(err) = run(env::args_os().skip(1).collect()) {
-        if err == CHECK_FAILED_EXIT {
+        if err == CHECK_FAILED_EXIT || err == GATE_FAILED_EXIT {
             process::exit(1);
         }
         eprintln!("canon: {}", err);

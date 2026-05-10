@@ -40,6 +40,7 @@ const MALFORMED_REVIEW_WARNING: &str =
     "human review required: evaluator marked the expectation question as malformed";
 const UNPARSEABLE_OBSERVED: &str = "unparseable";
 const CHECK_FAILED_EXIT: &str = "__canon_check_failed_exit__";
+const GATE_FAILED_EXIT: &str = "__canon_gate_failed_exit__";
 static CHECK_INTERRUPTED: AtomicBool = AtomicBool::new(false);
 static COMPACTION_SAMPLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SIGNAL_HANDLER_INIT: Once = Once::new();

@@ -202,12 +202,22 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Str
     let mut repo_cache = RepoInspectionCache::new();
     let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH))?;
     let selected = select_expectations(&config, args)?;
-    fail_on_mixed_canon_changes(root)?;
+    let changed_paths = staged_changed_paths(root)?;
+    fail_on_mixed_canon_paths(&changed_paths)?;
+
+    let mut scope_hash_cache = ScopeHashCache::new();
+    if should_skip_gate_for_canon_only_unchanged_visible_content(
+        root,
+        &config.agent,
+        &changed_paths,
+        &mut scope_hash_cache,
+    )? {
+        return Ok(());
+    }
 
     // From this point on, `canon gate` is a cache-only decision. The only gate
     // failures after command/config/staged-change preflight are missing cache
     // records and new cached failures that were not already failing at HEAD.
-    let mut scope_hash_cache = ScopeHashCache::new();
     let mut history_cache = HistoryCache::new();
     let mut missing = Vec::new();
     let mut failing = Vec::new();
@@ -265,7 +275,26 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Str
             eprint!("{}", render_check_log_record(record));
         }
     }
-    Err("canon gate failed".to_string())
+    Err(GATE_FAILED_EXIT.to_string())
+}
+
+pub(crate) fn should_skip_gate_for_canon_only_unchanged_visible_content(
+    root: &Path,
+    agent: &AgentConfig,
+    changed_paths: &[String],
+    scope_hash_cache: &mut ScopeHashCache,
+) -> Result<bool, String> {
+    if !is_canon_only_staged_change(changed_paths) {
+        return Ok(false);
+    }
+    let index_hash = scope_hash_cache.staged_scope_hash(root, agent, &full_scope())?;
+    let head_hash = scope_hash_cache.scope_hash_for_source(
+        root,
+        agent,
+        &full_scope(),
+        ScopeHashSource::Head,
+    )?;
+    Ok(head_hash.as_deref() == Some(index_hash.as_str()))
 }
 
 pub(crate) fn has_reusable_head_failure(
@@ -289,6 +318,10 @@ pub(crate) fn has_reusable_head_failure(
 }
 
 pub(crate) fn fail_on_mixed_canon_changes(root: &Path) -> Result<(), String> {
+    fail_on_mixed_canon_paths(&staged_changed_paths(root)?)
+}
+
+pub(crate) fn staged_changed_paths(root: &Path) -> Result<Vec<String>, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -308,7 +341,7 @@ pub(crate) fn fail_on_mixed_canon_changes(root: &Path) -> Result<(), String> {
         .filter(|line| !line.trim().is_empty())
         .map(str::to_string)
         .collect::<Vec<_>>();
-    fail_on_mixed_canon_paths(&paths)
+    Ok(paths)
 }
 
 pub(crate) fn fail_on_mixed_canon_paths(paths: &[String]) -> Result<(), String> {
@@ -325,6 +358,10 @@ pub(crate) fn fail_on_mixed_canon_paths(paths: &[String]) -> Result<(), String> 
 
 pub(crate) fn is_canon_project_path(path: &str) -> bool {
     path == ".canon" || path.starts_with(".canon/")
+}
+
+pub(crate) fn is_canon_only_staged_change(paths: &[String]) -> bool {
+    !paths.is_empty() && paths.iter().all(|path| is_canon_project_path(path))
 }
 
 pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(

@@ -634,6 +634,10 @@ fn hook_install_creates_reusable_pre_commit_hook() {
         fs::read_to_string(&hook_path).unwrap(),
         DEFAULT_PRE_COMMIT_HOOK
     );
+    assert_eq!(
+        DEFAULT_PRE_COMMIT_HOOK.matches("canon gate failed").count(),
+        1
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1780,7 +1784,51 @@ fn gate_fails_when_cache_is_missing() {
 
     let result = run_gate_command(&root, &[OsString::from("1")]);
 
-    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), GATE_FAILED_EXIT);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn gate_skips_canon_only_change_when_visible_content_is_unchanged() {
+    let root = git_project("gate-canon-only");
+    commit_all(&root, "initial");
+    write_check_config(&root);
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    let result = run_gate_command(&root, &[]);
+
+    assert!(result.is_ok());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn gate_does_not_skip_non_canon_change_with_missing_cache() {
+    let root = git_project("gate-non-canon-missing");
+    commit_all(&root, "initial");
+    write_check_config(&root);
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    let result = run_gate_command(&root, &[OsString::from("1")]);
+
+    assert_eq!(result.unwrap_err(), GATE_FAILED_EXIT);
     let _ = fs::remove_dir_all(root);
 }
 
