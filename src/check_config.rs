@@ -2,6 +2,7 @@ use crate::*;
 
 pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommandArgs, String> {
     let mut config_path = None;
+    let mut query = None;
     let mut option_args = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -24,13 +25,33 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
                 return Err("--config requires a path".to_string());
             }
             config_path = Some(normalize_check_config_path(value)?);
+        } else if arg == "-q" {
+            if query.is_some() {
+                return Err("duplicate -q".to_string());
+            }
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or_else(|| "-q requires a question".to_string())?;
+            let value = arg_to_string(value)?;
+            if value.trim().is_empty() {
+                return Err("-q question must not be empty".to_string());
+            }
+            query = Some(value);
         } else {
             option_args.push(args[index].clone());
         }
         index += 1;
     }
+    if query.is_some() && !option_args.is_empty() {
+        return Err(
+            "canon check -q cannot be combined with expectation numbers, --fail-fast, or --ignore-cache"
+                .to_string(),
+        );
+    }
     Ok(CheckCommandArgs {
         config_path: config_path.unwrap_or_else(|| PathBuf::from(CHECK_PATH)),
+        query,
         option_args,
     })
 }

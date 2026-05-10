@@ -7,6 +7,9 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), St
     let command = parse_check_command_args(args)?;
     let mut repo_cache = RepoInspectionCache::new();
     let config = repo_cache.load_check_config(root, &command.config_path)?;
+    if let Some(question) = command.query.as_deref() {
+        return run_check_query_command(root, &config, question, &mut repo_cache);
+    }
     let options = parse_check_options(&config, &command.option_args)?;
     fail_on_mixed_canon_changes(root)?;
     // Apply the staged Git snapshot as an in-place index view: unstaged and
@@ -30,6 +33,17 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), St
                 .collect::<Vec<_>>()),
         )],
     )?;
+    let cleanup = maybe_cleanup_stale_cache_dirs(root, &config)?;
+    if cleanup.sampled {
+        diagnostic_log.write_event(
+            "info",
+            "cache.cleanup",
+            &[
+                ("removed", json!(cleanup.removed)),
+                ("kept", json!(cleanup.kept)),
+            ],
+        )?;
+    }
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     let mut result_output: &mut dyn Write = &mut stdout;
@@ -57,32 +71,13 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), St
         "info",
         "check.finish",
         &[
-            (
-                "passed",
-                json!(report
-                    .records
-                    .iter()
-                    .filter(|record| record.passed())
-                    .count()
-                    .saturating_sub(report.skipped)),
-            ),
-            (
-                "failed",
-                json!(report
-                    .records
-                    .iter()
-                    .filter(|record| !record.passed() && !record_requires_human_review(record))
-                    .count()),
-            ),
-            (
-                "errors",
-                json!(report
-                    .records
-                    .iter()
-                    .filter(|record| record_requires_human_review(record))
-                    .count()),
-            ),
+            ("passed", json!(report_passed_count(&report))),
+            ("failed", json!(report_failed_count(&report))),
+            ("errors", json!(report_error_count(&report))),
             ("skipped", json!(report.skipped)),
+            ("narrowingAttempted", json!(report.narrowing.attempted)),
+            ("narrowingAccepted", json!(report.narrowing.accepted)),
+            ("narrowingRejected", json!(report.narrowing.rejected)),
         ],
     )?;
     write_summary_line(&mut result_output, &report, started.elapsed())?;
@@ -91,6 +86,84 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), St
     } else {
         Err(CHECK_FAILED_EXIT.to_string())
     }
+}
+
+pub(crate) fn run_check_query_command(
+    root: &Path,
+    config: &CheckConfig,
+    question: &str,
+    repo_cache: &mut RepoInspectionCache,
+) -> Result<(), String> {
+    install_sigint_handler();
+    CHECK_INTERRUPTED.store(false, Ordering::SeqCst);
+    fail_on_mixed_canon_changes(root)?;
+    let _staged_view = StagedWorktreeView::apply(root)?;
+    let mut runner = LazyAppServerRunner::new(check_config_loads_plugins(config), &config.agent);
+    let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, repo_cache)?;
+    diagnostic_log.write_event(
+        "info",
+        "check.start",
+        &[
+            ("query", json!(true)),
+            ("selected", json!(Vec::<usize>::new())),
+        ],
+    )?;
+    let mut sessions = BTreeMap::new();
+    let mut scope_hash_cache = ScopeHashCache::new();
+    let mut parse_cache = EvaluatorResponseParseCache::new();
+    let result = run_query_with_runner(
+        root,
+        root,
+        config,
+        question,
+        &mut runner,
+        Some(&mut diagnostic_log),
+        &mut sessions,
+        &mut scope_hash_cache,
+        &mut parse_cache,
+    );
+    runner.drain_token_usage_updates();
+    let usage = runner.token_usage().unwrap_or_default();
+    diagnostic_log.write_event("info", "token.usage", &[("usage", json!(usage))])?;
+    let result = match result {
+        Ok(result) => result,
+        Err(err) => {
+            print_token_usage_summary(Some(usage));
+            diagnostic_log.write_event(
+                "info",
+                "check.finish",
+                &[
+                    ("query", json!(true)),
+                    ("passed", json!(0)),
+                    ("failed", json!(0)),
+                    ("errors", json!(1)),
+                    ("skipped", json!(0)),
+                    ("narrowingAttempted", json!(0)),
+                    ("narrowingAccepted", json!(0)),
+                    ("narrowingRejected", json!(0)),
+                ],
+            )?;
+            return Err(err);
+        }
+    };
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    write_query_output(&mut stdout, &result.answer)?;
+    print_token_usage_summary(Some(usage));
+    diagnostic_log.write_event(
+        "info",
+        "check.finish",
+        &[
+            ("query", json!(true)),
+            ("passed", json!(0)),
+            ("failed", json!(0)),
+            ("errors", json!(0)),
+            ("skipped", json!(0)),
+            ("narrowingAttempted", json!(0)),
+            ("narrowingAccepted", json!(0)),
+            ("narrowingRejected", json!(0)),
+        ],
+    )
 }
 
 pub(crate) fn print_token_usage_summary(usage: Option<TokenUsage>) {
@@ -262,6 +335,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
 ) -> Result<CheckRunReport, String> {
     let mut records = Vec::new();
     let mut skipped = 0usize;
+    let mut narrowing = NarrowingStats::default();
     let mut sessions = BTreeMap::new();
     let mut scope_hash_cache = ScopeHashCache::new();
     let mut history_cache = HistoryCache::new();
@@ -300,13 +374,18 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 }
                 records.push(record);
                 if should_stop {
-                    return Ok(CheckRunReport { records, skipped });
+                    return Ok(CheckRunReport {
+                        records,
+                        skipped,
+                        narrowing,
+                    });
                 }
                 continue;
             }
             if let Some(record) =
                 cooldown_history_record(root, expectation, &mut history_cache, unix_timestamp()?)?
             {
+                let should_stop = options.fail_fast && !record.passed();
                 if let Some(writer) = diagnostic_log.as_deref_mut() {
                     writer.write_event(
                         "info",
@@ -319,8 +398,19 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                     )?;
                     writer.write_record(&record)?;
                 }
-                skipped += 1;
+                if record.passed() {
+                    skipped += 1;
+                } else {
+                    write_and_flush_result_output(&mut result_output, &record)?;
+                }
                 records.push(record);
+                if should_stop {
+                    return Ok(CheckRunReport {
+                        records,
+                        skipped,
+                        narrowing,
+                    });
+                }
                 continue;
             }
         }
@@ -363,9 +453,11 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         let record_scope = interrogation.record.scope.clone();
         let mut write_history = true;
         if is_strict_scope_subset(&record_scope, &enforced_scope) {
+            narrowing.attempted += 1;
             // A narrower scope from one evaluator response becomes reusable
             // only if an independent interrogation with that same canonical
             // scope preserves the answer.
+            let initial_record = interrogation.record.clone();
             let narrowed = interrogate_expectation(
                 root,
                 snapshot_root,
@@ -379,8 +471,42 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 &record_scope,
             )?;
             if narrowed.record.observed == interrogation.record.observed {
+                narrowing.accepted += 1;
+                if let Some(writer) = diagnostic_log.as_deref_mut() {
+                    writer.write_event(
+                        "info",
+                        "scope.narrowing",
+                        &scope_narrowing_log_fields(
+                            expectation.number,
+                            &enforced_scope,
+                            &record_scope,
+                            true,
+                            &initial_record,
+                            &narrowed.record,
+                        ),
+                    )?;
+                }
                 interrogation = narrowed;
             } else {
+                narrowing.rejected += 1;
+                if let Some(writer) = diagnostic_log.as_deref_mut() {
+                    writer.write_event(
+                        "info",
+                        "scope.narrowing",
+                        &scope_narrowing_log_fields(
+                            expectation.number,
+                            &enforced_scope,
+                            &record_scope,
+                            false,
+                            &initial_record,
+                            &narrowed.record,
+                        ),
+                    )?;
+                }
+                let enforced_scope_hash =
+                    scope_hash_cache.staged_scope_hash(root, &config.agent, &enforced_scope)?;
+                interrogation.record.scope = enforced_scope.clone();
+                interrogation.record.scope_hash = enforced_scope_hash;
                 write_history = false;
             }
         }
@@ -393,18 +519,79 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 &mut history_cache,
             )?;
         }
+        if let Some(writer) = diagnostic_log.as_deref_mut() {
+            writer.write_record(&interrogation.record)?;
+        }
         let should_stop = options.fail_fast && !interrogation.record.passed();
         write_and_flush_result_output(&mut result_output, &interrogation.record)?;
         records.push(interrogation.record);
         if should_stop {
-            return Ok(CheckRunReport { records, skipped });
+            return Ok(CheckRunReport {
+                records,
+                skipped,
+                narrowing,
+            });
         }
     }
-    Ok(CheckRunReport { records, skipped })
+    Ok(CheckRunReport {
+        records,
+        skipped,
+        narrowing,
+    })
+}
+
+pub(crate) fn scope_narrowing_log_fields(
+    number: usize,
+    original_scope: &[String],
+    proposed_scope: &[String],
+    accepted: bool,
+    initial: &CheckRecord,
+    verification: &CheckRecord,
+) -> Vec<(&'static str, Value)> {
+    vec![
+        ("number", json!(number)),
+        ("originalScope", json!(original_scope)),
+        ("proposedScope", json!(proposed_scope)),
+        ("accepted", json!(accepted)),
+        ("initialObserved", json!(initial.observed.clone())),
+        ("initialEvidence", json!(initial.evidence.clone())),
+        ("verificationObserved", json!(verification.observed.clone())),
+        ("verificationEvidence", json!(verification.evidence.clone())),
+    ]
+}
+
+pub(crate) fn report_passed_count(report: &CheckRunReport) -> usize {
+    report
+        .records
+        .iter()
+        .filter(|record| record.passed())
+        .count()
+        .saturating_sub(report.skipped)
+}
+
+pub(crate) fn report_failed_count(report: &CheckRunReport) -> usize {
+    report
+        .records
+        .iter()
+        .filter(|record| !record.passed() && !record_requires_human_review(record))
+        .count()
+}
+
+pub(crate) fn report_error_count(report: &CheckRunReport) -> usize {
+    report
+        .records
+        .iter()
+        .filter(|record| record_requires_human_review(record))
+        .count()
 }
 
 pub(crate) fn should_retry_full_scope(record: &CheckRecord, scope: &[String]) -> bool {
-    scope != full_scope() && record.observed == "idk"
+    scope != full_scope() && (record.observed == OBSERVED_IDK || is_scope_widening_record(record))
+}
+
+pub(crate) fn is_scope_widening_record(record: &CheckRecord) -> bool {
+    record.observed == UNPARSEABLE_OBSERVED
+        && record.evidence.starts_with("evaluator response scope ")
 }
 
 pub(crate) fn interrogate_expectation<R: EvaluatorRunner>(
@@ -562,20 +749,27 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         .entry(session_key)
         .or_insert_with(|| session_id.clone());
     let mut response = response;
-    if !scope_is_within(&response.scope, &enforced_scope) {
-        response = ParsedAnswer {
-            answer: UNPARSEABLE_OBSERVED.to_string(),
-            evidence: format!(
-                "evaluator response scope {:?} widens enforced scope {:?}",
-                response.scope, enforced_scope
-            ),
-            scope: enforced_scope.to_vec(),
-        };
+    if response.answer == UNPARSEABLE_OBSERVED {
+        response.scope = enforced_scope.to_vec();
+    } else {
+        if question_requires_full_scope(&expectation.q) {
+            response.scope = full_scope();
+        }
+        if !scope_is_within(&response.scope, &enforced_scope) {
+            response = ParsedAnswer {
+                answer: UNPARSEABLE_OBSERVED.to_string(),
+                evidence: format!(
+                    "evaluator response scope {:?} widens enforced scope {:?}",
+                    response.scope, enforced_scope
+                ),
+                scope: enforced_scope.to_vec(),
+            };
+        }
     }
     let record_scope = response.scope.clone();
     let scope_hash = scope_hash_cache.staged_scope_hash(root, &config.agent, &record_scope)?;
     let record = record_from_response(expectation, response, record_scope, scope_hash)?;
-    if record.observed == "malformed" {
+    if record.observed == OBSERVED_MALFORMED {
         if let Some(writer) = diagnostic_log.as_deref_mut() {
             writer.write_event(
                 "warn",
@@ -587,7 +781,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
             )?;
         }
     }
-    if record.observed == "idk" && enforced_scope == full_scope() {
+    if record.observed == OBSERVED_IDK && enforced_scope == full_scope() {
         if let Some(writer) = diagnostic_log.as_deref_mut() {
             writer.write_event(
                 "warn",
@@ -609,9 +803,213 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         }
     }
     if let Some(writer) = diagnostic_log.as_deref_mut() {
-        writer.write_record(&record)?;
+        writer.write_interrogation_record(&record)?;
     }
     Ok(InterrogationResult { record })
+}
+
+pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
+    root: &Path,
+    snapshot_root: &Path,
+    config: &CheckConfig,
+    question: &str,
+    runner: &mut R,
+    diagnostic_log: Option<&mut DiagnosticLogWriter>,
+    sessions: &mut BTreeMap<String, String>,
+    scope_hash_cache: &mut ScopeHashCache,
+    parse_cache: &mut EvaluatorResponseParseCache,
+) -> Result<QueryInterrogationResult, String> {
+    let mut diagnostic_log = diagnostic_log;
+    let mut failures = Vec::new();
+    let models = evaluator_models(&config.agent);
+    for (model_index, model) in models.iter().enumerate() {
+        if check_interrupted() {
+            return Err("interrupted".to_string());
+        }
+        match interrogate_query_with_model(
+            root,
+            snapshot_root,
+            config,
+            question,
+            runner,
+            sessions,
+            &mut diagnostic_log,
+            scope_hash_cache,
+            parse_cache,
+            model.as_deref(),
+        ) {
+            Ok(result) => return Ok(result),
+            Err(err) if is_model_technical_failure(&err) => {
+                if let Some(writer) = diagnostic_log.as_deref_mut() {
+                    writer.write_event(
+                        "warn",
+                        "model.failure",
+                        &[
+                            ("number", json!(0)),
+                            ("model", json!(model_label(model.as_deref()))),
+                            ("error", json!(err)),
+                        ],
+                    )?;
+                    if let Some(next_model) = models.get(model_index + 1) {
+                        writer.write_event(
+                            "warn",
+                            "model.fallback",
+                            &[
+                                ("number", json!(0)),
+                                ("from", json!(model_label(model.as_deref()))),
+                                ("to", json!(model_label(next_model.as_deref()))),
+                                ("reason", json!(err.clone())),
+                            ],
+                        )?;
+                    }
+                }
+                failures.push(format!("{}: {}", model_label(model.as_deref()), err));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(format!(
+        "all evaluator models failed: {}",
+        failures.join("; ")
+    ))
+}
+
+pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
+    root: &Path,
+    snapshot_root: &Path,
+    config: &CheckConfig,
+    question: &str,
+    runner: &mut R,
+    sessions: &mut BTreeMap<String, String>,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    scope_hash_cache: &mut ScopeHashCache,
+    parse_cache: &mut EvaluatorResponseParseCache,
+    model: Option<&str>,
+) -> Result<QueryInterrogationResult, String> {
+    let enforced_scope = full_scope();
+    let session_key = enforced_scope.join("\n");
+    let existing_session = sessions.get(&session_key).cloned();
+    let session_id = match existing_session {
+        Some(existing) => {
+            if let Some(writer) = diagnostic_log.as_deref_mut() {
+                writer.write_event(
+                    "info",
+                    "thread.reuse",
+                    &[
+                        ("scope", json!(enforced_scope)),
+                        ("model", json!(model_label(model))),
+                        ("thinking", json!(config.agent.thinking.clone())),
+                    ],
+                )?;
+            }
+            existing
+        }
+        None => {
+            if let Some(writer) = diagnostic_log.as_deref_mut() {
+                writer.write_event(
+                    "info",
+                    "thread.start",
+                    &[
+                        ("scope", json!(enforced_scope)),
+                        ("model", json!(model_label(model))),
+                        ("thinking", json!(config.agent.thinking.clone())),
+                        (
+                            "developerInstructions",
+                            json!(developer_instructions(&config.agent, &enforced_scope)),
+                        ),
+                    ],
+                )?;
+            }
+            runner.start_session(
+                snapshot_root,
+                &developer_instructions(&config.agent, &enforced_scope),
+                &config.agent,
+                model,
+                &config.agent.thinking,
+                &enforced_scope,
+            )?
+        }
+    };
+    let prompt = question_prompt(question, &enforced_scope)?;
+    let response = match ask_with_repairs(
+        runner,
+        &session_id,
+        &prompt,
+        &config.agent,
+        parse_cache,
+        diagnostic_log,
+        0,
+    ) {
+        Ok(response) => response,
+        Err(err) => {
+            if is_model_technical_failure(&err) {
+                sessions.remove(&session_key);
+            }
+            return Err(err);
+        }
+    };
+    sessions
+        .entry(session_key)
+        .or_insert_with(|| session_id.clone());
+    let mut response = response;
+    if response.answer == UNPARSEABLE_OBSERVED {
+        response.scope = enforced_scope.to_vec();
+    } else {
+        if question_requires_full_scope(question) {
+            response.scope = full_scope();
+        }
+        if !scope_is_within(&response.scope, &enforced_scope) {
+            response = ParsedAnswer {
+                answer: UNPARSEABLE_OBSERVED.to_string(),
+                evidence: format!(
+                    "evaluator response scope {:?} widens enforced scope {:?}",
+                    response.scope, enforced_scope
+                ),
+                scope: enforced_scope.to_vec(),
+            };
+        }
+    }
+    let scope_hash = scope_hash_cache.staged_scope_hash(root, &config.agent, &response.scope)?;
+    if response.answer == OBSERVED_MALFORMED {
+        if let Some(writer) = diagnostic_log.as_deref_mut() {
+            writer.write_event(
+                "warn",
+                "review.required",
+                &[
+                    ("number", json!(0)),
+                    ("reason", json!(MALFORMED_REVIEW_WARNING)),
+                ],
+            )?;
+        }
+    }
+    if response.answer == OBSERVED_IDK {
+        if let Some(writer) = diagnostic_log.as_deref_mut() {
+            writer.write_event(
+                "warn",
+                "review.required",
+                &[("number", json!(0)), ("reason", json!("full-scope idk"))],
+            )?;
+        }
+    }
+    if response.evidence.trim().is_empty() {
+        if let Some(writer) = diagnostic_log.as_deref_mut() {
+            writer.write_event("warn", "evidence.empty", &[("number", json!(0))])?;
+        }
+    }
+    if let Some(writer) = diagnostic_log.as_deref_mut() {
+        writer.write_event(
+            "info",
+            "query.result",
+            &[
+                ("prompt", json!(question)),
+                ("observed", json!(response.answer.clone())),
+                ("evidence", json!(response.evidence.clone())),
+                ("scope", json!(response.scope.clone())),
+                ("scopeHash", json!(scope_hash.clone())),
+            ],
+        )?;
+    }
+    Ok(QueryInterrogationResult { answer: response })
 }
 
 pub(crate) fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
@@ -646,10 +1044,10 @@ pub(crate) fn record_from_response(
     enforced_scope: Vec<String>,
     scope_hash: String,
 ) -> Result<CheckRecord, String> {
-    let result = if response.answer == expectation.a && response.answer != "malformed" {
-        "pass"
+    let result = if response.answer == expectation.a && response.answer != OBSERVED_MALFORMED {
+        RESULT_PASS
     } else {
-        "fail"
+        RESULT_FAIL
     };
     Ok(CheckRecord {
         timestamp: format_log_record_timestamp(unix_timestamp()?),
@@ -715,7 +1113,7 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
         }
     };
 
-    if parsed.answer == "malformed" {
+    if parsed.answer == OBSERVED_MALFORMED {
         let repaired = ask_and_log(
             runner,
             session_id,
@@ -730,7 +1128,7 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
         }
     }
 
-    if parsed.answer == "idk" && should_repair_absence_idk(prompt) {
+    if parsed.answer == OBSERVED_IDK && should_repair_absence_idk(prompt) {
         let repaired = ask_and_log(
             runner,
             session_id,
@@ -842,6 +1240,31 @@ pub(crate) fn question_prompt(question: &str, _scope: &[String]) -> Result<Strin
     Ok(question.to_string())
 }
 
+pub(crate) fn question_requires_full_scope(question: &str) -> bool {
+    let lower = question.to_ascii_lowercase();
+    [
+        "project-wide",
+        "whole project",
+        "overall quality",
+        "architectural debt",
+        "maintainability",
+        "consistency",
+        "consistent",
+        "duplication",
+        "duplicated",
+        "garbage",
+        "obsolete",
+        "unused",
+        "stray",
+        "dead-end",
+        "redundant",
+        "dirty hacks",
+        "idiomatic",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 pub(crate) fn developer_instructions(agent: &AgentConfig, scope: &[String]) -> String {
     format!(
         "{}\n\nEnforced scope: {}\n\nAnswer-selection policy:\n{}\n\nWhen the answer-selection policy says to answer exactly `yes`, `no`, `idk`, `malformed`, or an option letter, put that exact string in the JSON `answer` field. Never output the raw answer as the whole response.",
@@ -900,6 +1323,12 @@ pub(crate) fn parse_evaluator_response_json(text: &str) -> Result<EvaluatorRespo
         .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))
 }
 
+// The evaluator protocol intentionally makes the top-level key order part of
+// the response format so logs, stdout, and human review stay predictable.
+// serde_json validates field names and types below, but it does not expose
+// source object order through the normal typed-deserialization path, so this
+// small scanner only checks the top-level object envelope before serde parses
+// the actual field values.
 pub(crate) fn validate_evaluator_response_key_order(text: &str) -> Result<(), String> {
     let keys = top_level_json_object_keys(text)?;
     if keys == ["answer", "evidence", "scope"] {
@@ -1125,6 +1554,33 @@ pub(crate) fn write_summary_line(
         .map_err(|err| format!("failed to flush check summary to stdout: {}", err))
 }
 
+pub(crate) fn write_query_output(
+    result_output: &mut dyn Write,
+    answer: &ParsedAnswer,
+) -> Result<(), String> {
+    let output = render_query_output(answer);
+    result_output
+        .write_all(output.as_bytes())
+        .map_err(|err| format!("failed to write query result to stdout: {}", err))?;
+    result_output
+        .flush()
+        .map_err(|err| format!("failed to flush query result to stdout: {}", err))
+}
+
+pub(crate) fn render_query_output(answer: &ParsedAnswer) -> String {
+    let mut output = String::new();
+    output.push_str("Observed: ");
+    output.push_str(&escape_check_output_text(&answer.answer));
+    output.push('\n');
+    output.push_str("Evidence: ");
+    output.push_str(&escape_check_output_text(&answer.evidence));
+    output.push('\n');
+    output.push_str("Scope: ");
+    output.push_str(&compact_json_string_array(&answer.scope));
+    output.push('\n');
+    output
+}
+
 pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
     if record.passed() {
         return format!("{}. OK\n", record.number);
@@ -1205,9 +1661,9 @@ pub(crate) fn pad_summary_line(inner: &str) -> String {
 }
 
 pub(crate) fn record_requires_human_review(record: &CheckRecord) -> bool {
-    record.observed == "malformed"
+    record.observed == OBSERVED_MALFORMED
         || record.observed == UNPARSEABLE_OBSERVED
-        || record.observed == "idk"
+        || record.observed == OBSERVED_IDK
 }
 
 pub(crate) fn compact_json_string_array(values: &[String]) -> String {
@@ -1243,6 +1699,6 @@ pub(crate) fn escape_check_output_text(value: &str) -> String {
 
 impl CheckRecord {
     pub(crate) fn passed(&self) -> bool {
-        self.result == "pass"
+        self.result == RESULT_PASS
     }
 }

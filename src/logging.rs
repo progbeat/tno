@@ -37,9 +37,20 @@ impl DiagnosticLogWriter {
     }
 
     pub(crate) fn write_record(&mut self, record: &CheckRecord) -> Result<(), String> {
+        self.write_record_event("expectation.result", record)
+    }
+
+    pub(crate) fn write_interrogation_record(
+        &mut self,
+        record: &CheckRecord,
+    ) -> Result<(), String> {
+        self.write_record_event("interrogation.result", record)
+    }
+
+    fn write_record_event(&mut self, event: &str, record: &CheckRecord) -> Result<(), String> {
         self.write_event(
             "info",
-            "expectation.result",
+            event,
             &[
                 ("number", json!(record.number)),
                 ("result", json!(record.result)),

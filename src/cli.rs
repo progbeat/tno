@@ -141,6 +141,7 @@ pub(crate) struct CheckOptions {
 
 pub(crate) struct CheckCommandArgs {
     pub(crate) config_path: PathBuf,
+    pub(crate) query: Option<String>,
     pub(crate) option_args: Vec<OsString>,
 }
 
@@ -148,9 +149,21 @@ pub(crate) struct InterrogationResult {
     pub(crate) record: CheckRecord,
 }
 
+pub(crate) struct QueryInterrogationResult {
+    pub(crate) answer: ParsedAnswer,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct NarrowingStats {
+    pub(crate) attempted: usize,
+    pub(crate) accepted: usize,
+    pub(crate) rejected: usize,
+}
+
 pub(crate) struct CheckRunReport {
     pub(crate) records: Vec<CheckRecord>,
     pub(crate) skipped: usize,
+    pub(crate) narrowing: NarrowingStats,
 }
 
 impl std::ops::Deref for CheckRunReport {

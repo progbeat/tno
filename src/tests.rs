@@ -1,6 +1,6 @@
 use crate::*;
 use serde_json::json;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -786,6 +786,41 @@ fn check_command_accepts_custom_config_option() {
 }
 
 #[test]
+fn check_command_accepts_query_mode() {
+    let parsed = parse_check_command_args(&["-q".into(), "Question?".into()]).unwrap();
+    assert_eq!(parsed.query.as_deref(), Some("Question?"));
+    assert_eq!(parsed.config_path, PathBuf::from(CHECK_PATH));
+    assert!(parsed.option_args.is_empty());
+
+    let parsed = parse_check_command_args(&[
+        "--config".into(),
+        "alt.yml".into(),
+        "-q".into(),
+        "Question?".into(),
+    ])
+    .unwrap();
+    assert_eq!(parsed.config_path, PathBuf::from("alt.yml"));
+    assert_eq!(parsed.query.as_deref(), Some("Question?"));
+
+    assert!(parse_check_command_args(&["-q".into()]).is_err());
+    assert!(parse_check_command_args(&[
+        "-q".into(),
+        "Question?".into(),
+        "-q".into(),
+        "Again?".into()
+    ])
+    .is_err());
+    assert!(parse_check_command_args(&["-q".into(), "Question?".into(), "1".into()]).is_err());
+    assert!(
+        parse_check_command_args(&["-q".into(), "Question?".into(), "--fail-fast".into()]).is_err()
+    );
+    assert!(
+        parse_check_command_args(&["-q".into(), "Question?".into(), "--ignore-cache".into()])
+            .is_err()
+    );
+}
+
+#[test]
 fn check_config_rejects_missing_required_fields() {
     assert!(parse_check_config("version: 1\n").is_err());
     assert!(parse_check_config("version: 1\nagent: {}\nexpectations: []\n").is_err());
@@ -960,7 +995,7 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
     assert!(records[0].passed());
     assert_eq!(records[0].observed, "yes");
-    assert_eq!(records[0].scope, vec!["src/main.rs"]);
+    assert_eq!(records[0].scope, vec!["."]);
     let history = read_history_records(&root, &options.selected[0]).unwrap();
     assert!(history.is_empty());
     let _ = fs::remove_dir_all(root);
@@ -1305,6 +1340,45 @@ fn check_runner_does_not_widen_restricted_answer_mismatch() {
 }
 
 #[test]
+fn check_runner_repairs_restricted_scope_widening_with_full_scope() {
+    let root = git_project("check-restricted-widening");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let expectation = options.selected[0].clone();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
+            number: expectation.number,
+            result: RESULT_PASS.to_string(),
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: "yes".to_string(),
+            evidence: "src/main.rs was previously enough".to_string(),
+            scope: vec!["src/main.rs".to_string()],
+            scope_hash: "old".to_string(),
+        },
+    )
+    .unwrap();
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "needs wider scope", &["."]),
+        &answer("yes", "full project answers it", &["."]),
+    ]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(records[0].passed());
+    assert_eq!(records[0].scope, vec!["."]);
+    assert_eq!(
+        runner.start_scopes,
+        vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_does_not_widen_restricted_unparseable_response() {
     let root = git_project("check-restricted-unparseable");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -1448,18 +1522,46 @@ expectations:
 }
 
 #[test]
-fn history_git_path_uses_expectation_id_directory() {
+fn history_path_uses_expectation_id_directory() {
+    let root = git_project("history-path");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut options = check_options(&config, &["1"], false, true);
     let expectation = options.selected.remove(0);
     assert_eq!(
-        history_git_path(&expectation),
-        format!("{}/{}/history.jsonl", GIT_CANON_CACHE_DIR, expectation.id)
+        history_path(&root, &expectation).unwrap(),
+        root.join(".git")
+            .join(GIT_CANON_CACHE_DIR)
+            .join(&expectation.id)
+            .join(history_file_name())
     );
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn malformed_history_json_lines_are_ignored() {
+fn stale_cache_cleanup_removes_inactive_expectation_entries() {
+    let root = git_project("history-cleanup-stale-cache");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let active_ids = active_expectation_ids(&config);
+    let active_id = active_ids.iter().next().unwrap().clone();
+    let cache_dir = root.join(".git/canon/cache");
+    fs::create_dir_all(cache_dir.join(&active_id)).unwrap();
+    fs::write(cache_dir.join(&active_id).join(history_file_name()), "").unwrap();
+    fs::create_dir_all(cache_dir.join("stale-id")).unwrap();
+    fs::write(cache_dir.join("stale-id").join(history_file_name()), "").unwrap();
+    fs::write(cache_dir.join("stale-file"), "old").unwrap();
+
+    let stats = cleanup_stale_cache_dirs(&root, &active_ids).unwrap();
+
+    assert_eq!(stats.removed, 2);
+    assert_eq!(stats.kept, 1);
+    assert!(cache_dir.join(&active_id).exists());
+    assert!(!cache_dir.join("stale-id").exists());
+    assert!(!cache_dir.join("stale-file").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn malformed_history_json_lines_fail_explicitly() {
     let root = git_project("history-malformed-json");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
@@ -1467,9 +1569,10 @@ fn malformed_history_json_lines_are_ignored() {
     ensure_dir(path.parent().unwrap()).unwrap();
     fs::write(&path, "{not json}\n").unwrap();
 
-    let records = read_history_records(&root, &expectation).unwrap();
+    let error = read_history_records(&root, &expectation).unwrap_err();
 
-    assert!(records.is_empty());
+    assert!(error.contains("invalid history JSON"));
+    assert!(error.contains("line 1"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1506,7 +1609,7 @@ fn compact_history_replaces_file_after_writing_latest_lines() {
     ensure_dir(path.parent().unwrap()).unwrap();
     fs::write(
         &path,
-        "{\"n\":1}\nnot json\n{\"n\":2}\n{\"n\":3}\n{\"n\":4}\n{\"n\":5}\n{\"n\":6}\n{\"n\":7}\n",
+        "{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n{\"n\":4}\n{\"n\":5}\n{\"n\":6}\n{\"n\":7}\n",
     )
     .unwrap();
 
@@ -1517,6 +1620,20 @@ fn compact_history_replaces_file_after_writing_latest_lines() {
         "{\"n\":3}\n{\"n\":4}\n{\"n\":5}\n{\"n\":6}\n{\"n\":7}\n"
     );
     assert!(!compact_history_temp_path(&path).unwrap().exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn compact_history_reports_malformed_json_lines() {
+    let root = git_project("history-compact-malformed");
+    let path = root.join(".git/canon/cache/example/history.jsonl");
+    ensure_dir(path.parent().unwrap()).unwrap();
+    fs::write(&path, "{\"n\":1}\nnot json\n").unwrap();
+
+    let error = compact_history(&path).unwrap_err();
+
+    assert!(error.contains("invalid history JSON"));
+    assert!(error.contains("line 2"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1770,6 +1887,149 @@ fn check_runner_streams_result_output() {
     assert_eq!(lines.lines().count(), 2);
     assert!(lines.contains("1. OK"));
     assert!(lines.contains("2. OK"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn query_mode_uses_agent_and_does_not_write_history() {
+    let root = git_project("query-mode");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let mut runner = FakeRunner::new(&[&answer("no", "src/main.rs says no", &["src"])]);
+    let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
+    let mut sessions = BTreeMap::new();
+    let mut scope_hash_cache = ScopeHashCache::new();
+    let mut parse_cache = EvaluatorResponseParseCache::new();
+
+    let result = run_query_with_runner(
+        &root,
+        &root,
+        &config,
+        "Ad-hoc question?",
+        &mut runner,
+        Some(&mut diagnostic_log),
+        &mut sessions,
+        &mut scope_hash_cache,
+        &mut parse_cache,
+    )
+    .unwrap();
+
+    assert_eq!(result.answer.answer, "no");
+    assert_eq!(result.answer.scope, vec!["src"]);
+    assert_eq!(runner.prompts, vec!["Ad-hoc question?".to_string()]);
+    assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
+    assert_eq!(runner.start_models, vec![Some("gpt-5.4-mini".to_string())]);
+    assert_eq!(runner.start_thinking, vec!["medium".to_string()]);
+    let cache_dir = root.join(".git/canon/cache");
+    assert!(!cache_dir.exists() || fs::read_dir(&cache_dir).unwrap().next().is_none());
+    let output = render_query_output(&result.answer);
+    assert_eq!(
+        output,
+        "Observed: no\nEvidence: src/main.rs says no\nScope: [\"src\"]\n"
+    );
+    let log = fs::read_to_string(diagnostic_log.path).unwrap();
+    assert!(log.contains(r#""event":"query.result""#));
+    assert!(!log.contains(r#""event":"expectation.result""#));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn successful_narrowing_logs_stats_and_one_final_result() {
+    let root = git_project("narrowing-success");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "full answer", &["src"]),
+        &answer("yes", "narrow answer", &["src"]),
+    ]);
+    let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
+
+    let report = run_check_with_runner(
+        &root,
+        &root,
+        &config,
+        &options,
+        &mut runner,
+        Some(&mut diagnostic_log),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(report.narrowing.attempted, 1);
+    assert_eq!(report.narrowing.accepted, 1);
+    assert_eq!(report.narrowing.rejected, 0);
+    assert_eq!(report.records[0].scope, vec!["src"]);
+    let log = fs::read_to_string(diagnostic_log.path).unwrap();
+    assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);
+    assert_eq!(log.matches(r#""event":"interrogation.result""#).count(), 2);
+    assert!(log.contains(r#""event":"scope.narrowing""#));
+    assert!(log.contains(r#""accepted":true"#));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
+    let root = git_project("narrowing-fail");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let expectation = options.selected[0].clone();
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "full answer", &["src"]),
+        &answer("no", "narrow answer", &["src"]),
+    ]);
+    let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
+
+    let report = run_check_with_runner(
+        &root,
+        &root,
+        &config,
+        &options,
+        &mut runner,
+        Some(&mut diagnostic_log),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(report.narrowing.attempted, 1);
+    assert_eq!(report.narrowing.accepted, 0);
+    assert_eq!(report.narrowing.rejected, 1);
+    assert_eq!(report.records[0].observed, "yes");
+    assert_eq!(report.records[0].scope, vec!["."]);
+    assert!(read_history_records(&root, &expectation)
+        .unwrap()
+        .is_empty());
+    let log = fs::read_to_string(diagnostic_log.path).unwrap();
+    assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);
+    assert_eq!(log.matches(r#""event":"interrogation.result""#).count(), 2);
+    assert!(log.contains(r#""event":"scope.narrowing""#));
+    assert!(log.contains(r#""accepted":false"#));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn project_wide_quality_questions_force_full_scope() {
+    let root = git_project("quality-force-full-scope");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Are there any dirty hacks that can be avoided?"
+    a: "no"
+"#,
+    )
+    .unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let mut runner = FakeRunner::new(&[&answer("no", "src looked clean", &["src"])]);
+
+    let report =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(report.records[0].passed());
+    assert_eq!(report.records[0].scope, vec!["."]);
+    assert_eq!(report.narrowing.attempted, 0);
     let _ = fs::remove_dir_all(root);
 }
 

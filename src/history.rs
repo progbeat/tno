@@ -4,11 +4,87 @@ pub(crate) fn history_path(
     root: &Path,
     expectation: &SelectedExpectation,
 ) -> Result<PathBuf, String> {
-    git_path(root, &history_git_path(expectation))
+    Ok(git_path(root, GIT_CANON_CACHE_DIR)?
+        .join(&expectation.id)
+        .join(history_file_name()))
 }
 
-pub(crate) fn history_git_path(expectation: &SelectedExpectation) -> String {
-    [GIT_CANON_CACHE_DIR, &expectation.id, "history.jsonl"].join("/")
+pub(crate) fn history_file_name() -> &'static str {
+    "history.jsonl"
+}
+
+pub(crate) fn active_expectation_ids(config: &CheckConfig) -> BTreeSet<String> {
+    config
+        .expectations
+        .iter()
+        .map(|expectation| expectation_id(&expectation.q, &expectation.a))
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CacheCleanupStats {
+    pub(crate) sampled: bool,
+    pub(crate) removed: usize,
+    pub(crate) kept: usize,
+}
+
+pub(crate) fn maybe_cleanup_stale_cache_dirs(
+    root: &Path,
+    config: &CheckConfig,
+) -> Result<CacheCleanupStats, String> {
+    if !sample_approximately_one_in(CACHE_CLEANUP_SAMPLE_INTERVAL, "cache-cleanup", root)? {
+        return Ok(CacheCleanupStats::default());
+    }
+    let mut stats = cleanup_stale_cache_dirs(root, &active_expectation_ids(config))?;
+    stats.sampled = true;
+    Ok(stats)
+}
+
+pub(crate) fn cleanup_stale_cache_dirs(
+    root: &Path,
+    active_ids: &BTreeSet<String>,
+) -> Result<CacheCleanupStats, String> {
+    let cache_dir = git_path(root, GIT_CANON_CACHE_DIR)?;
+    if !cache_dir.exists() {
+        return Ok(CacheCleanupStats {
+            sampled: true,
+            removed: 0,
+            kept: 0,
+        });
+    }
+    let mut stats = CacheCleanupStats {
+        sampled: true,
+        removed: 0,
+        kept: 0,
+    };
+    for entry in fs::read_dir(&cache_dir)
+        .map_err(|err| format!("failed to read {}: {}", cache_dir.display(), err))?
+    {
+        let entry =
+            entry.map_err(|err| format!("failed to read {}: {}", cache_dir.display(), err))?;
+        let file_name = entry.file_name();
+        let Some(id) = file_name.to_str() else {
+            remove_cache_entry(&entry.path())?;
+            stats.removed += 1;
+            continue;
+        };
+        if active_ids.contains(id) {
+            stats.kept += 1;
+        } else {
+            remove_cache_entry(&entry.path())?;
+            stats.removed += 1;
+        }
+    }
+    Ok(stats)
+}
+
+pub(crate) fn remove_cache_entry(path: &Path) -> Result<(), String> {
+    if path.is_dir() {
+        fs::remove_dir_all(path)
+            .map_err(|err| format!("failed to remove {}: {}", path.display(), err))
+    } else {
+        fs::remove_file(path).map_err(|err| format!("failed to remove {}: {}", path.display(), err))
+    }
 }
 
 #[cfg(test)]
@@ -39,10 +115,15 @@ pub(crate) fn read_history_records_from_path(path: &Path) -> Result<Vec<CheckRec
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<CheckRecord>(&line) {
-            Ok(record) => records.push(record),
-            Err(_err) => {}
-        }
+        let record = serde_json::from_str::<CheckRecord>(&line).map_err(|err| {
+            format!(
+                "invalid history JSON in {} line {}: {}",
+                path.display(),
+                index + 1,
+                err
+            )
+        })?;
+        records.push(record);
     }
     Ok(records)
 }
@@ -188,9 +269,9 @@ pub(crate) fn latest_history_scope_with_cache(
 }
 
 pub(crate) fn is_reusable_history_record(record: &CheckRecord) -> bool {
-    matches!(record.result.as_str(), "pass" | "fail")
-        && record.observed != "idk"
-        && record.observed != "malformed"
+    matches!(record.result.as_str(), RESULT_PASS | RESULT_FAIL)
+        && record.observed != OBSERVED_IDK
+        && record.observed != OBSERVED_MALFORMED
         && record.observed != UNPARSEABLE_OBSERVED
 }
 
@@ -225,7 +306,7 @@ pub(crate) fn append_history_record_with_cache(
     file.flush()
         .map_err(|err| format!("failed to flush {}: {}", path.display(), err))?;
     let had_cached_records = history_cache.records.contains_key(&path);
-    let compacted = should_compact_history()?;
+    let compacted = should_compact_history(&path)?;
     if compacted {
         compact_history(&path)?;
     }
@@ -240,9 +321,32 @@ pub(crate) fn append_history_record_with_cache(
     Ok(())
 }
 
-pub(crate) fn should_compact_history() -> Result<bool, String> {
-    let append_index = COMPACTION_SAMPLE_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
-    Ok(append_index % 15 == 0)
+pub(crate) fn should_compact_history(path: &Path) -> Result<bool, String> {
+    sample_approximately_one_in(HISTORY_COMPACT_SAMPLE_INTERVAL, "history-compact", path)
+}
+
+pub(crate) fn sample_approximately_one_in(
+    interval: u64,
+    label: &str,
+    path: &Path,
+) -> Result<bool, String> {
+    if interval == 0 {
+        return Err("sample interval must be greater than zero".to_string());
+    }
+    let counter = COMPACTION_SAMPLE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|err| format!("system clock is before UNIX_EPOCH: {}", err))?
+        .as_nanos();
+    let seed = format!(
+        "{}\0{}\0{}\0{}\0{}",
+        label,
+        process::id(),
+        counter,
+        now,
+        path.display()
+    );
+    Ok(fnv64_with_seed(FNV_OFFSET ^ 0xa24b_aed4_963e_e407, seed.as_bytes()) % interval == 0)
 }
 
 pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
@@ -252,7 +356,6 @@ pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
     let file = fs::File::open(path)
         .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
     let mut total_lines = 0usize;
-    let mut saw_invalid_line = false;
     let mut lines = std::collections::VecDeque::new();
     for (index, line) in BufReader::new(file).lines().enumerate() {
         let line = line.map_err(|err| {
@@ -266,17 +369,21 @@ pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
         if line.trim().is_empty() {
             continue;
         }
-        if !is_valid_json_object_line(&line) {
-            saw_invalid_line = true;
-            continue;
-        }
+        validate_json_object_line(&line).map_err(|err| {
+            format!(
+                "invalid history JSON in {} line {}: {}",
+                path.display(),
+                index + 1,
+                err
+            )
+        })?;
         total_lines += 1;
         lines.push_back(line);
-        if lines.len() > 5 {
+        if lines.len() > HISTORY_COMPACT_KEEP_RECORDS {
             lines.pop_front();
         }
     }
-    if total_lines <= 5 && !saw_invalid_line {
+    if total_lines <= HISTORY_COMPACT_KEEP_RECORDS {
         return Ok(());
     }
     let temp_path = compact_history_temp_path(path)?;
@@ -291,7 +398,11 @@ pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
     file.flush()
         .map_err(|err| format!("failed to flush {}: {}", temp_path.display(), err))?;
     drop(file);
-    fs::rename(&temp_path, path).map_err(|err| {
+    replace_history_file(&temp_path, path)
+}
+
+pub(crate) fn replace_history_file(temp_path: &Path, path: &Path) -> Result<(), String> {
+    fs::rename(temp_path, path).map_err(|err| {
         format!(
             "failed to replace {} with {}: {}",
             path.display(),
@@ -301,10 +412,11 @@ pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
     })
 }
 
-pub(crate) fn is_valid_json_object_line(line: &str) -> bool {
+pub(crate) fn validate_json_object_line(line: &str) -> Result<(), String> {
     match serde_json::from_str::<Value>(line) {
-        Ok(value) => value.is_object(),
-        Err(_) => false,
+        Ok(value) if value.is_object() => Ok(()),
+        Ok(_) => Err("history line must be a JSON object".to_string()),
+        Err(err) => Err(err.to_string()),
     }
 }
 

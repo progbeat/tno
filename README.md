@@ -120,17 +120,18 @@ canon check --fail-fast
 canon check --ignore-cache
 canon check --config other-check.yml
 canon check -c other-check.yml
+canon check -q "Does README.md describe the CLI?"
 canon check 4 5 42
 ```
 
 Create `.canon/check.yml`, install the pre-commit hook, run every project
 expectation, validate cached results without asking the evaluator, stop after
 the first failed expectation result, ignore reusable cache records, run checks
-from a custom YAML config, or rerun selected 1-based expectations. `canon check`
-is a project-facing AI expectation linter: it asks the configured evaluator
-agent to answer each expectation from allowed files in the staged Git snapshot,
-hides expected answers from it, and fails when observed answers do not exactly
-match.
+from a custom YAML config, ask an ad-hoc uncached question with the configured
+agent, or rerun selected 1-based expectations. `canon check` is a
+project-facing AI expectation linter: it asks the configured evaluator agent to
+answer each expectation from allowed files in the staged Git snapshot, hides
+expected answers from it, and fails when observed answers do not exactly match.
 
 Long aliases: `path`, `read`, `write`, `append`, `delete`, `del`, and `rm`.
 
@@ -227,6 +228,12 @@ and are not written as reusable history. `canon check` reuses matching cached
 pass and fail records, unless `--ignore-cache` is set. Optional expectation
 cooldowns are specified in `.canon/specs/Cooldown.md`; fresh cooldown passes are
 counted as skipped without per-expectation stdout.
+
+History files are compacted on an approximately 1-in-15 sample after appends,
+keeping the latest reusable records. `canon check` also samples cleanup of
+cache entries whose expectation IDs are no longer present in the active config,
+so cache storage stays bounded in expectation under bounded config and retained
+data.
 
 Runtime logs are appended to `git rev-parse --git-path canon/logs/0.jsonl`. At
 the start of `canon check`,
