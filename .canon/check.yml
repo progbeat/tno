@@ -122,7 +122,7 @@ expectations:
     cooldown: 7d
     thinking: xhigh
 
-  - q: "Are there any avoidable, evidence-backed violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
+  - q: "Are there any avoidable, violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
     a: "no"
     cooldown: 7d
     thinking: xhigh
