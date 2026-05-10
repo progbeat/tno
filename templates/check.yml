@@ -30,5 +30,34 @@ agent:
   plugins: []
 
 expectations:
-  - q: "Does this project satisfy the expectation described here?"
+  - q: "With bounded configuration and retained data, is non-temporary project-owned persistent state across the whole project practically size-bounded across repeated normal command runs and configuration changes without manual cleanup?"
     a: "yes"
+    cooldown: 7d
+
+  - q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
+    a: "yes"
+    cooldown: 1d
+
+  - q: "If this project spawns child processes, do those code paths ensure the child processes are terminated and reaped on both success and failure?"
+    a: "yes"
+    cooldown: 7d
+
+  - q: "Are there any obsolete, unused, stray, dead-end, duplicated, or redundant Git-tracked project files or code paths that are safe to remove or consolidate without changing intended functionality?"
+    a: "no"
+    cooldown: 7d
+    thinking: xhigh
+
+  - q: "Are there any hand-written, non-generated source files that are excessively large or mix unrelated responsibilities enough that they should be split into smaller focused modules?"
+    a: "no"
+    cooldown: 5d
+    thinking: xhigh
+
+  - q: "Are there any dirty hacks that can be avoided?"
+    a: "no"
+    cooldown: 7d
+    thinking: xhigh
+
+  - q: "Are there any avoidable, evidence-backed violations of commonly accepted idioms for this project's languages, frameworks, or tools that materially reduce maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
+    a: "no"
+    cooldown: 7d
+    thinking: xhigh
