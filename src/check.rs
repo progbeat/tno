@@ -680,7 +680,8 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     // canonical record scope is passed back here unchanged as enforced_scope.
     let session_key = enforced_scope.join("\n");
     let existing_session = sessions.get(&session_key).cloned();
-    let session_id = match existing_session {
+    let had_existing_session = existing_session.is_some();
+    let mut session_id = match existing_session {
         Some(existing) => {
             if let Some(writer) = diagnostic_log.as_deref_mut() {
                 writer.write_event(
@@ -738,6 +739,62 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         expectation.number,
     ) {
         Ok(response) => response,
+        Err(err) if had_existing_session && is_context_window_failure(&err) => {
+            sessions.remove(&session_key);
+            if let Some(writer) = diagnostic_log.as_deref_mut() {
+                writer.write_event(
+                    "warn",
+                    "thread.restart",
+                    &[
+                        ("number", json!(expectation.number)),
+                        ("scope", json!(enforced_scope)),
+                        ("model", json!(model_label(model))),
+                        ("reason", json!(err)),
+                    ],
+                )?;
+                writer.write_event(
+                    "info",
+                    "thread.start",
+                    &[
+                        ("scope", json!(enforced_scope)),
+                        ("model", json!(model_label(model))),
+                        (
+                            "thinking",
+                            json!(effective_thinking(&config.agent, expectation)),
+                        ),
+                        (
+                            "developerInstructions",
+                            json!(developer_instructions(&config.agent, &enforced_scope)),
+                        ),
+                    ],
+                )?;
+            }
+            session_id = runner.start_session(
+                snapshot_root,
+                &developer_instructions(&config.agent, &enforced_scope),
+                &config.agent,
+                model,
+                effective_thinking(&config.agent, expectation),
+                &enforced_scope,
+            )?;
+            match ask_with_repairs(
+                runner,
+                &session_id,
+                &prompt,
+                &config.agent,
+                parse_cache,
+                diagnostic_log,
+                expectation.number,
+            ) {
+                Ok(response) => response,
+                Err(err) => {
+                    if is_model_technical_failure(&err) {
+                        sessions.remove(&session_key);
+                    }
+                    return Err(err);
+                }
+            }
+        }
         Err(err) => {
             if is_model_technical_failure(&err) {
                 sessions.remove(&session_key);
@@ -745,9 +802,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
             return Err(err);
         }
     };
-    sessions
-        .entry(session_key)
-        .or_insert_with(|| session_id.clone());
+    sessions.insert(session_key, session_id.clone());
     let mut response = response;
     if response.answer == UNPARSEABLE_OBSERVED {
         response.scope = enforced_scope.to_vec();
@@ -889,7 +944,8 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
     let enforced_scope = full_scope();
     let session_key = enforced_scope.join("\n");
     let existing_session = sessions.get(&session_key).cloned();
-    let session_id = match existing_session {
+    let had_existing_session = existing_session.is_some();
+    let mut session_id = match existing_session {
         Some(existing) => {
             if let Some(writer) = diagnostic_log.as_deref_mut() {
                 writer.write_event(
@@ -941,6 +997,59 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
         0,
     ) {
         Ok(response) => response,
+        Err(err) if had_existing_session && is_context_window_failure(&err) => {
+            sessions.remove(&session_key);
+            if let Some(writer) = diagnostic_log.as_deref_mut() {
+                writer.write_event(
+                    "warn",
+                    "thread.restart",
+                    &[
+                        ("number", json!(0)),
+                        ("scope", json!(enforced_scope)),
+                        ("model", json!(model_label(model))),
+                        ("reason", json!(err)),
+                    ],
+                )?;
+                writer.write_event(
+                    "info",
+                    "thread.start",
+                    &[
+                        ("scope", json!(enforced_scope)),
+                        ("model", json!(model_label(model))),
+                        ("thinking", json!(config.agent.thinking.clone())),
+                        (
+                            "developerInstructions",
+                            json!(developer_instructions(&config.agent, &enforced_scope)),
+                        ),
+                    ],
+                )?;
+            }
+            session_id = runner.start_session(
+                snapshot_root,
+                &developer_instructions(&config.agent, &enforced_scope),
+                &config.agent,
+                model,
+                &config.agent.thinking,
+                &enforced_scope,
+            )?;
+            match ask_with_repairs(
+                runner,
+                &session_id,
+                &prompt,
+                &config.agent,
+                parse_cache,
+                diagnostic_log,
+                0,
+            ) {
+                Ok(response) => response,
+                Err(err) => {
+                    if is_model_technical_failure(&err) {
+                        sessions.remove(&session_key);
+                    }
+                    return Err(err);
+                }
+            }
+        }
         Err(err) => {
             if is_model_technical_failure(&err) {
                 sessions.remove(&session_key);
@@ -948,9 +1057,7 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
             return Err(err);
         }
     };
-    sessions
-        .entry(session_key)
-        .or_insert_with(|| session_id.clone());
+    sessions.insert(session_key, session_id.clone());
     let mut response = response;
     if response.answer == UNPARSEABLE_OBSERVED {
         response.scope = enforced_scope.to_vec();
@@ -1036,6 +1143,11 @@ pub(crate) fn is_model_technical_failure(err: &str) -> bool {
         || err.contains("model unavailable")
         || err.contains("model is unavailable")
         || err.contains("timed out")
+        || is_context_window_failure(err)
+}
+
+pub(crate) fn is_context_window_failure(err: &str) -> bool {
+    err.contains("context window") || err.contains("ran out of room")
 }
 
 pub(crate) fn record_from_response(

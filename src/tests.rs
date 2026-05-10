@@ -1106,6 +1106,40 @@ fn check_runner_uses_model_fallback_after_usage_limit() {
 }
 
 #[test]
+fn check_runner_restarts_reused_thread_after_context_window_error() {
+    let root = git_project("check-context-restart");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1", "2"], false, true);
+    let mut runner = FakeRunner::new_results(vec![
+        Ok(&answer("yes", "first answer", &["."])),
+        Err("app-server turn/start failed: Codex ran out of room in the model's context window"),
+        Ok(&answer("no", "second answer", &["."])),
+    ]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(records.iter().all(CheckRecord::passed));
+    assert_eq!(runner.starts, 2);
+    assert_eq!(
+        runner.sessions,
+        vec![
+            "session-1".to_string(),
+            "session-1".to_string(),
+            "session-2".to_string()
+        ]
+    );
+    assert_eq!(
+        runner.start_models,
+        vec![
+            Some("gpt-5.4-mini".to_string()),
+            Some("gpt-5.4-mini".to_string())
+        ]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_marks_unparseable_after_response_repair_fails() {
     let root = git_project("check-unparseable");
     let config = parse_check_config(check_config_yaml()).unwrap();
