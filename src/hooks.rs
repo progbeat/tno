@@ -12,6 +12,24 @@ pub(crate) fn run_init(root: &Path) -> Result<(), String> {
     fs::write(&check_path, DEFAULT_CHECK_TEMPLATE)
         .map_err(|err| format!("failed to write {}: {}", check_path.display(), err))?;
     println!("Created {}", CHECK_PATH);
+    ensure_agents_file(root)?;
+    Ok(())
+}
+
+pub(crate) fn ensure_agents_file(root: &Path) -> Result<(), String> {
+    let agents_path = root.join(AGENTS_PATH);
+    if agents_path.exists() {
+        println!(
+            "{} already exists; merge canon's AGENTS.md rules into it if they are missing:\n{}",
+            AGENTS_PATH,
+            DEFAULT_AGENTS_TEMPLATE.trim_end()
+        );
+        return Ok(());
+    }
+
+    fs::write(&agents_path, DEFAULT_AGENTS_TEMPLATE)
+        .map_err(|err| format!("failed to write {}: {}", agents_path.display(), err))?;
+    println!("Created {}", AGENTS_PATH);
     Ok(())
 }
 

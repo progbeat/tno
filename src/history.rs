@@ -236,6 +236,9 @@ pub(crate) fn cooldown_history_record(
         let Some(timestamp) = parse_log_record_timestamp(&record.timestamp) else {
             continue;
         };
+        // A recent failure is not a cooldown hit. Callers must continue with
+        // exact-cache lookup, which can still reuse this fail when scopeHash
+        // matches, or otherwise interrogate from the latest reusable scope.
         if !record.passed() {
             return Ok(None);
         }

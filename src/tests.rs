@@ -644,13 +644,37 @@ fn init_creates_template_and_fails_when_existing() {
     let root = temp_home("init");
     run_init(&root).unwrap();
     let check_path = root.join(CHECK_PATH);
+    let agents_path = root.join(AGENTS_PATH);
     assert_eq!(
         fs::read_to_string(&check_path).unwrap(),
         DEFAULT_CHECK_TEMPLATE
     );
+    assert_eq!(
+        fs::read_to_string(&agents_path).unwrap(),
+        DEFAULT_AGENTS_TEMPLATE
+    );
     assert!(!root.join(".gitignore").exists());
     assert!(!root.join(PRE_COMMIT_HOOK_PATH).exists());
     assert!(run_init(&root).is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_preserves_existing_agents_file() {
+    let root = temp_home("init-existing-agents");
+    let agents_path = root.join(AGENTS_PATH);
+    fs::write(&agents_path, "repo-specific instructions\n").unwrap();
+
+    run_init(&root).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(root.join(CHECK_PATH)).unwrap(),
+        DEFAULT_CHECK_TEMPLATE
+    );
+    assert_eq!(
+        fs::read_to_string(&agents_path).unwrap(),
+        "repo-specific instructions\n"
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1784,6 +1808,54 @@ expectations:
             .unwrap()
             .is_none()
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_reuses_exact_cached_failure_after_cooldown_miss() {
+    let root = git_project("check-cooldown-fail-exact-cache");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#,
+    )
+    .unwrap();
+    let options = check_options(&config, &["1"], false, false);
+    let expectation = options.selected[0].clone();
+    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "1970-01-01T00:00:20Z".to_string(),
+            number: 1,
+            result: "fail".to_string(),
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: "no".to_string(),
+            evidence: "exact cached failure".to_string(),
+            scope: full_scope(),
+            scope_hash: current_hash,
+        },
+    )
+    .unwrap();
+    let mut runner = FakeRunner::new(&[]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].passed());
+    assert_eq!(records[0].evidence, "exact cached failure");
+    assert_eq!(runner.starts, 0);
     let _ = fs::remove_dir_all(root);
 }
 

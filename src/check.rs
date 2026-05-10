@@ -448,6 +448,9 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 }
                 continue;
             }
+            // Cooldown is intentionally pass-only. A latest cached fail returns
+            // no cooldown hit above, then falls through to this exact-cache
+            // lookup where reusable pass and fail records are both valid hits.
             if let Some(record) = reusable_history_record_for_source(
                 root,
                 &config.agent,
