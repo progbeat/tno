@@ -10,6 +10,8 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), St
     if let Some(question) = command.query.as_deref() {
         return run_check_query_command(root, &config, question, &mut repo_cache);
     }
+    // `canon check` accepts `--fail-fast` through `parse_check_options`; the
+    // `canon gate` rejection below is gate-specific and does not apply here.
     let options = parse_check_options(&config, &command.option_args)?;
     fail_on_mixed_canon_changes(root)?;
     // Apply the staged Git snapshot as an in-place index view: unstaged and
@@ -108,19 +110,18 @@ pub(crate) fn run_check_query_command(
             ("selected", json!(Vec::<usize>::new())),
         ],
     )?;
-    let mut sessions = BTreeMap::new();
-    let mut scope_hash_cache = ScopeHashCache::new();
-    let mut parse_cache = EvaluatorResponseParseCache::new();
-    let result = run_query_with_runner(
+    let runtime = CheckRuntime {
         root,
-        root,
+        snapshot_root: root,
         config,
+    };
+    let mut interrogation_state = InterrogationState::new();
+    let result = run_query_with_runner(
+        &runtime,
         question,
         &mut runner,
         Some(&mut diagnostic_log),
-        &mut sessions,
-        &mut scope_hash_cache,
-        &mut parse_cache,
+        &mut interrogation_state,
     );
     runner.drain_token_usage_updates();
     let usage = runner.token_usage().unwrap_or_default();
@@ -254,7 +255,9 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Str
             "canon gate: missing cached answers for expectations: {}",
             join_numbers(&missing)
         );
-        eprintln!("canon gate: run `canon check` before committing");
+        if failing.is_empty() {
+            eprintln!("canon gate: run `canon check` before committing");
+        }
     }
     if !failing.is_empty() {
         eprintln!("canon gate: cached failing expectation results:");
@@ -336,10 +339,14 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     let mut records = Vec::new();
     let mut skipped = 0usize;
     let mut narrowing = NarrowingStats::default();
-    let mut sessions = BTreeMap::new();
+    let runtime = CheckRuntime {
+        root,
+        snapshot_root,
+        config,
+    };
+    let mut interrogation_state = InterrogationState::new();
     let mut scope_hash_cache = ScopeHashCache::new();
     let mut history_cache = HistoryCache::new();
-    let mut parse_cache = EvaluatorResponseParseCache::new();
     for expectation in &options.selected {
         if check_interrupted() {
             return Err("interrupted".to_string());
@@ -420,15 +427,11 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 .unwrap_or_else(full_scope);
         let mut enforced_scope = scope.clone();
         let mut interrogation = interrogate_expectation(
-            root,
-            snapshot_root,
-            config,
+            &runtime,
             expectation,
             runner,
-            &mut sessions,
             &mut diagnostic_log,
-            &mut scope_hash_cache,
-            &mut parse_cache,
+            &mut interrogation_state,
             &enforced_scope,
         )?;
         if should_retry_full_scope(&interrogation.record, &enforced_scope) {
@@ -437,15 +440,11 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
             // the restricted non-answer.
             enforced_scope = full_scope();
             interrogation = interrogate_expectation(
-                root,
-                snapshot_root,
-                config,
+                &runtime,
                 expectation,
                 runner,
-                &mut sessions,
                 &mut diagnostic_log,
-                &mut scope_hash_cache,
-                &mut parse_cache,
+                &mut interrogation_state,
                 &enforced_scope,
             )?;
         }
@@ -459,15 +458,11 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
             // scope preserves the answer.
             let initial_record = interrogation.record.clone();
             let narrowed = interrogate_expectation(
-                root,
-                snapshot_root,
-                config,
+                &runtime,
                 expectation,
                 runner,
-                &mut sessions,
                 &mut diagnostic_log,
-                &mut scope_hash_cache,
-                &mut parse_cache,
+                &mut interrogation_state,
                 &record_scope,
             )?;
             if narrowed.record.observed == interrogation.record.observed {
@@ -594,34 +589,48 @@ pub(crate) fn is_scope_widening_record(record: &CheckRecord) -> bool {
         && record.evidence.starts_with("evaluator response scope ")
 }
 
+pub(crate) struct CheckRuntime<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) snapshot_root: &'a Path,
+    pub(crate) config: &'a CheckConfig,
+}
+
+pub(crate) struct InterrogationState {
+    sessions: BTreeMap<String, String>,
+    scope_hash_cache: ScopeHashCache,
+    parse_cache: EvaluatorResponseParseCache,
+}
+
+impl InterrogationState {
+    pub(crate) fn new() -> InterrogationState {
+        InterrogationState {
+            sessions: BTreeMap::new(),
+            scope_hash_cache: ScopeHashCache::new(),
+            parse_cache: EvaluatorResponseParseCache::new(),
+        }
+    }
+}
+
 pub(crate) fn interrogate_expectation<R: EvaluatorRunner>(
-    root: &Path,
-    snapshot_root: &Path,
-    config: &CheckConfig,
+    runtime: &CheckRuntime<'_>,
     expectation: &SelectedExpectation,
     runner: &mut R,
-    sessions: &mut BTreeMap<String, String>,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    scope_hash_cache: &mut ScopeHashCache,
-    parse_cache: &mut EvaluatorResponseParseCache,
+    state: &mut InterrogationState,
     enforced_scope: &[String],
 ) -> Result<InterrogationResult, String> {
     let mut failures = Vec::new();
-    let models = evaluator_models(&config.agent);
+    let models = evaluator_models(&runtime.config.agent);
     for (model_index, model) in models.iter().enumerate() {
         if check_interrupted() {
             return Err("interrupted".to_string());
         }
         match interrogate_expectation_with_model(
-            root,
-            snapshot_root,
-            config,
+            runtime,
             expectation,
             runner,
-            sessions,
             diagnostic_log,
-            scope_hash_cache,
-            parse_cache,
+            state,
             enforced_scope,
             model.as_deref(),
         ) {
@@ -662,24 +671,21 @@ pub(crate) fn interrogate_expectation<R: EvaluatorRunner>(
 }
 
 pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
-    root: &Path,
-    snapshot_root: &Path,
-    config: &CheckConfig,
+    runtime: &CheckRuntime<'_>,
     expectation: &SelectedExpectation,
     runner: &mut R,
-    sessions: &mut BTreeMap<String, String>,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    scope_hash_cache: &mut ScopeHashCache,
-    parse_cache: &mut EvaluatorResponseParseCache,
+    state: &mut InterrogationState,
     enforced_scope: &[String],
     model: Option<&str>,
 ) -> Result<InterrogationResult, String> {
+    let config = runtime.config;
     let enforced_scope = sanitize_scope(enforced_scope, &config.agent)?;
     // Threads are reused only for the same canonical enforced scope. When
     // checking a narrower scope returned by an evaluator response, that
     // canonical record scope is passed back here unchanged as enforced_scope.
     let session_key = enforced_scope.join("\n");
-    let existing_session = sessions.get(&session_key).cloned();
+    let existing_session = state.sessions.get(&session_key).cloned();
     let had_existing_session = existing_session.is_some();
     let mut session_id = match existing_session {
         Some(existing) => {
@@ -719,7 +725,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
                 )?;
             }
             runner.start_session(
-                snapshot_root,
+                runtime.snapshot_root,
                 &developer_instructions(&config.agent, &enforced_scope),
                 &config.agent,
                 model,
@@ -734,13 +740,13 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         &session_id,
         &prompt,
         &config.agent,
-        parse_cache,
+        &mut state.parse_cache,
         diagnostic_log,
         expectation.number,
     ) {
         Ok(response) => response,
         Err(err) if had_existing_session && is_context_window_failure(&err) => {
-            sessions.remove(&session_key);
+            state.sessions.remove(&session_key);
             if let Some(writer) = diagnostic_log.as_deref_mut() {
                 writer.write_event(
                     "warn",
@@ -770,7 +776,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
                 )?;
             }
             session_id = runner.start_session(
-                snapshot_root,
+                runtime.snapshot_root,
                 &developer_instructions(&config.agent, &enforced_scope),
                 &config.agent,
                 model,
@@ -782,14 +788,14 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
                 &session_id,
                 &prompt,
                 &config.agent,
-                parse_cache,
+                &mut state.parse_cache,
                 diagnostic_log,
                 expectation.number,
             ) {
                 Ok(response) => response,
                 Err(err) => {
                     if is_model_technical_failure(&err) {
-                        sessions.remove(&session_key);
+                        state.sessions.remove(&session_key);
                     }
                     return Err(err);
                 }
@@ -797,12 +803,12 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         }
         Err(err) => {
             if is_model_technical_failure(&err) {
-                sessions.remove(&session_key);
+                state.sessions.remove(&session_key);
             }
             return Err(err);
         }
     };
-    sessions.insert(session_key, session_id.clone());
+    state.sessions.insert(session_key, session_id.clone());
     let mut response = response;
     if response.answer == UNPARSEABLE_OBSERVED {
         response.scope = enforced_scope.to_vec();
@@ -822,7 +828,10 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         }
     }
     let record_scope = response.scope.clone();
-    let scope_hash = scope_hash_cache.staged_scope_hash(root, &config.agent, &record_scope)?;
+    let scope_hash =
+        state
+            .scope_hash_cache
+            .staged_scope_hash(runtime.root, &config.agent, &record_scope)?;
     let record = record_from_response(expectation, response, record_scope, scope_hash)?;
     if record.observed == OBSERVED_MALFORMED {
         if let Some(writer) = diagnostic_log.as_deref_mut() {
@@ -864,33 +873,25 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
 }
 
 pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
-    root: &Path,
-    snapshot_root: &Path,
-    config: &CheckConfig,
+    runtime: &CheckRuntime<'_>,
     question: &str,
     runner: &mut R,
     diagnostic_log: Option<&mut DiagnosticLogWriter>,
-    sessions: &mut BTreeMap<String, String>,
-    scope_hash_cache: &mut ScopeHashCache,
-    parse_cache: &mut EvaluatorResponseParseCache,
+    state: &mut InterrogationState,
 ) -> Result<QueryInterrogationResult, String> {
     let mut diagnostic_log = diagnostic_log;
     let mut failures = Vec::new();
-    let models = evaluator_models(&config.agent);
+    let models = evaluator_models(&runtime.config.agent);
     for (model_index, model) in models.iter().enumerate() {
         if check_interrupted() {
             return Err("interrupted".to_string());
         }
         match interrogate_query_with_model(
-            root,
-            snapshot_root,
-            config,
+            runtime,
             question,
             runner,
-            sessions,
             &mut diagnostic_log,
-            scope_hash_cache,
-            parse_cache,
+            state,
             model.as_deref(),
         ) {
             Ok(result) => return Ok(result),
@@ -930,20 +931,17 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
 }
 
 pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
-    root: &Path,
-    snapshot_root: &Path,
-    config: &CheckConfig,
+    runtime: &CheckRuntime<'_>,
     question: &str,
     runner: &mut R,
-    sessions: &mut BTreeMap<String, String>,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    scope_hash_cache: &mut ScopeHashCache,
-    parse_cache: &mut EvaluatorResponseParseCache,
+    state: &mut InterrogationState,
     model: Option<&str>,
 ) -> Result<QueryInterrogationResult, String> {
+    let config = runtime.config;
     let enforced_scope = full_scope();
     let session_key = enforced_scope.join("\n");
-    let existing_session = sessions.get(&session_key).cloned();
+    let existing_session = state.sessions.get(&session_key).cloned();
     let had_existing_session = existing_session.is_some();
     let mut session_id = match existing_session {
         Some(existing) => {
@@ -977,7 +975,7 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
                 )?;
             }
             runner.start_session(
-                snapshot_root,
+                runtime.snapshot_root,
                 &developer_instructions(&config.agent, &enforced_scope),
                 &config.agent,
                 model,
@@ -992,13 +990,13 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
         &session_id,
         &prompt,
         &config.agent,
-        parse_cache,
+        &mut state.parse_cache,
         diagnostic_log,
         0,
     ) {
         Ok(response) => response,
         Err(err) if had_existing_session && is_context_window_failure(&err) => {
-            sessions.remove(&session_key);
+            state.sessions.remove(&session_key);
             if let Some(writer) = diagnostic_log.as_deref_mut() {
                 writer.write_event(
                     "warn",
@@ -1025,7 +1023,7 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
                 )?;
             }
             session_id = runner.start_session(
-                snapshot_root,
+                runtime.snapshot_root,
                 &developer_instructions(&config.agent, &enforced_scope),
                 &config.agent,
                 model,
@@ -1037,14 +1035,14 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
                 &session_id,
                 &prompt,
                 &config.agent,
-                parse_cache,
+                &mut state.parse_cache,
                 diagnostic_log,
                 0,
             ) {
                 Ok(response) => response,
                 Err(err) => {
                     if is_model_technical_failure(&err) {
-                        sessions.remove(&session_key);
+                        state.sessions.remove(&session_key);
                     }
                     return Err(err);
                 }
@@ -1052,12 +1050,12 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
         }
         Err(err) => {
             if is_model_technical_failure(&err) {
-                sessions.remove(&session_key);
+                state.sessions.remove(&session_key);
             }
             return Err(err);
         }
     };
-    sessions.insert(session_key, session_id.clone());
+    state.sessions.insert(session_key, session_id.clone());
     let mut response = response;
     if response.answer == UNPARSEABLE_OBSERVED {
         response.scope = enforced_scope.to_vec();
@@ -1076,7 +1074,10 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
             };
         }
     }
-    let scope_hash = scope_hash_cache.staged_scope_hash(root, &config.agent, &response.scope)?;
+    let scope_hash =
+        state
+            .scope_hash_cache
+            .staged_scope_hash(runtime.root, &config.agent, &response.scope)?;
     if response.answer == OBSERVED_MALFORMED {
         if let Some(writer) = diagnostic_log.as_deref_mut() {
             writer.write_event(
@@ -1198,12 +1199,13 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
     )?;
     let mut parsed = match parser_cache.parse(&first, agent) {
         Ok(answer) => answer,
-        Err(_err) => {
+        Err(err) => {
             let first_excerpt = response_excerpt(&first);
+            let repair_prompt = parse_repair_prompt(prompt, &err);
             let repaired = ask_and_log(
                 runner,
                 session_id,
-                prompt,
+                &repair_prompt,
                 diagnostic_log,
                 expectation_number,
                 2,
@@ -1271,6 +1273,16 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
     }
 
     Ok(parsed)
+}
+
+pub(crate) fn parse_repair_prompt(prompt: &str, error: &str) -> String {
+    format!(
+        "Your previous response was invalid: {error}\n\
+Return exactly one valid JSON object and nothing else.\n\
+Required schema: {{\"answer\":\"<single-line answer>\",\"evidence\":\"<evidence string>\",\"scope\":[\"<path>\"]}}\n\
+Escape all newlines, quotes, and backslashes inside JSON string values.\n\
+Original question:\n{prompt}"
+    )
 }
 
 pub(crate) fn ask_and_log<R: EvaluatorRunner>(
@@ -1399,7 +1411,7 @@ pub(crate) fn response_format_block() -> &'static str {
         "Return exactly one valid JSON object and no markdown, code fences, or surrounding prose.\n",
         "Schema: {\"answer\":\"<single-line answer>\",\"evidence\":\"<free-form evidence citing supporting files or code>\",\"scope\":[\"<normalized repository-relative path>\"]}\n",
         "The `answer` field is where the exact yes/no/idk/malformed/option-letter answer goes; do not write that answer outside the JSON object. ",
-        "`scope` is the smallest allowed project context sufficient to answer this question with the same `answer`; it is not the list of evidence citations. ",
+        "`scope` is the smallest allowed project context sufficient to determine the correct answer among all valid answers; it is not the list of evidence citations. ",
         "Use [\".\"] when the answer depends on project-wide absence, consistency, duplication, garbage, overall quality, or denied/inaccessible paths. ",
         "If the enforced task `scope` is narrower than [\".\"] and the question requires repository-wide or cross-module evidence, answer `idk` instead of drawing a positive or negative conclusion from incomplete context. ",
         "Never include denied or inaccessible paths in `scope`. Denied paths are intentionally outside the allowed evidence boundary; do not answer `idk` solely because a denied path is unreadable. ",
@@ -1429,10 +1441,33 @@ pub(crate) fn parse_evaluator_response(
 }
 
 pub(crate) fn parse_evaluator_response_json(text: &str) -> Result<EvaluatorResponseJson, String> {
-    let trimmed = text.trim();
-    validate_evaluator_response_key_order(trimmed)?;
-    serde_json::from_str::<EvaluatorResponseJson>(trimmed)
+    let payload = evaluator_response_json_payload(text)?;
+    serde_json::from_str::<EvaluatorResponseJson>(payload)
         .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))
+}
+
+pub(crate) fn evaluator_response_json_payload(text: &str) -> Result<&str, String> {
+    let trimmed = text.trim();
+    if validate_evaluator_response_key_order(trimmed).is_ok() {
+        return Ok(trimmed);
+    }
+
+    let bytes = trimmed.as_bytes();
+    for start in (0..bytes.len()).rev().filter(|index| bytes[*index] == b'{') {
+        let Ok(end) = skip_json_value(bytes, start) else {
+            continue;
+        };
+        if skip_json_ws(bytes, end) != bytes.len() {
+            continue;
+        }
+        let candidate = &trimmed[start..end];
+        if validate_evaluator_response_key_order(candidate).is_ok() {
+            return Ok(candidate);
+        }
+    }
+
+    validate_evaluator_response_key_order(trimmed)?;
+    unreachable!("validation above always returns on success")
 }
 
 // The evaluator protocol intentionally makes the top-level key order part of

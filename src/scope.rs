@@ -480,5 +480,11 @@ pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
     }
     patterns
 }
-pub(crate) const MANDATORY_EVALUATOR_DENY_PATTERNS: &[&str] =
-    &[".canon", ".canon/**", ".git/canon", ".git/canon/**"];
+pub(crate) const MANDATORY_EVALUATOR_DENY_PATTERNS: &[&str] = &[
+    ".canon",
+    ".canon/**",
+    ".git/canon",
+    ".git/canon/**",
+    ".git/canon/logs",
+    ".git/canon/logs/**",
+];

@@ -27,7 +27,7 @@ pub(crate) fn fnv64_with_seed(seed: u64, input: &[u8]) -> u64 {
 }
 
 pub(crate) fn encode_base64url_no_pad(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity((bytes.len() * 4 + 2) / 3);
+    let mut out = String::with_capacity((bytes.len() * 4).div_ceil(3));
     for chunk in bytes.chunks(3) {
         let a = chunk[0];
         let b = *chunk.get(1).unwrap_or(&0);

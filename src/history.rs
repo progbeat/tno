@@ -229,7 +229,7 @@ pub(crate) fn cooldown_history_record(
         return Ok(None);
     };
     let records = history_cache.read_records(root, expectation)?;
-    for mut record in records.into_iter().rev() {
+    for record in records.into_iter().rev() {
         if !is_reusable_history_record(&record) {
             continue;
         }
@@ -242,9 +242,6 @@ pub(crate) fn cooldown_history_record(
         if now.saturating_sub(timestamp) >= cooldown.seconds {
             return Ok(None);
         }
-        record.number = expectation.number;
-        record.prompt = expectation.q.clone();
-        record.expected = expectation.a.clone();
         return Ok(Some(record));
     }
     Ok(None)
@@ -346,7 +343,10 @@ pub(crate) fn sample_approximately_one_in(
         now,
         path.display()
     );
-    Ok(fnv64_with_seed(FNV_OFFSET ^ 0xa24b_aed4_963e_e407, seed.as_bytes()) % interval == 0)
+    Ok(
+        fnv64_with_seed(FNV_OFFSET ^ 0xa24b_aed4_963e_e407, seed.as_bytes())
+            .is_multiple_of(interval),
+    )
 }
 
 pub(crate) fn compact_history(path: &Path) -> Result<(), String> {

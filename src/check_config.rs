@@ -69,7 +69,7 @@ pub(crate) fn parse_check_config_content(
     config_path: &Path,
     content: &str,
 ) -> Result<CheckConfig, String> {
-    let raw: RawCheckConfig = serde_yaml::from_str(&content)
+    let raw: RawCheckConfig = serde_yaml::from_str(content)
         .map_err(|err| format!("failed to parse {}: {}", config_path.display(), err))?;
     let config = expand_raw_check_config(None, config_path, raw, None)?;
     validate_check_config(&config)?;
@@ -82,7 +82,7 @@ pub(crate) fn parse_check_config_content_with_root(
     content: &str,
     cache: &mut RepoInspectionCache,
 ) -> Result<CheckConfig, String> {
-    let raw: RawCheckConfig = serde_yaml::from_str(&content)
+    let raw: RawCheckConfig = serde_yaml::from_str(content)
         .map_err(|err| format!("failed to parse {}: {}", config_path.display(), err))?;
     let config = expand_raw_check_config(Some(root), config_path, raw, Some(cache))?;
     validate_check_config(&config)?;
@@ -483,11 +483,11 @@ pub(crate) fn select_expectations(
         }
     }
 
-    Ok(selected_numbers
+    selected_numbers
         .into_iter()
-        .map(|number| {
+        .map(|number| -> Result<SelectedExpectation, String> {
             let expectation = &config.expectations[number - 1];
-            SelectedExpectation {
+            Ok(SelectedExpectation {
                 number,
                 id: expectation_id(&expectation.q, &expectation.a),
                 q: expectation.q.clone(),
@@ -496,12 +496,11 @@ pub(crate) fn select_expectations(
                     .cooldown
                     .as_deref()
                     .map(parse_cooldown)
-                    .transpose()
-                    .expect("validated cooldown must parse"),
+                    .transpose()?,
                 thinking: expectation.thinking.clone(),
-            }
+            })
         })
-        .collect())
+        .collect::<Result<Vec<_>, _>>()
 }
 
 pub(crate) fn parse_cooldown(value: &str) -> Result<Cooldown, String> {

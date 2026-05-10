@@ -1,6 +1,6 @@
 use crate::*;
 use serde_json::json;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Mutex;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -901,13 +901,20 @@ fn parser_handles_json_answer_and_free_form_evidence() {
     .unwrap();
     assert_eq!(canonicalized.answer, "no");
     assert_eq!(canonicalized.scope, vec!["src"]);
-    assert!(parse_evaluator_response(
+    let with_progress = parse_evaluator_response(
         r#"I checked the files first. {"answer":"yes","evidence":"README.md has evidence","scope":["."]}"#,
+        &parse_check_config(check_config_yaml()).unwrap().agent,
+    )
+    .unwrap();
+    assert_eq!(with_progress.answer, "yes");
+    assert_eq!(with_progress.evidence, "README.md has evidence");
+    assert!(parse_evaluator_response(
+        "ANSWER: yes\nEVIDENCE:\nok\nSCOPE: [\".\"]",
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
     .is_err());
     assert!(parse_evaluator_response(
-        "ANSWER: yes\nEVIDENCE:\nok\nSCOPE: [\".\"]",
+        r#"{"answer":"yes","evidence":"README.md has evidence","scope":["."]} trailing prose"#,
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
     .is_err());
@@ -944,6 +951,8 @@ fn check_runner_hides_expected_answers_and_reuses_session() {
             ".canon/**".to_string(),
             ".git/canon".to_string(),
             ".git/canon/**".to_string(),
+            ".git/canon/logs".to_string(),
+            ".git/canon/logs/**".to_string(),
             "target/**".to_string()
         ]]
     );
@@ -1074,7 +1083,8 @@ fn check_runner_repairs_malformed_response_once() {
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
     assert!(records[0].passed());
     assert_eq!(runner.prompts.len(), 2);
-    assert_eq!(runner.prompts[1], runner.prompts[0]);
+    assert!(runner.prompts[1].contains("Return exactly one valid JSON object"));
+    assert!(runner.prompts[1].contains(&runner.prompts[0]));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1153,6 +1163,24 @@ fn check_runner_marks_unparseable_after_response_repair_fails() {
     assert!(read_history_records(&root, &options.selected[0])
         .unwrap()
         .is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_parse_retry_asks_for_valid_json() {
+    let root = git_project("check-parse-retry-prompt");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let repaired = answer("yes", "README.md", &["."]);
+    let mut runner = FakeRunner::new(&["not json", &repaired]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(records[0].passed());
+    assert!(runner.prompts[1].contains("Return exactly one valid JSON object"));
+    assert!(runner.prompts[1].contains("Original question:"));
+    assert!(runner.prompts[1].contains(&options.selected[0].q));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1556,6 +1584,50 @@ expectations:
 }
 
 #[test]
+fn cooldown_reuse_returns_history_record_without_updating_metadata() {
+    let root = git_project("history-cooldown-preserves-record");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#,
+    )
+    .unwrap();
+    let mut expectation = check_options(&config, &["1"], false, false).selected[0].clone();
+    let record = CheckRecord {
+        timestamp: "1970-01-01T00:00:10Z".to_string(),
+        number: 42,
+        result: "pass".to_string(),
+        prompt: "Question?".to_string(),
+        expected: "yes".to_string(),
+        observed: "yes".to_string(),
+        evidence: "old pass".to_string(),
+        scope: full_scope(),
+        scope_hash: "old".to_string(),
+    };
+    append_history_record(&root, &expectation, &record).unwrap();
+    expectation.number = 7;
+
+    let mut history_cache = HistoryCache::new();
+    let reused = cooldown_history_record(&root, &expectation, &mut history_cache, 30)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reused.number, 42);
+    assert_eq!(reused.prompt, "Question?");
+    assert_eq!(reused.expected, "yes");
+    assert_eq!(reused.timestamp, "1970-01-01T00:00:10Z");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn history_path_uses_expectation_id_directory() {
     let root = git_project("history-path");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -1930,20 +2002,19 @@ fn query_mode_uses_agent_and_does_not_write_history() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut runner = FakeRunner::new(&[&answer("no", "src/main.rs says no", &["src"])]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
-    let mut sessions = BTreeMap::new();
-    let mut scope_hash_cache = ScopeHashCache::new();
-    let mut parse_cache = EvaluatorResponseParseCache::new();
+    let runtime = CheckRuntime {
+        root: &root,
+        snapshot_root: &root,
+        config: &config,
+    };
+    let mut interrogation_state = InterrogationState::new();
 
     let result = run_query_with_runner(
-        &root,
-        &root,
-        &config,
+        &runtime,
         "Ad-hoc question?",
         &mut runner,
         Some(&mut diagnostic_log),
-        &mut sessions,
-        &mut scope_hash_cache,
-        &mut parse_cache,
+        &mut interrogation_state,
     )
     .unwrap();
 
@@ -2133,6 +2204,8 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
     assert_eq!(root_permissions[".canon/**"], "none");
     assert_eq!(root_permissions[".git/canon"], "none");
     assert_eq!(root_permissions[".git/canon/**"], "none");
+    assert_eq!(root_permissions[".git/canon/logs"], "none");
+    assert_eq!(root_permissions[".git/canon/logs/**"], "none");
     assert_eq!(root_permissions["target"], "none");
     assert_eq!(root_permissions["target/**"], "none");
     assert_eq!(

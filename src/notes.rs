@@ -1,6 +1,6 @@
 use crate::*;
 
-pub(crate) fn require_key<'a>(args: &'a [OsString], index: usize) -> Result<&'a str, String> {
+pub(crate) fn require_key(args: &[OsString], index: usize) -> Result<&str, String> {
     let key = args
         .get(index)
         .ok_or("missing key".to_string())
@@ -175,7 +175,7 @@ pub(crate) fn verify_note_key_from_first_line(
     first: &str,
     expected_key: &str,
 ) -> Result<(), String> {
-    let actual_key = parse_key_from_header(&first)
+    let actual_key = parse_key_from_header(first)
         .ok_or_else(|| format!("missing canon metadata in {}", path.display()))?;
     if actual_key != expected_key {
         return Err(format!(

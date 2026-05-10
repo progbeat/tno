@@ -312,7 +312,7 @@ impl Config {
         let temp_root = env::var_os("TMPDIR")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/tmp"));
+            .unwrap_or_else(env::temp_dir);
 
         Ok(Config {
             root: temp_root.join("canon").join("codex").join(thread_id),
