@@ -72,7 +72,7 @@ expectations:
   - q: Can you read .git/canon logs or cache files?
     a: "no"
 
-  - q: "Does every evaluator Codex thread enforce `.canon/**`, configured `agent.ignore` patterns, and the current enforced scope through Codex filesystem permissions at thread creation and never by moving, copying or hiding project files?"
+  - q: "Does every evaluator Codex thread enforce `.canon/**`, configured `agent.ignore` patterns, and the current enforced scope through Codex filesystem permissions at thread creation and never by moving or copying project files?"
     a: "yes"
 
   # Check configuration
