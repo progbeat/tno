@@ -115,6 +115,7 @@ expectations:
 
   - q: "Is the local Git configuration for this repository set to run the repository pre-commit hook?"
     a: "yes"
+    cooldown: 7d
 
   - q: "Are there any dirty hacks that can be avoided?"
     a: "no"
