@@ -38,7 +38,7 @@ expectations:
 
   - q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
     a: "yes"
-    cooldown: 1d
+    cooldown: 7d
 
   - q: "Are there any obsolete, unused, stray, dead-end, duplicated, or redundant Git-tracked project files or code paths that are safe to remove or consolidate without changing intended functionality?"
     a: "no"
