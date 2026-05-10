@@ -31,6 +31,10 @@ agent:
     * Failed scope narrowing: -5
 
 expectations:
+  - q: "With bounded configuration and retained data, is non-temporary project-owned persistent state across the whole project practically size-bounded across repeated normal command runs and configuration changes without manual cleanup?"
+    a: "yes"
+    cooldown: 7d
+
   - q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
     a: "yes"
     cooldown: 1d
