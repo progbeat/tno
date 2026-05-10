@@ -31,6 +31,7 @@ agent:
     * Failed scope narrowing: -5
 
 expectations:
+  # Project quality
   - q: "With bounded configuration and retained data, is non-temporary project-owned persistent state across the whole project practically size-bounded across repeated normal command runs and configuration changes without manual cleanup?"
     a: "yes"
     cooldown: 7d
@@ -38,70 +39,6 @@ expectations:
   - q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
     a: "yes"
     cooldown: 1d
-
-  - q: Does `canon check` copy the staged Git snapshot before evaluation?
-    a: "no"
-    cooldown: 3d
-
-  - q: "Do canon commands that spawn child processes ensure those processes are terminated and reaped on both success and failure?"
-    a: "yes"
-    cooldown: 7d
-
-  - q: "Does `canon check` write and flush every non-skipped per-expectation stdout result, reusable history record, and runtime log event as soon as that result or record is produced?"
-    a: "yes"
-    cooldown: 3d
-
-  - q: Can you read .canon/check.yml?
-    a: "no"
-
-  - q: Can you read .git/canon logs or cache files?
-    a: "no"
-
-  - q: Is README.md consistent with the current state of the repository?
-    a: "yes"
-    cooldown: 4h
-
-  - q: "Does `canon init` create `.canon/check.yml` from an embedded default template and fail without overwriting when `.canon/check.yml` already exists?"
-    a: "yes"
-
-  - q: "Does `canon hook install` add a pre-commit hook?"
-    a: "yes"
-
-  - q: "Which command does the pre-commit hook run? a) canon gate b) canon check"
-    a: "a"
-
-  - q: "Does `.canon/check.yml` configure exactly one evaluator agent through a single `agent` section with `instructions`, a `model` object containing `primary` and `fallbacks`, `ignore`, and `plugins`, and are expected answers single-line strings compared by exact string equality?"
-    a: "yes"
-
-  - q: "Can `canon check` use `--config <path>` or `-c <path>` to read checks from a custom YAML config file?"
-    a: "yes"
-
-  - q: "Does `canon check` use `agent.model.primary` as the primary evaluator model and retry with configured `agent.model.fallbacks` in order only after a technical app-server/model failure such as `usageLimitExceeded`, without falling back for `idk`, `malformed`, incorrect answers, or evidence quality?"
-    a: "yes"
-
-  - q: "Does every evaluator Codex thread enforce `.canon/**`, configured `agent.ignore` patterns, and the current enforced scope through Codex filesystem permissions at thread creation and never by moving, copying or hiding project files?"
-    a: "yes"
-
-  - q: "Does `canon check` evaluate the staged Git snapshot by default, preserve unstaged and untracked working tree changes after success or failure, and fail when the current staged Git change set includes both `.canon/**` changes and non-`.canon` changes?"
-    a: "yes"
-
-  - q: "Does `canon check` treat `scope` as the minimal allowed project context needed to answer the expectation with the same observed answer, not as the list of files cited by `evidence`, and keep `scope` as [`.`] for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it?"
-    a: "yes"
-
-  - q: "Does the evaluator-response parser either reject the evaluator-provided scope or produce the final `scope`, where `scope` is exactly [`.`] for full project scope or a lexicographically sorted, duplicate-free list of normalized repository-relative paths with redundant child paths removed when a parent directory path already covers them?"
-    a: "yes"
-
-  - q: "Does `canon check` keep evaluator Codex threads ephemeral to one invocation, reuse a thread only for evaluator interrogations with the same enforced `scope` within that invocation, and start separate threads for different enforced scopes?"
-    a: "yes"
-
-  - q: "Does the pre-commit hook fail quickly when `canon gate` reports missing cached answers or cached failing expectation results?"
-    a: "yes"
-
-  - q: "Does `canon check` consider all expectations when no numbers are provided, report newly evaluated results and all failing results by default while counting reused passing results as skipped without per-expectation stdout, support rerunning selected expectations by 1-based numbers such as `canon check 4 5 42`, and reject invalid, zero, duplicate, or out-of-range numbers before evaluator interrogation?"
-    a: "yes"
-
-  - q: "Does `canon check` support `--fail-fast` to stop after the first failure, while continuing remaining expectations after failures by default?"
-    a: "yes"
 
   - q: "Are there any obsolete, unused, stray, dead-end, duplicated, or redundant Git-tracked project files or code paths that are safe to remove or consolidate without changing intended functionality?"
     a: "no"
@@ -113,10 +50,6 @@ expectations:
     cooldown: 5d
     thinking: xhigh
 
-  - q: "Is the local Git configuration for this repository set to run the repository pre-commit hook?"
-    a: "yes"
-    cooldown: 7d
-
   - q: "Are there any dirty hacks that can be avoided?"
     a: "no"
     cooldown: 7d
@@ -127,6 +60,82 @@ expectations:
     cooldown: 7d
     thinking: xhigh
 
+  # Documentation
+  - q: Is README.md consistent with the current state of the repository?
+    a: "yes"
+    cooldown: 4h
+
+  # Access control
+  - q: Can you read .canon/check.yml?
+    a: "no"
+
+  - q: Can you read .git/canon logs or cache files?
+    a: "no"
+
+  - q: "Does every evaluator Codex thread enforce `.canon/**`, configured `agent.ignore` patterns, and the current enforced scope through Codex filesystem permissions at thread creation and never by moving, copying or hiding project files?"
+    a: "yes"
+
+  # Check configuration
+  - q: "Does `.canon/check.yml` configure exactly one evaluator agent through a single `agent` section with `instructions`, a `model` object containing `primary` and `fallbacks`, `ignore`, and `plugins`, and are expected answers single-line strings compared by exact string equality?"
+    a: "yes"
+
+  - q: "Can `canon check` use `--config <path>` or `-c <path>` to read checks from a custom YAML config file?"
+    a: "yes"
+
+  - q: "Does `canon check` use `agent.model.primary` as the primary evaluator model and retry with configured `agent.model.fallbacks` in order only after a technical app-server/model failure such as `usageLimitExceeded`, without falling back for `idk`, `malformed`, incorrect answers, or evidence quality?"
+    a: "yes"
+
+  # Init and hooks
+  - q: "Does `canon init` create `.canon/check.yml` from an embedded default template and fail without overwriting when `.canon/check.yml` already exists?"
+    a: "yes"
+
+  - q: "Does `canon hook install` add a pre-commit hook?"
+    a: "yes"
+
+  - q: "Which command does the pre-commit hook run? a) canon gate b) canon check"
+    a: "a"
+
+  - q: "Is the local Git configuration for this repository set to run the repository pre-commit hook?"
+    a: "yes"
+    cooldown: 7d
+
+  - q: "Does the pre-commit hook fail quickly when `canon gate` reports missing cached answers or cached failing expectation results?"
+    a: "yes"
+
+  # Snapshot isolation
+  - q: Does `canon check` copy the staged Git snapshot before evaluation?
+    a: "no"
+    cooldown: 3d
+
+  - q: "Does `canon check` evaluate the staged Git snapshot by default, preserve unstaged and untracked working tree changes after success or failure, and fail when the current staged Git change set includes both `.canon/**` changes and non-`.canon` changes?"
+    a: "yes"
+
+  - q: "Do canon commands that spawn child processes ensure those processes are terminated and reaped on both success and failure?"
+    a: "yes"
+    cooldown: 7d
+
+  # Output and selection
+  - q: "Does `canon check` write and flush every non-skipped per-expectation stdout result, reusable history record, and runtime log event as soon as that result or record is produced?"
+    a: "yes"
+    cooldown: 3d
+
+  - q: "Does `canon check` consider all expectations when no numbers are provided, report newly evaluated results and all failing results by default while counting reused passing results as skipped without per-expectation stdout, support rerunning selected expectations by 1-based numbers such as `canon check 4 5 42`, and reject invalid, zero, duplicate, or out-of-range numbers before evaluator interrogation?"
+    a: "yes"
+
+  - q: "Does `canon check` support `--fail-fast` to stop after the first failure, while continuing remaining expectations after failures by default?"
+    a: "yes"
+
+  # Scope handling
+  - q: "Does `canon check` treat `scope` as the minimal allowed project context needed to answer the expectation with the same observed answer, not as the list of files cited by `evidence`, and keep `scope` as [`.`] for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it?"
+    a: "yes"
+
+  - q: "Does the evaluator-response parser either reject the evaluator-provided scope or produce the final `scope`, where `scope` is exactly [`.`] for full project scope or a lexicographically sorted, duplicate-free list of normalized repository-relative paths with redundant child paths removed when a parent directory path already covers them?"
+    a: "yes"
+
+  - q: "Does `canon check` keep evaluator Codex threads ephemeral to one invocation, reuse a thread only for evaluator interrogations with the same enforced `scope` within that invocation, and start separate threads for different enforced scopes?"
+    a: "yes"
+
+  # Generated specs
   - path: "specs/*.md"
     q_template: |
       {content}
