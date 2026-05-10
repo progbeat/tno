@@ -851,21 +851,31 @@ impl EvaluatorRunner for AppServerRunner {
             .ok_or("thread/start response missing thread.id".to_string())
     }
 
-    fn ask(&mut self, session_id: &str, prompt: &str) -> Result<String, String> {
+    fn ask(
+        &mut self,
+        session_id: &str,
+        prompt: &str,
+        model: Option<&str>,
+        thinking: &str,
+    ) -> Result<String, String> {
         let input = evaluator_turn_input(prompt)?;
         let input_text = render_evaluator_turn_input(&input)?;
-        self.send_turn_request(
-            "turn/start",
-            json!({
-                "threadId": session_id,
-                "input": [
-                    {
-                        "type": "text",
-                        "text": input_text
-                    }
-                ]
-            }),
-        )
+        let mut request = json!({
+            "threadId": session_id,
+            "input": [
+                {
+                    "type": "text",
+                    "text": input_text
+                }
+            ]
+        });
+        if let Some(model) = model {
+            request["model"] = Value::String(model.to_string());
+        }
+        if let Some(effort) = codex_reasoning_effort(thinking) {
+            request["effort"] = Value::String(effort.to_string());
+        }
+        self.send_turn_request("turn/start", request)
     }
 }
 
@@ -898,7 +908,13 @@ impl EvaluatorRunner for LazyAppServerRunner {
         Ok(session_id)
     }
 
-    fn ask(&mut self, session_id: &str, prompt: &str) -> Result<String, String> {
+    fn ask(
+        &mut self,
+        session_id: &str,
+        prompt: &str,
+        model: Option<&str>,
+        thinking: &str,
+    ) -> Result<String, String> {
         let key = self
             .session_models
             .get(session_id)
@@ -907,7 +923,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
         self.inners
             .get_mut(&key)
             .ok_or("app-server runner is not initialized".to_string())?
-            .ask(session_id, prompt)
+            .ask(session_id, prompt, model, thinking)
     }
 }
 

@@ -184,7 +184,13 @@ pub(crate) trait EvaluatorRunner {
         thinking: &str,
         scope: &[String],
     ) -> Result<String, String>;
-    fn ask(&mut self, session_id: &str, prompt: &str) -> Result<String, String>;
+    fn ask(
+        &mut self,
+        session_id: &str,
+        prompt: &str,
+        model: Option<&str>,
+        thinking: &str,
+    ) -> Result<String, String>;
 }
 
 pub(crate) fn main() {

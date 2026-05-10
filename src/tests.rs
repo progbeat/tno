@@ -123,6 +123,8 @@ struct FakeRunner {
     answers: VecDeque<Result<String, String>>,
     prompts: Vec<String>,
     sessions: Vec<String>,
+    ask_models: Vec<Option<String>>,
+    ask_thinking: Vec<String>,
     start_roots: Vec<PathBuf>,
     start_ignores: Vec<Vec<String>>,
     start_models: Vec<Option<String>>,
@@ -141,6 +143,8 @@ impl FakeRunner {
                 .collect(),
             prompts: Vec::new(),
             sessions: Vec::new(),
+            ask_models: Vec::new(),
+            ask_thinking: Vec::new(),
             start_roots: Vec::new(),
             start_ignores: Vec::new(),
             start_models: Vec::new(),
@@ -159,6 +163,8 @@ impl FakeRunner {
                 .collect(),
             prompts: Vec::new(),
             sessions: Vec::new(),
+            ask_models: Vec::new(),
+            ask_thinking: Vec::new(),
             start_roots: Vec::new(),
             start_ignores: Vec::new(),
             start_models: Vec::new(),
@@ -191,9 +197,17 @@ impl EvaluatorRunner for FakeRunner {
         Ok(format!("session-{}", self.starts))
     }
 
-    fn ask(&mut self, session_id: &str, prompt: &str) -> Result<String, String> {
+    fn ask(
+        &mut self,
+        session_id: &str,
+        prompt: &str,
+        model: Option<&str>,
+        thinking: &str,
+    ) -> Result<String, String> {
         self.sessions.push(session_id.to_string());
         self.prompts.push(prompt.to_string());
+        self.ask_models.push(model.map(str::to_string));
+        self.ask_thinking.push(thinking.to_string());
         self.answers
             .pop_front()
             .unwrap_or_else(|| Err("fake runner has no answer".to_string()))
@@ -905,13 +919,11 @@ fn parser_handles_json_answer_and_free_form_evidence() {
     .unwrap();
     assert_eq!(canonicalized.answer, "no");
     assert_eq!(canonicalized.scope, vec!["src"]);
-    let with_progress = parse_evaluator_response(
+    assert!(parse_evaluator_response(
         r#"I checked the files first. {"answer":"yes","evidence":"README.md has evidence","scope":["."]}"#,
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
-    .unwrap();
-    assert_eq!(with_progress.answer, "yes");
-    assert_eq!(with_progress.evidence, "README.md has evidence");
+    .is_err());
     assert!(parse_evaluator_response(
         "ANSWER: yes\nEVIDENCE:\nok\nSCOPE: [\".\"]",
         &parse_check_config(check_config_yaml()).unwrap().agent,
@@ -964,11 +976,63 @@ fn check_runner_hides_expected_answers_and_reuses_session() {
     assert_eq!(runner.start_models, vec![Some("gpt-5.4-mini".to_string())]);
     assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
     assert_eq!(runner.sessions, vec!["session-1", "session-1"]);
+    assert_eq!(
+        runner.ask_models,
+        vec![
+            Some("gpt-5.4-mini".to_string()),
+            Some("gpt-5.4-mini".to_string())
+        ]
+    );
+    assert_eq!(
+        runner.ask_thinking,
+        vec!["medium".to_string(), "medium".to_string()]
+    );
     assert!(runner.prompts.iter().all(|prompt| !prompt.contains("a:")));
     assert!(runner
         .prompts
         .iter()
         .all(|prompt| !prompt.contains("Response format:")));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_applies_thinking_per_turn_when_reusing_scope_thread() {
+    let root = git_project("check-thinking-turn");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  model:
+    primary: gpt-5.4-mini
+  thinking: low
+  instructions: Answer from files only.
+  ignore: []
+  plugins: []
+expectations:
+  - q: "First?"
+    a: "yes"
+  - q: "Second?"
+    a: "yes"
+    thinking: high
+"#,
+    )
+    .unwrap();
+    let options = check_options(&config, &["1", "2"], false, true);
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "README.md says enough", &["."]),
+        &answer("yes", "README.md says enough", &["."]),
+    ]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(records.iter().all(CheckRecord::passed));
+    assert_eq!(runner.starts, 1);
+    assert_eq!(runner.start_thinking, vec!["low".to_string()]);
+    assert_eq!(
+        runner.ask_thinking,
+        vec!["low".to_string(), "high".to_string()]
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1829,6 +1893,52 @@ fn gate_does_not_skip_non_canon_change_with_missing_cache() {
     let result = run_gate_command(&root, &[OsString::from("1")]);
 
     assert_eq!(result.unwrap_err(), GATE_FAILED_EXIT);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn gate_accepts_fresh_cooldown_pass_when_scope_hash_changed() {
+    let root = git_project("gate-cooldown-pass");
+    commit_all(&root, "initial");
+    let yaml = r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#;
+    fs::create_dir_all(root.join(".canon")).unwrap();
+    fs::write(root.join(CHECK_PATH), yaml).unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
+    let config = parse_check_config(yaml).unwrap();
+    let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+    let old_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let mut record = expectation_record(&expectation, "pass", "yes", old_hash.clone());
+    record.timestamp = format_log_record_timestamp(unix_timestamp().unwrap());
+    append_history_record(&root, &expectation, &record).unwrap();
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    assert_ne!(current_hash, old_hash);
+
+    let result = run_gate_command(&root, &[OsString::from("1")]);
+
+    assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
 }
 

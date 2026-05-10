@@ -3,39 +3,70 @@
 [![CI](https://github.com/progbeat/canon/actions/workflows/ci.yml/badge.svg)](https://github.com/progbeat/canon/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Codex plugin for preserving accepted decisions, constraints, and goals when
-long coding threads are compacted.
+`canon` is a Codex plugin and CLI for running AI expectation checks against the
+staged Git snapshot of a project.
 
-`canon` gives agents a thread-scoped canon of the original goal, accepted
-decisions, constraints, invariants, and pitfalls they must keep honoring after
-compaction. It is not project documentation; durable specifications belong in
-the repository.
+Use it to encode project-specific quality bars as questions in
+`.canon/check.yml`, ask a configured Codex evaluator to answer those questions
+from the staged code, and fail the check when the observed answers do not match
+the expected answers.
 
 ---
 
-## Problem
+## Why `canon check`
 
-Long Codex threads eventually get compacted. After compaction, an agent may lose
-the reasoning that led to earlier decisions: the original goal becomes fuzzy,
-accepted constraints disappear, and a later edit can accidentally undo a correct
-fix made earlier in the same thread.
+Traditional tests are best when the expected behavior can be executed directly.
+Some repository expectations are harder to express that way:
 
-`canon` keeps those behavior-shaping anchors outside the compressed
-conversation, but still scoped to the current thread. Before changing a file,
-the agent reads the relevant canon entries; after an accepted decision, it
-records the anchor that future edits must keep honoring.
+- Is the README consistent with the current implementation?
+- Does a refactor leave dead, duplicated, or obsolete files behind?
+- Does the project still follow an architecture rule documented in a spec?
+- Did the staged change introduce a maintainability issue that normal tests
+  cannot see?
+
+`canon check` treats those expectations as reviewable project policy. Each
+expectation is a question, an exact expected answer, optional cooldown metadata,
+and optional model reasoning effort. The expected answer is hidden from the
+evaluator. The evaluator reads only the files it is allowed to read and returns
+an observed answer with evidence and scope.
 
 ---
 
 ## Quick Start
 
+Install the CLI and local Codex plugin:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/progbeat/canon/main/scripts/install.sh | bash
 ```
 
-Restart Codex, open Plugins > Local Plugins, install `canon`, then use Codex normally.
+Restart Codex, open Plugins > Local Plugins, install `canon`, then initialize
+checks in a repository:
 
-The installer:
+```sh
+canon init
+```
+
+Edit `.canon/check.yml` to define the expectations for the project, then run
+the check against the staged snapshot:
+
+```sh
+git add README.md src
+canon check
+```
+
+After `canon check` has populated reusable answers for the staged snapshot, add
+the pre-commit hook:
+
+```sh
+canon hook install
+```
+
+The hook runs `canon gate`, a fast cache-only command. If the staged snapshot
+has not been checked yet, `canon gate` asks you to run `canon check` before
+committing.
+
+The installer places files here:
 
 | Item | Location |
 | --- | --- |
@@ -44,43 +75,278 @@ The installer:
 | Local plugin registry | `~/.agents/plugins/marketplace.json` |
 | Plugin cache | `~/.codex/plugins/cache/codex-plugins/canon` |
 
-To create project checks and run the fast `canon gate` before commits:
+---
 
-```sh
-canon init
-canon hook install
-```
+## How `canon check` Works
 
-`canon init` creates `.canon/check.yml` from the embedded default template and
-fails if that file already exists. `canon hook install` installs or reuses
-`.git/hooks/pre-commit` and sets the local Git `core.hooksPath` to `.git/hooks`.
-The pre-commit hook runs `canon gate`, a fast cache-only check that asks you to
-run `canon check` when the staged snapshot has not been checked yet.
+`canon check` loads `.canon/check.yml`, expands any generated expectations, and
+evaluates the staged Git snapshot by default. It temporarily exposes the index
+contents at the real project root while preserving unstaged and untracked
+working tree changes, then restores those changes after success or failure.
+
+The config has one evaluator agent under the top-level `agent` section. The
+agent defines developer instructions, model selection, reasoning effort, ignored
+paths, and plugin loading. `.canon/**` and `.git/canon/**` are always denied to
+evaluator threads, even though `canon check` itself parses the active config
+before starting the evaluator.
+
+For each selected expectation, the evaluator receives one question at a time
+and must answer with a JSON object containing:
+
+- `answer`: the observed answer, compared to `a` by exact string equality.
+- `evidence`: supporting files or code.
+- `scope`: the smallest allowed project context sufficient to answer the
+  expectation correctly.
+
+Expected answers are single-line strings. `yes`, `no`, `idk`, `malformed`, and
+letter choices such as `a` or `b` are conventions established by the evaluator
+instructions; the check result still uses exact string comparison.
+
+If an evaluator reports a narrower scope, `canon check` verifies that narrowed
+scope with an independent interrogation before accepting it. Narrow scopes make
+future cache reuse cheaper because the reusable record is keyed by the visible
+contents of that scope instead of the whole project.
+
+Reusable results are stored under the Git directory in `canon/cache/`. A result
+can be reused when the expectation prompt, expected answer, and scope hash still
+match. `--ignore-cache` forces fresh evaluator interrogation. Cooldowns let a
+recent passing result count as skipped until the configured duration expires.
+
+After preflight, `canon gate` is cache-only and side-effect-free. It passes when
+every selected expectation has a reusable cached pass, has a fresh cooldown
+pass, or has a cached fail that was already present at `HEAD`. It fails quickly
+when cache records are missing or when the staged snapshot introduces a new
+cached failure. `.canon/**`-only staged changes pass without cache lookup when
+the full-project `scopeHash` is unchanged from `HEAD`, because the visible
+project content cannot regress.
+
+`canon check` refuses staged changes that mix `.canon/**` paths with non-canon
+paths. Keep policy changes separate from implementation changes so the
+evaluator cannot be checked against a policy it is not allowed to read.
 
 ---
 
-## What It Does
+## Check Configuration
 
-| Workflow | Agent action |
-| --- | --- |
-| Before editing a file | `canon r <relative-path>` |
-| Search existing context | `canon rg <term>` |
-| Record a file decision | `canon a <relative-path> "<decision>"` |
-| Record the task goal or a general constraint | `canon a . "<decision>"` |
+`canon init` creates `.canon/check.yml` from the embedded template in
+[`templates/check.yml`](templates/check.yml) and refuses to overwrite an
+existing config.
 
-Use repository-relative file paths as keys. Use `.` for the original goal and
-general task constraints.
+A compact example:
+
+```yaml
+version: 1
+
+agent:
+  model:
+    primary: gpt-5.4-mini
+    fallbacks:
+      - gpt-5.3-codex-spark
+  thinking: low
+  instructions: |
+    Answer exactly `yes` or `no` for yes/no questions.
+    If there is not enough evidence, answer exactly `idk`.
+    If the question is malformed, answer exactly `malformed`.
+    Use `scope` for the smallest allowed project context sufficient to answer.
+  ignore:
+    - "target/**"
+  plugins: []
+
+expectations:
+  - q: "Is README.md consistent with the current implementation?"
+    a: "yes"
+    cooldown: 4h
+
+  - q: "Are there obsolete tracked files that can be removed safely?"
+    a: "no"
+    cooldown: 7d
+    thinking: xhigh
+```
+
+Expectation items can also be generated from spec files:
+
+```yaml
+expectations:
+  - path: "specs/*.md"
+    q_template: |
+      {content}
+      ---
+      Does the implementation fully satisfy this specification?
+    a: "yes"
+```
+
+Generator paths are relative to the active config file directory. Matched files
+are expanded lexicographically at the generator's position in the expectation
+list and then use the same numbering, selection, cache, check, and gate behavior
+as explicit `q`/`a` expectations.
+
+The accepted schema and runtime behavior are implemented in the Rust code under
+[`src/`](src/). The human-readable stdout contract for check results is
+specified in `.canon/specs/Check Output.md`.
 
 ---
 
 ## CLI Reference
 
 ```sh
+canon init
+```
+
+Create `.canon/check.yml` from the embedded default template. The command fails
+without overwriting if the config already exists.
+
+```sh
+canon check
+canon check 4 5 42
+canon check --fail-fast
+canon check --ignore-cache
+canon check --config other-check.yml
+canon check -c other-check.yml
+```
+
+Run all expectations, run selected 1-based expectation numbers, stop after the
+first failed result, ignore reusable cache records, or use a custom YAML config.
+With no expectation numbers, failures do not stop later expectations unless
+`--fail-fast` is present.
+
+```sh
+canon check -q "Does README.md describe canon check?"
+```
+
+Ask one ad-hoc uncached question with the configured evaluator agent. `-q`
+cannot be combined with expectation numbers, `--fail-fast`, or `--ignore-cache`.
+
+```sh
+canon gate
+canon gate 4 5 42
+```
+
+Validate the selected expectations using only reusable cache and cooldown
+records. This is the command run by the pre-commit hook.
+
+```sh
+canon hook install
+```
+
+Install or reuse `.git/hooks/pre-commit` and set the local Git
+`core.hooksPath` to `.git/hooks`. If another hooks path or incompatible
+pre-commit hook is already configured, the command refuses to overwrite it.
+
+```sh
 canon
 canon pwd
 ```
 
-Print the current canon root.
+Print the current thread-scoped canon root. This belongs to the experimental
+note-taking workflow described at the end of this README.
+
+---
+
+## Runtime Data
+
+Check cache and logs live inside the Git directory, not in tracked files.
+
+Reusable expectation history is stored under:
+
+```text
+git rev-parse --git-path canon/cache/<ID>/history.jsonl
+```
+
+`ID` is a 120-bit base64url hash of the expectation prompt and expected answer.
+Each reusable record includes a `scopeHash`, a 120-bit base64url hash of the
+staged Git contents visible through that record's scope. History contains only
+reusable pass and fail results. `idk`, `malformed`, and unparseable responses
+require retry or human review and are not written as reusable history.
+
+Runtime logs are written to:
+
+```text
+git rev-parse --git-path canon/logs/0.jsonl
+```
+
+`0.jsonl` rotates at the start of `canon check` only when it exceeds 128 KiB.
+Logs include check start and finish events, expectation results, warnings,
+model failures and fallbacks, token usage, agent communication, and evaluator
+thread creation or reuse. Warnings and internal diagnostics go to the runtime
+log rather than normal stdout/stderr.
+
+Cache history files are compacted on an approximately 1-in-15 sample after
+appends, keeping the latest reusable records. `canon check` also samples
+cleanup of cache entries whose expectation IDs are no longer present in the
+active config, so cache storage stays bounded in expectation under bounded
+config and retained data.
+
+---
+
+## Repository Layout
+
+```text
+templates/check.yml
+templates/pre-commit
+src/main.rs
+src/check.rs
+src/check_config.rs
+src/evaluator.rs
+skills/canon/SKILL.md
+scripts/install.sh
+```
+
+The Rust CLI implements check execution, staged snapshot handling, evaluator
+orchestration, cache reuse, hook installation, and the experimental note
+commands. The Codex skill describes how agents should use the experimental
+thread-scoped canon workflow.
+
+---
+
+## Development
+
+Install the runtime from a checkout:
+
+```sh
+cargo install --path . --root ~/.local --force
+```
+
+Register the current checkout as the local plugin source:
+
+```sh
+bash scripts/install.sh --local
+```
+
+Run local checks:
+
+```sh
+cargo fmt --check
+cargo test
+bash -n scripts/install.sh
+```
+
+---
+
+## Experimental: Thread-Scoped Canon
+
+Before `canon check`, this project centered on a Codex note-taking workflow for
+preserving accepted decisions, constraints, and goals when long coding threads
+are compacted. That workflow still exists, but it is secondary to the
+project-facing expectation checker.
+
+The experimental workflow stores behavior-shaping anchors outside the compressed
+conversation while keeping them scoped to the current Codex thread. Agents can
+read relevant notes before editing and append new notes after a user accepts an
+important decision.
+
+Common commands:
+
+| Workflow | Command |
+| --- | --- |
+| Read notes for a file | `canon r <relative-path>` |
+| Search existing notes | `canon rg <term>` |
+| Record a file decision | `canon a <relative-path> "<decision>"` |
+| Record a task goal or general constraint | `canon a . "<decision>"` |
+
+Use repository-relative file paths as keys. Use `.` for the original goal and
+general task constraints.
+
+Full note command reference:
 
 ```sh
 canon p src/lib.rs
@@ -109,199 +375,13 @@ canon rg validation
 canon rg validation -n
 ```
 
-Search canon with ripgrep. `canon g` is also available as a short alias for `canon rg`.
-
-```sh
-canon init
-canon hook install
-canon check
-canon gate
-canon check --fail-fast
-canon check --ignore-cache
-canon check --config other-check.yml
-canon check -c other-check.yml
-canon check -q "Does README.md describe the CLI?"
-canon check 4 5 42
-```
-
-Create `.canon/check.yml`, install the pre-commit hook, run every project
-expectation, validate cached results without asking the evaluator, stop after
-the first failed expectation result, ignore reusable cache records, run checks
-from a custom YAML config, ask an ad-hoc uncached question with the configured
-agent, or rerun selected 1-based expectations. `canon check` is a
-project-facing AI expectation linter: it asks the configured evaluator agent to
-answer each expectation from allowed files in the staged Git snapshot, hides
-expected answers from it, and fails when observed answers do not exactly match.
+Search thread-scoped notes with ripgrep. `canon g` is also available as a short
+alias for `canon rg`.
 
 Long aliases: `path`, `read`, `write`, `append`, `delete`, `del`, and `rm`.
 
----
-
-## Expectation Checks
-
-`canon init` creates a default `.canon/check.yml`:
-
-```yaml
-version: 1
-agent:
-  model:
-    primary: gpt-5.4-mini
-    fallbacks:
-      - gpt-5.3-codex-spark
-  thinking: low
-  instructions: |
-    Use the following response policy:
-    Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
-    If the question asks you to choose from lettered options, answer exactly with the option letter only, such as `a` or `b`.
-    Do not guess.
-    If there is not enough evidence to answer a valid question, answer exactly `idk`.
-    If the question is malformed, answer exactly `malformed`.
-    Scoring policy:
-    * Correct answer: +5
-    * Incorrect answer: -10
-    * `idk`: -1 + retry on full project scope
-    * `malformed`: N/A, human review required
-    Scope policy:
-    * `scope` is the smallest allowed project context sufficient to determine the correct answer among all valid answers.
-    * `scope` is not the list of evidence citations; cite supporting files or code inside the `evidence` response field.
-    * Use `["."]` for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it.
-    * Propose a narrower scope of at most 4 paths only when that narrower scope is sufficient to determine the correct answer among all valid answers.
-    * Successful scope narrowing: +1
-    * Failed scope narrowing: -5
-  ignore:
-    - "target/**"
-  plugins: []
-
-expectations:
-  - q: "With bounded configuration and retained data, is non-temporary project-owned persistent state across the whole project practically size-bounded across repeated normal command runs and configuration changes without manual cleanup?"
-    a: "yes"
-    cooldown: 7d
-
-  - q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
-    a: "yes"
-    cooldown: 1d
-
-  - q: "If this project spawns child processes, do those code paths ensure the child processes are terminated and reaped on both success and failure?"
-    a: "yes"
-    cooldown: 7d
-
-  - q: "Are there any obsolete, unused, stray, dead-end, duplicated, or redundant Git-tracked project files or code paths that are safe to remove or consolidate without changing intended functionality?"
-    a: "no"
-    cooldown: 7d
-    thinking: xhigh
-
-  - q: "Are there any hand-written, non-generated source files that are excessively large or mix unrelated responsibilities enough that they should be split into smaller focused modules?"
-    a: "no"
-    cooldown: 5d
-    thinking: xhigh
-
-  - q: "Are there any dirty hacks that can be avoided?"
-    a: "no"
-    cooldown: 7d
-    thinking: xhigh
-
-  - q: "Are there any avoidable, evidence-backed violations of commonly accepted idioms for this project's languages, frameworks, or tools that materially reduce maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
-    a: "no"
-    cooldown: 7d
-    thinking: xhigh
-```
-
-The check schema has exactly one evaluator agent, configured through a single
-top-level `agent` section. That section contains `instructions`, `model`
-(`primary` and `fallbacks`), `ignore`, and `plugins`; there is no multiple-agent
-schema. `thinking` controls the Codex reasoning effort used for that model.
-`ignore` lists repository-relative files or globs that the evaluator must not
-read, and `.canon/**` plus `.git/canon/**` are always added to the effective
-ignore list. `plugins` lists Codex plugin config keys such as
-`canon@codex-plugins`; when the list is empty, `canon check` starts `codex
-app-server` with plugin loading disabled. Expected answers are single-line
-strings compared by exact equality; `idk` is just an ordinary answer string.
-Although evaluator threads cannot read `.canon/check.yml`, `canon check` parses
-that file before starting the evaluator. The accepted configuration shape is
-therefore verified by the Rust schema and validation code in `src/cli.rs` and
-`src/check.rs`, while the embedded default file lives in `templates/check.yml`.
-
-`canon check` supplies the evaluator response protocol through thread developer
-instructions, puts the current enforced `scope` in those developer instructions,
-asks one question at a time as a plain string, transports that question through
-the required Codex app-server text input envelope, and restricts ignored paths
-and narrowed scopes through Codex filesystem permissions. The evaluator must
-answer with exactly one JSON object containing `answer`, `evidence`, and
-`scope`, in that order. The human-readable check output contract is specified in
-`.canon/specs/Check Output.md`.
-
-Expectation items may also be generated from spec files:
-
-```yaml
-expectations:
-  - path: "specs/*.md"
-    q_template: |
-      {content}
-      ---
-      Is this specification implemented?
-    a: "yes"
-```
-
-Generator paths are relative to the active config file directory. Matched spec
-files are expanded lexicographically at the generator's position in the
-expectation list, and the generated expectations use the same numbering,
-selection, cache, check, and gate behavior as explicit `q`/`a` expectations.
-
-Per-expectation reusable history is stored in the Git directory under
-`canon/cache/<ID>/history.jsonl`, where `ID` is a 120-bit base64url hash of the
-expectation prompt and expected answer. `scopeHash` is a 120-bit base64url hash
-of the staged Git contents visible through the record's scope. History contains
-only reusable answer records: `pass` and `fail` results with actual answers.
-`idk`, `malformed`, and unparseable responses require review or retry behavior
-and are not written as reusable history. `canon check` reuses matching cached
-pass and fail records, unless `--ignore-cache` is set. Optional expectation
-cooldowns are specified in `.canon/specs/Cooldown.md`; fresh cooldown passes are
-counted as skipped without per-expectation stdout.
-
-History files are compacted on an approximately 1-in-15 sample after appends,
-keeping the latest reusable records. `canon check` also samples cleanup of
-cache entries whose expectation IDs are no longer present in the active config,
-so cache storage stays bounded in expectation under bounded config and retained
-data.
-
-Runtime logs are appended to `git rev-parse --git-path canon/logs/0.jsonl`. At
-the start of `canon check`,
-`0.jsonl` rotates only when it exceeds 128 KiB: `3.jsonl` is removed, `2` moves
-to `3`, `1` to `2`, and `0` to `1`. The next runtime log write creates a fresh
-`0.jsonl`. Runtime logs include check start/finish, expectation results,
-warnings, model failures/fallbacks, token usage, agent communication, and thread
-creation/reuse. Warnings and internal diagnostics go there rather than to
-normal stdout/stderr.
-
-The staged Git snapshot is exposed at the real project root by temporarily
-preserving unstaged and untracked worktree changes with Git's own stash/index
-machinery, then restoring them on drop. This is a deliberate in-place index-view
-mechanism rather than a filtered copy of the project, because file visibility is
-enforced by Codex filesystem permissions. App-server cleanup deliberately uses a
-Unix process group so
-`Ctrl+C`, normal completion, and failures terminate and reap the whole evaluator
-process tree instead of leaving child commands behind.
-
-After command/config/staged-change preflight, `canon gate` is cache-only and
-side-effect-free. It passes when every expectation either has a reusable cached
-`pass` record for the current staged snapshot, has a fresh cooldown pass, or has
-reusable cached `fail` records for both the current staged snapshot and `HEAD`,
-which means the failure was already present before the staged change. It asks
-you to run `canon check` when cache records are missing and prints new cached
-failures when they are present. `.canon/**`-only staged changes pass without
-cache lookup when the full-project `scopeHash` is unchanged from `HEAD`, because
-the visible project content cannot regress.
-
-If an evaluator answers `malformed`, `canon check` retries once. If the final
-answer is still `malformed`, the expectation is reported as a human-review
-error so a person can fix the expectation or prompt.
-
----
-
-## Storage
-
-V1 is Codex-first: canon is scoped by `CODEX_THREAD_ID` and temp-backed by
-default.
+V1 storage is Codex-first: notes are scoped by `CODEX_THREAD_ID` and temp-backed
+by default.
 
 ```text
 ${TMPDIR:-/tmp}/canon/codex/<CODEX_THREAD_ID>/
@@ -311,43 +391,6 @@ Use `CANON_HOME` when longer-lived storage is explicitly needed:
 
 ```text
 ${CANON_HOME}/codex/<CODEX_THREAD_ID>/
-```
-
----
-
-## Repository Layout
-
-```text
-skills/canon/SKILL.md
-scripts/install.sh
-src/main.rs
-```
-
-The Codex skill defines the agent behavior. The Rust CLI is the storage/runtime
-layer used by the skill.
-
----
-
-## Development
-
-Install the runtime from a checkout:
-
-```sh
-cargo install --path . --root ~/.local --force
-```
-
-Register the current checkout as the local plugin source:
-
-```sh
-bash scripts/install.sh --local
-```
-
-Run checks:
-
-```sh
-cargo fmt --check
-cargo test
-bash -n scripts/install.sh
 ```
 
 ## License

@@ -777,6 +777,8 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         &session_id,
         &prompt,
         &config.agent,
+        model,
+        effective_thinking(&config.agent, expectation),
         &mut state.parse_cache,
         diagnostic_log,
         expectation.number,
@@ -825,6 +827,8 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
                 &session_id,
                 &prompt,
                 &config.agent,
+                model,
+                effective_thinking(&config.agent, expectation),
                 &mut state.parse_cache,
                 diagnostic_log,
                 expectation.number,
@@ -1027,6 +1031,8 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
         &session_id,
         &prompt,
         &config.agent,
+        model,
+        &config.agent.thinking,
         &mut state.parse_cache,
         diagnostic_log,
         0,
@@ -1072,6 +1078,8 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
                 &session_id,
                 &prompt,
                 &config.agent,
+                model,
+                &config.agent.thinking,
                 &mut state.parse_cache,
                 diagnostic_log,
                 0,
@@ -1221,6 +1229,8 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
     session_id: &str,
     prompt: &str,
     agent: &AgentConfig,
+    model: Option<&str>,
+    thinking: &str,
     parser_cache: &mut EvaluatorResponseParseCache,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_number: usize,
@@ -1229,6 +1239,8 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
         runner,
         session_id,
         prompt,
+        model,
+        thinking,
         diagnostic_log,
         expectation_number,
         1,
@@ -1243,6 +1255,8 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
                 runner,
                 session_id,
                 &repair_prompt,
+                model,
+                thinking,
                 diagnostic_log,
                 expectation_number,
                 2,
@@ -1269,6 +1283,8 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
             runner,
             session_id,
             prompt,
+            model,
+            thinking,
             diagnostic_log,
             expectation_number,
             2,
@@ -1284,6 +1300,8 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
             runner,
             session_id,
             prompt,
+            model,
+            thinking,
             diagnostic_log,
             expectation_number,
             2,
@@ -1299,6 +1317,8 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
             runner,
             session_id,
             prompt,
+            model,
+            thinking,
             diagnostic_log,
             expectation_number,
             2,
@@ -1326,6 +1346,8 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
     runner: &mut R,
     session_id: &str,
     prompt: &str,
+    model: Option<&str>,
+    thinking: &str,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_number: usize,
     attempt: usize,
@@ -1343,7 +1365,7 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
             ],
         )?;
     }
-    let response = runner.ask(session_id, prompt)?;
+    let response = runner.ask(session_id, prompt, model, thinking)?;
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_event(
             "info",
@@ -1485,26 +1507,8 @@ pub(crate) fn parse_evaluator_response_json(text: &str) -> Result<EvaluatorRespo
 
 pub(crate) fn evaluator_response_json_payload(text: &str) -> Result<&str, String> {
     let trimmed = text.trim();
-    if validate_evaluator_response_key_order(trimmed).is_ok() {
-        return Ok(trimmed);
-    }
-
-    let bytes = trimmed.as_bytes();
-    for start in (0..bytes.len()).rev().filter(|index| bytes[*index] == b'{') {
-        let Ok(end) = skip_json_value(bytes, start) else {
-            continue;
-        };
-        if skip_json_ws(bytes, end) != bytes.len() {
-            continue;
-        }
-        let candidate = &trimmed[start..end];
-        if validate_evaluator_response_key_order(candidate).is_ok() {
-            return Ok(candidate);
-        }
-    }
-
     validate_evaluator_response_key_order(trimmed)?;
-    unreachable!("validation above always returns on success")
+    Ok(trimmed)
 }
 
 // The evaluator protocol intentionally makes the top-level key order part of

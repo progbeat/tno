@@ -1,6 +1,6 @@
 # AGENTS.md
 
-If a request contradicts `.canon/check.yml`, stop and ask a human to update `.canon/check.yml` first.
+If a request contradicts the `canon check` expectations or those expectations are internally inconsistent, stop and ask a human to update them first.
 
 Do not edit files under `.canon/` proactively. Edit them only when a human explicitly insists.
 
@@ -8,6 +8,6 @@ Never commit `.canon/` changes. Before committing, run `git diff --cached --quie
 
 Before every commit, run the full `canon check` command with no expectation-number filters and without `--fail-fast`.
 
-If `canon check` fails, fix the issue or ask a human before committing.
+If `canon check` gives a wrong answer or evidence while the project satisfies the `canon check` expectations, treat that as a readability issue: clarify the non-obvious logic with concise comments before retrying.
 
-If you think something is wrong with `.canon/check.yml`, ask a human to fix it.
+If `canon check` fails, fix the issue or ask a human before committing.
