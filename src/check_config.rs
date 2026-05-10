@@ -199,14 +199,29 @@ pub(crate) fn validate_generator_template(template: &str, number: usize) -> Resu
             number
         ));
     }
-    let remainder = template.replace("{content}", "");
-    if remainder.contains('{') || remainder.contains('}') {
+    if template_contains_unknown_placeholder(template) {
         return Err(format!(
             "expectation {} q_template must not contain placeholders other than {{content}}",
             number
         ));
     }
     Ok(())
+}
+
+pub(crate) fn template_contains_unknown_placeholder(template: &str) -> bool {
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        rest = &rest[start + 1..];
+        let Some(end) = rest.find('}') else {
+            return false;
+        };
+        if &rest[..end] == "content" {
+            rest = &rest[end + 1..];
+            continue;
+        }
+        return true;
+    }
+    false
 }
 
 pub(crate) fn expand_generator_paths(
@@ -272,18 +287,12 @@ pub(crate) fn expand_filesystem_generator_paths(
             Ok(Vec::new())
         };
     };
-    if pattern[star_index + 1..].contains('*') {
-        return Err(format!("generator path supports only one *: {}", pattern));
-    }
     let slash_index = pattern[..star_index]
         .rfind('/')
         .map(|index| index + 1)
         .unwrap_or(0);
     let dir = &pattern[..slash_index].trim_end_matches('/');
     let file_pattern = &pattern[slash_index..];
-    let (prefix, suffix) = file_pattern
-        .split_once('*')
-        .ok_or_else(|| format!("invalid generator path: {}", pattern))?;
     let dir_path = if dir.is_empty() {
         root.to_path_buf()
     } else {
@@ -299,10 +308,11 @@ pub(crate) fn expand_filesystem_generator_paths(
         let entry =
             entry.map_err(|err| format!("failed to read {}: {}", dir_path.display(), err))?;
         let file_name = entry.file_name();
-        let file_name = file_name
-            .to_str()
-            .ok_or_else(|| format!("non-UTF-8 spec path in {}", dir_path.display()))?;
-        if file_name.starts_with(prefix) && file_name.ends_with(suffix) && entry.path().is_file() {
+        let file_name_for_match = file_name.to_string_lossy();
+        if wildcard_match(file_pattern, &file_name_for_match) && entry.path().is_file() {
+            let file_name = file_name
+                .to_str()
+                .ok_or_else(|| format!("non-UTF-8 spec path in {}", dir_path.display()))?;
             let repo_path = if dir.is_empty() {
                 file_name.to_string()
             } else {
@@ -313,6 +323,35 @@ pub(crate) fn expand_filesystem_generator_paths(
     }
     files.sort();
     Ok(files)
+}
+
+pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
+    let parts = pattern.split('*').collect::<Vec<_>>();
+    if parts.len() == 1 {
+        return pattern == text;
+    }
+    let mut remaining = text;
+    if let Some(prefix) = parts.first().filter(|prefix| !prefix.is_empty()) {
+        let Some(stripped) = remaining.strip_prefix(prefix) else {
+            return false;
+        };
+        remaining = stripped;
+    }
+    let middle_end = parts.len().saturating_sub(1);
+    for part in &parts[1..middle_end] {
+        if part.is_empty() {
+            continue;
+        }
+        let Some(index) = remaining.find(part) else {
+            return false;
+        };
+        remaining = &remaining[index + part.len()..];
+    }
+    if let Some(suffix) = parts.last().filter(|suffix| !suffix.is_empty()) {
+        remaining.ends_with(suffix)
+    } else {
+        true
+    }
 }
 
 pub(crate) fn parse_check_options(
@@ -504,7 +543,9 @@ pub(crate) fn select_expectations(
 }
 
 pub(crate) fn parse_cooldown(value: &str) -> Result<Cooldown, String> {
-    let value = value.trim();
+    if value.trim() != value {
+        return Err("must use compact duration syntax without surrounding whitespace".to_string());
+    }
     if value.len() < 2 {
         return Err("must use integer duration with unit s, m, h, d, or w".to_string());
     }

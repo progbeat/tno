@@ -875,8 +875,25 @@ impl EvaluatorRunner for AppServerRunner {
         if let Some(effort) = codex_reasoning_effort(thinking) {
             request["effort"] = Value::String(effort.to_string());
         }
+        request["outputSchema"] = evaluator_response_output_schema();
         self.send_turn_request("turn/start", request)
     }
+}
+
+pub(crate) fn evaluator_response_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "answer": { "type": "string" },
+            "evidence": { "type": "string" },
+            "scope": {
+                "type": "array",
+                "items": { "type": "string" }
+            }
+        },
+        "required": ["answer", "evidence", "scope"],
+        "additionalProperties": false
+    })
 }
 
 pub(crate) fn evaluator_turn_input(prompt: &str) -> Result<Value, String> {

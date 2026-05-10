@@ -90,6 +90,37 @@ impl DiagnosticLogWriter {
     }
 }
 
+pub(crate) fn rotate_diagnostic_logs_if_needed(log_dir: &Path) -> Result<(), String> {
+    let active = log_dir.join(DIAGNOSTIC_LOG_FILES[0]);
+    let should_rotate = active
+        .metadata()
+        .map(|metadata| metadata.len() > DIAGNOSTIC_LOG_MAX_BYTES)
+        .unwrap_or(false);
+    if !should_rotate {
+        return Ok(());
+    }
+    let oldest = log_dir.join(DIAGNOSTIC_LOG_FILES[3]);
+    if oldest.exists() {
+        fs::remove_file(&oldest)
+            .map_err(|err| format!("failed to remove {}: {}", oldest.display(), err))?;
+    }
+    for index in (0..3).rev() {
+        let from = log_dir.join(DIAGNOSTIC_LOG_FILES[index]);
+        if from.exists() {
+            let to = log_dir.join(DIAGNOSTIC_LOG_FILES[index + 1]);
+            fs::rename(&from, &to).map_err(|err| {
+                format!(
+                    "failed to rename {} to {}: {}",
+                    from.display(),
+                    to.display(),
+                    err
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn render_runtime_log_event(
     level: &str,
     event: &str,

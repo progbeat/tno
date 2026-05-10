@@ -775,6 +775,81 @@ expectations:
 }
 
 #[test]
+fn check_config_rejects_cooldown_with_surrounding_whitespace() {
+    assert!(parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: x
+    a: y
+    cooldown: " 1d "
+"#
+    )
+    .is_err());
+}
+
+#[test]
+fn generator_template_rejects_every_non_content_brace_pair() {
+    assert!(
+        validate_generator_template("Example JSON: {\"ok\": true}\n{content}\nDone", 1).is_err()
+    );
+    assert!(validate_generator_template("{content}\n{name}", 1).is_err());
+    assert!(validate_generator_template("{content}\n{}", 1).is_err());
+    assert!(validate_generator_template("{content}\n{ name }", 1).is_err());
+    assert!(validate_generator_template("{content}\n{!}", 1).is_err());
+    assert!(validate_generator_template("{content}\n{foo bar}", 1).is_err());
+}
+
+#[test]
+fn generator_paths_support_multiple_filename_wildcards() {
+    let root = temp_home("generator-multi-wildcard");
+    fs::create_dir_all(root.join("specs")).unwrap();
+    fs::write(root.join("specs/cache.policy.md"), "cache").unwrap();
+    fs::write(root.join("specs/cache.notes.txt"), "notes").unwrap();
+    fs::write(root.join("specs/log.policy.md"), "log").unwrap();
+
+    assert_eq!(
+        expand_filesystem_generator_paths(&root, "specs/c*.*.md").unwrap(),
+        vec!["specs/cache.policy.md".to_string()]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn generator_paths_ignore_unmatched_non_utf8_names() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = temp_home("generator-non-utf8");
+    fs::create_dir_all(root.join("specs")).unwrap();
+    fs::write(root.join("specs/a.md"), "ok").unwrap();
+    fs::write(
+        root.join("specs").join(std::ffi::OsString::from_vec(vec![
+            b'n', b'o', b't', b'e', b'-', 0xff, b'.', b't', b'x', b't',
+        ])),
+        "ignored",
+    )
+    .unwrap();
+    assert_eq!(
+        expand_filesystem_generator_paths(&root, "specs/*.md").unwrap(),
+        vec!["specs/a.md".to_string()]
+    );
+    fs::write(
+        root.join("specs").join(std::ffi::OsString::from_vec(vec![
+            b's', b'p', b'e', b'c', b'-', 0xff, b'.', b'm', b'd',
+        ])),
+        "matched",
+    )
+    .unwrap();
+    assert!(expand_filesystem_generator_paths(&root, "specs/*.md").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_command_accepts_custom_config_option() {
     let parsed = parse_check_command_args(&[
         "--config".into(),
@@ -1074,7 +1149,9 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
     assert_eq!(records[0].observed, "yes");
     assert_eq!(records[0].scope, vec!["."]);
     let history = read_history_records(&root, &options.selected[0]).unwrap();
-    assert!(history.is_empty());
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].observed, "yes");
+    assert_eq!(history[0].scope, vec!["."]);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1095,8 +1172,8 @@ fn check_runner_fails_mismatch_and_treats_idk_as_exact_string() {
 }
 
 #[test]
-fn check_runner_repairs_absence_question_idk_once() {
-    let root = git_project("check-absence-idk");
+fn check_runner_treats_full_scope_idk_as_human_review() {
+    let root = git_project("check-full-scope-idk");
     let config = parse_check_config(
         r#"
 version: 1
@@ -1112,17 +1189,15 @@ expectations:
     )
     .unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let mut runner = FakeRunner::new(&[
-        &answer("idk", "no concrete issue found", &["."]),
-        &answer("no", "README.md and src/main.rs were inspected", &["."]),
-    ]);
+    let mut runner = FakeRunner::new(&[&answer("idk", "not enough evidence", &["."])]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records[0].passed());
-    assert_eq!(records[0].observed, "no");
-    assert_eq!(runner.prompts[1], runner.prompts[0]);
+    assert!(!records[0].passed());
+    assert!(record_requires_human_review(&records[0]));
+    assert_eq!(records[0].observed, "idk");
+    assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1151,8 +1226,7 @@ fn check_runner_repairs_malformed_response_once() {
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
     assert!(records[0].passed());
     assert_eq!(runner.prompts.len(), 2);
-    assert!(runner.prompts[1].contains("Return exactly one valid JSON object"));
-    assert!(runner.prompts[1].contains(&runner.prompts[0]));
+    assert_eq!(runner.prompts[1], runner.prompts[0]);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1235,7 +1309,7 @@ fn check_runner_marks_unparseable_after_response_repair_fails() {
 }
 
 #[test]
-fn check_runner_parse_retry_asks_for_valid_json() {
+fn check_runner_parse_retry_repeats_same_question() {
     let root = git_project("check-parse-retry-prompt");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -1246,9 +1320,7 @@ fn check_runner_parse_retry_asks_for_valid_json() {
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert!(records[0].passed());
-    assert!(runner.prompts[1].contains("Return exactly one valid JSON object"));
-    assert!(runner.prompts[1].contains("Original question:"));
-    assert!(runner.prompts[1].contains(&options.selected[0].q));
+    assert_eq!(runner.prompts[1], options.selected[0].q);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1642,12 +1714,86 @@ expectations:
         },
     )
     .unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "not-a-timestamp".to_string(),
+            number: 1,
+            result: "fail".to_string(),
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: "no".to_string(),
+            evidence: "invalid timestamp fail".to_string(),
+            scope: full_scope(),
+            scope_hash: "newer".to_string(),
+        },
+    )
+    .unwrap();
     let mut history_cache = HistoryCache::new();
     assert!(
         cooldown_history_record(&root, &expectation, &mut history_cache, 30)
             .unwrap()
             .is_none()
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn cooldown_reuse_skips_records_with_invalid_timestamps() {
+    let root = git_project("history-cooldown-invalid-timestamp");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#,
+    )
+    .unwrap();
+    let expectation = check_options(&config, &["1"], false, false).selected[0].clone();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "1970-01-01T00:00:10Z".to_string(),
+            number: 1,
+            result: "pass".to_string(),
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: "yes".to_string(),
+            evidence: "old pass".to_string(),
+            scope: full_scope(),
+            scope_hash: "old".to_string(),
+        },
+    )
+    .unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "not-a-timestamp".to_string(),
+            number: 1,
+            result: "pass".to_string(),
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: "yes".to_string(),
+            evidence: "invalid timestamp pass".to_string(),
+            scope: full_scope(),
+            scope_hash: "new".to_string(),
+        },
+    )
+    .unwrap();
+    let mut history_cache = HistoryCache::new();
+    let reused = cooldown_history_record(&root, &expectation, &mut history_cache, 30)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reused.evidence, "old pass");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1943,6 +2089,56 @@ expectations:
 }
 
 #[test]
+fn gate_prefers_fresh_cooldown_pass_over_older_exact_fail() {
+    let root = git_project("gate-cooldown-over-exact-fail");
+    commit_all(&root, "initial");
+    let yaml = r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#;
+    fs::create_dir_all(root.join(".canon")).unwrap();
+    fs::write(root.join(CHECK_PATH), yaml).unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let config = parse_check_config(yaml).unwrap();
+    let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &expectation_record(&expectation, "fail", "no", current_hash),
+    )
+    .unwrap();
+    let mut pass = expectation_record(&expectation, "pass", "yes", "old".to_string());
+    pass.timestamp = format_log_record_timestamp(unix_timestamp().unwrap());
+    append_history_record(&root, &expectation, &pass).unwrap();
+
+    let result = run_gate_command(&root, &[OsString::from("1")]);
+
+    assert!(result.is_ok());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn gate_fails_for_new_current_failure_without_head_failure() {
     let root = git_project("gate-new-fail");
     commit_all(&root, "initial");
@@ -2108,21 +2304,24 @@ fn scope_is_canonicalized() {
     assert_eq!(scope, vec!["README.md", "src"]);
     let many_paths = parse_scope_json(r#"["a", "b", "c", "d", "e"]"#, &config.agent).unwrap();
     assert_eq!(many_paths, vec!["a", "b", "c", "d", "e"]);
+    assert!(parse_scope_json(r#"[]"#, &config.agent).is_err());
     assert!(parse_scope_json(r#"["target/output.txt"]"#, &config.agent).is_err());
 }
 
 #[test]
-fn evaluator_response_scope_ignores_denied_paths() {
+fn evaluator_response_scope_rejects_denied_paths() {
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let only_denied = parse_scope_strings(&[".canon/check.yml".to_string()], &config.agent)
-        .expect("denied response scope should not make the answer unparseable");
-    assert_eq!(only_denied, full_scope());
-    let mixed = parse_scope_strings(
+    assert!(parse_scope_strings(&[".canon/check.yml".to_string()], &config.agent).is_err());
+    assert!(parse_scope_strings(
         &["src/main.rs".to_string(), "target/output.txt".to_string()],
         &config.agent,
     )
-    .unwrap();
-    assert_eq!(mixed, vec!["src/main.rs"]);
+    .is_err());
+    assert!(parse_scope_strings(
+        &[".".to_string(), "target/output.txt".to_string()],
+        &config.agent,
+    )
+    .is_err());
 }
 
 #[test]
@@ -2257,9 +2456,10 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     assert_eq!(report.narrowing.rejected, 1);
     assert_eq!(report.records[0].observed, "yes");
     assert_eq!(report.records[0].scope, vec!["."]);
-    assert!(read_history_records(&root, &expectation)
-        .unwrap()
-        .is_empty());
+    let history = read_history_records(&root, &expectation).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].observed, "yes");
+    assert_eq!(history[0].scope, vec!["."]);
     let log = fs::read_to_string(diagnostic_log.path).unwrap();
     assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);
     assert_eq!(log.matches(r#""event":"interrogation.result""#).count(), 2);
@@ -2269,8 +2469,8 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
 }
 
 #[test]
-fn project_wide_quality_questions_force_full_scope() {
-    let root = git_project("quality-force-full-scope");
+fn project_wide_quality_scope_policy_is_not_runtime_rewritten() {
+    let root = git_project("quality-scope-not-rewritten");
     let config = parse_check_config(
         r#"
 version: 1
@@ -2286,13 +2486,24 @@ expectations:
     .unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[&answer("no", "src looked clean", &["src"])]);
+    let runtime = CheckRuntime {
+        root: &root,
+        snapshot_root: &root,
+        config: &config,
+    };
+    let mut state = InterrogationState::new();
+    let result = interrogate_expectation(
+        &runtime,
+        &options.selected[0],
+        &mut runner,
+        &mut None,
+        &mut state,
+        &full_scope(),
+    )
+    .unwrap();
 
-    let report =
-        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-
-    assert!(report.records[0].passed());
-    assert_eq!(report.records[0].scope, vec!["."]);
-    assert_eq!(report.narrowing.attempted, 0);
+    assert!(result.record.passed());
+    assert_eq!(result.record.scope, vec!["src"]);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2324,14 +2535,15 @@ fn evaluator_turn_input_is_plain_question_string() {
 }
 
 #[test]
-fn absence_repair_detection_reads_json_question_prompt() {
-    assert!(should_repair_absence_idk(
-        &question_prompt("Are there any unused files?", &full_scope()).unwrap()
-    ));
-    assert!(!should_repair_absence_idk(
-        &question_prompt("Does README exist?", &full_scope()).unwrap()
-    ));
-    assert!(should_repair_absence_idk("Are there any unused files?"));
+fn evaluator_turn_uses_strict_json_output_schema() {
+    let schema = evaluator_response_output_schema();
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["required"], json!(["answer", "evidence", "scope"]));
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["properties"]["answer"]["type"], "string");
+    assert_eq!(schema["properties"]["evidence"]["type"], "string");
+    assert_eq!(schema["properties"]["scope"]["type"], "array");
+    assert_eq!(schema["properties"]["scope"]["items"]["type"], "string");
 }
 
 #[test]
@@ -2484,6 +2696,15 @@ fn token_usage_update_is_rendered_like_codex_summary() {
         render_token_usage_summary(TokenUsage::default()),
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)"
     );
+}
+
+#[test]
+fn long_summary_padding_keeps_required_surrounding_spaces() {
+    let inner = " 123456789 failed, 456789 errors, 789123 passed, 101112 skipped in 123456789.00s ";
+    assert!(inner.len() >= 80);
+    let line = pad_summary_line(inner);
+    assert!(line.starts_with("= "));
+    assert!(line.ends_with(" ="));
 }
 
 #[test]

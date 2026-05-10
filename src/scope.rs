@@ -137,8 +137,8 @@ pub(crate) fn scope_hash_for_canonical_scope(
     source: ScopeHashSource,
 ) -> Result<Option<String>, String> {
     let entries = match source {
-        ScopeHashSource::Index => staged_scope_entries(root, agent, &scope).map(Some)?,
-        ScopeHashSource::Head => head_scope_entries(root, agent, &scope)?,
+        ScopeHashSource::Index => staged_scope_entries(root, agent, scope).map(Some)?,
+        ScopeHashSource::Head => head_scope_entries(root, agent, scope)?,
     };
     Ok(entries.map(|entries| hash_120(entries.join("\n").as_bytes())))
 }
@@ -282,9 +282,10 @@ pub(crate) fn normalize_head_metadata(metadata: &str, path: &str) -> Result<Stri
 
 pub(crate) fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, String> {
     if scope.is_empty() {
-        return Ok(full_scope());
+        return Err("scope must not be empty".to_string());
     }
     let mut normalized = Vec::new();
+    let mut has_full_scope = false;
     for path in scope {
         let path = normalize_repo_path(path)?;
         if path != "." && (path.contains('*') || path.contains('?')) {
@@ -294,11 +295,12 @@ pub(crate) fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Ve
             return Err(format!("scope path is denied: {}", path));
         }
         if path == "." {
-            return Ok(full_scope());
+            has_full_scope = true;
+            continue;
         }
         normalized.push(path);
     }
-    if normalized.is_empty() {
+    if has_full_scope || normalized.is_empty() {
         Ok(full_scope())
     } else {
         Ok(canonicalize_scope_paths(normalized))

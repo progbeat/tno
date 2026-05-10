@@ -68,7 +68,32 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), St
     let usage = runner.token_usage().unwrap_or_default();
     diagnostic_log.write_event("info", "token.usage", &[("usage", json!(usage))])?;
     print_token_usage_summary(Some(usage));
-    let report = records_result?;
+    let report = match records_result {
+        Ok(report) => report,
+        Err(err) => {
+            let report = CheckRunReport {
+                records: Vec::new(),
+                skipped: 0,
+                narrowing: NarrowingStats::default(),
+            };
+            diagnostic_log.write_event(
+                "info",
+                "check.finish",
+                &[
+                    ("passed", json!(0)),
+                    ("failed", json!(0)),
+                    ("errors", json!(0)),
+                    ("skipped", json!(0)),
+                    ("narrowingAttempted", json!(0)),
+                    ("narrowingAccepted", json!(0)),
+                    ("narrowingRejected", json!(0)),
+                    ("error", json!(err)),
+                ],
+            )?;
+            write_summary_line(&mut result_output, &report, started.elapsed())?;
+            return Err(CHECK_FAILED_EXIT.to_string());
+        }
+    };
     diagnostic_log.write_event(
         "info",
         "check.finish",
@@ -96,6 +121,9 @@ pub(crate) fn run_check_query_command(
     question: &str,
     repo_cache: &mut RepoInspectionCache,
 ) -> Result<(), String> {
+    // `canon check -q` is an ad-hoc interrogation mode. It loads the active
+    // evaluator config, but it does not select or run expectations and is not a
+    // per-expectation check run governed by the normal check-output summary.
     install_sigint_handler();
     CHECK_INTERRUPTED.store(false, Ordering::SeqCst);
     fail_on_mixed_canon_changes(root)?;
@@ -222,6 +250,13 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Str
     let mut missing = Vec::new();
     let mut failing = Vec::new();
     for expectation in &selected {
+        if let Some(record) =
+            cooldown_history_record(root, expectation, &mut history_cache, unix_timestamp()?)?
+        {
+            if record.passed() {
+                continue;
+            }
+        }
         match reusable_history_record_for_source(
             root,
             &config.agent,
@@ -241,19 +276,7 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Str
                         &mut scope_hash_cache,
                     )? => {}
             Some(record) => failing.push(record),
-            None => {
-                if let Some(record) = cooldown_history_record(
-                    root,
-                    expectation,
-                    &mut history_cache,
-                    unix_timestamp()?,
-                )? {
-                    if record.passed() {
-                        continue;
-                    }
-                }
-                missing.push(expectation.number)
-            }
+            None => missing.push(expectation.number),
         }
     }
 
@@ -267,6 +290,8 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Str
         );
         if failing.is_empty() {
             eprintln!("canon gate: run `canon check` before committing");
+        } else {
+            eprintln!("canon gate: fix cached failures before checking missing cached answers");
         }
     }
     if !failing.is_empty() {
@@ -389,6 +414,37 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
             return Err("interrupted".to_string());
         }
         if !options.ignore_cache {
+            if let Some(record) =
+                cooldown_history_record(root, expectation, &mut history_cache, unix_timestamp()?)?
+            {
+                let should_stop = options.fail_fast && !record.passed();
+                if let Some(writer) = diagnostic_log.as_deref_mut() {
+                    writer.write_event(
+                        "info",
+                        "cache.cooldown_hit",
+                        &[
+                            ("number", json!(record.number)),
+                            ("scope", json!(record.scope)),
+                            ("scopeHash", json!(record.scope_hash)),
+                        ],
+                    )?;
+                    writer.write_record(&record)?;
+                }
+                if record.passed() {
+                    skipped += 1;
+                } else {
+                    write_and_flush_result_output(&mut result_output, &record)?;
+                }
+                records.push(record);
+                if should_stop {
+                    return Ok(CheckRunReport {
+                        records,
+                        skipped,
+                        narrowing,
+                    });
+                }
+                continue;
+            }
             if let Some(record) = reusable_history_record_for_source(
                 root,
                 &config.agent,
@@ -426,82 +482,86 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 }
                 continue;
             }
-            if let Some(record) =
-                cooldown_history_record(root, expectation, &mut history_cache, unix_timestamp()?)?
-            {
-                let should_stop = options.fail_fast && !record.passed();
-                if let Some(writer) = diagnostic_log.as_deref_mut() {
-                    writer.write_event(
-                        "info",
-                        "cache.cooldown_hit",
-                        &[
-                            ("number", json!(record.number)),
-                            ("scope", json!(record.scope)),
-                            ("scopeHash", json!(record.scope_hash)),
-                        ],
-                    )?;
-                    writer.write_record(&record)?;
-                }
-                if record.passed() {
-                    skipped += 1;
-                } else {
-                    write_and_flush_result_output(&mut result_output, &record)?;
-                }
-                records.push(record);
-                if should_stop {
-                    return Ok(CheckRunReport {
-                        records,
-                        skipped,
-                        narrowing,
-                    });
-                }
-                continue;
-            }
         }
 
         let scope =
             latest_history_scope_with_cache(root, &config.agent, expectation, &mut history_cache)?
                 .unwrap_or_else(full_scope);
         let mut enforced_scope = scope.clone();
-        let mut interrogation = interrogate_expectation(
+        let mut interrogation = match interrogate_expectation(
             &runtime,
             expectation,
             runner,
             &mut diagnostic_log,
             &mut interrogation_state,
             &enforced_scope,
-        )?;
+        ) {
+            Ok(interrogation) => interrogation,
+            Err(err) => InterrogationResult {
+                record: error_record_from_interrogation_error(
+                    root,
+                    &config.agent,
+                    expectation,
+                    &enforced_scope,
+                    &err,
+                    &mut scope_hash_cache,
+                )?,
+            },
+        };
         if should_retry_full_scope(&interrogation.record, &enforced_scope) {
             // Widening after a restricted idk is not narrowing verification:
             // it is a separate full-scope interrogation whose record replaces
             // the restricted non-answer.
             enforced_scope = full_scope();
-            interrogation = interrogate_expectation(
+            interrogation = match interrogate_expectation(
                 &runtime,
                 expectation,
                 runner,
                 &mut diagnostic_log,
                 &mut interrogation_state,
                 &enforced_scope,
-            )?;
+            ) {
+                Ok(interrogation) => interrogation,
+                Err(err) => InterrogationResult {
+                    record: error_record_from_interrogation_error(
+                        root,
+                        &config.agent,
+                        expectation,
+                        &enforced_scope,
+                        &err,
+                        &mut scope_hash_cache,
+                    )?,
+                },
+            };
         }
 
         let record_scope = interrogation.record.scope.clone();
-        let mut write_history = true;
         if is_strict_scope_subset(&record_scope, &enforced_scope) {
             narrowing.attempted += 1;
             // A narrower scope from one evaluator response becomes reusable
             // only if an independent interrogation with that same canonical
             // scope preserves the answer.
             let initial_record = interrogation.record.clone();
-            let narrowed = interrogate_expectation(
+            let narrowed = match interrogate_expectation(
                 &runtime,
                 expectation,
                 runner,
                 &mut diagnostic_log,
                 &mut interrogation_state,
                 &record_scope,
-            )?;
+            ) {
+                Ok(interrogation) => interrogation,
+                Err(err) => InterrogationResult {
+                    record: error_record_from_interrogation_error(
+                        root,
+                        &config.agent,
+                        expectation,
+                        &record_scope,
+                        &err,
+                        &mut scope_hash_cache,
+                    )?,
+                },
+            };
             if narrowed.record.observed == interrogation.record.observed {
                 narrowing.accepted += 1;
                 if let Some(writer) = diagnostic_log.as_deref_mut() {
@@ -539,11 +599,10 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                     scope_hash_cache.staged_scope_hash(root, &config.agent, &enforced_scope)?;
                 interrogation.record.scope = enforced_scope.clone();
                 interrogation.record.scope_hash = enforced_scope_hash;
-                write_history = false;
             }
         }
 
-        if write_history && is_verified_record(&interrogation.record) {
+        if is_verified_record(&interrogation.record) {
             append_history_record_with_cache(
                 root,
                 expectation,
@@ -592,6 +651,28 @@ pub(crate) fn scope_narrowing_log_fields(
     ]
 }
 
+pub(crate) fn error_record_from_interrogation_error(
+    root: &Path,
+    agent: &AgentConfig,
+    expectation: &SelectedExpectation,
+    scope: &[String],
+    error: &str,
+    scope_hash_cache: &mut ScopeHashCache,
+) -> Result<CheckRecord, String> {
+    let scope_hash = scope_hash_cache.staged_scope_hash(root, agent, scope)?;
+    Ok(CheckRecord {
+        timestamp: format_log_record_timestamp(unix_timestamp()?),
+        number: expectation.number,
+        result: RESULT_FAIL.to_string(),
+        prompt: expectation.q.clone(),
+        expected: expectation.a.clone(),
+        observed: UNPARSEABLE_OBSERVED.to_string(),
+        evidence: error.to_string(),
+        scope: scope.to_vec(),
+        scope_hash,
+    })
+}
+
 pub(crate) fn report_passed_count(report: &CheckRunReport) -> usize {
     report
         .records
@@ -619,6 +700,13 @@ pub(crate) fn report_error_count(report: &CheckRunReport) -> usize {
 
 pub(crate) fn should_retry_full_scope(record: &CheckRecord, scope: &[String]) -> bool {
     scope != full_scope() && (record.observed == OBSERVED_IDK || is_scope_widening_record(record))
+}
+
+pub(crate) fn evaluator_session_key(model: Option<&str>, scope: &[String]) -> String {
+    let mut key = app_server_model_key(model);
+    key.push('\0');
+    key.push_str(&scope.join("\n"));
+    key
 }
 
 pub(crate) fn is_scope_widening_record(record: &CheckRecord) -> bool {
@@ -718,10 +806,10 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
 ) -> Result<InterrogationResult, String> {
     let config = runtime.config;
     let enforced_scope = sanitize_scope(enforced_scope, &config.agent)?;
-    // Threads are reused only for the same canonical enforced scope. When
-    // checking a narrower scope returned by an evaluator response, that
-    // canonical record scope is passed back here unchanged as enforced_scope.
-    let session_key = enforced_scope.join("\n");
+    // Threads are reused only for the same canonical enforced scope within the
+    // same app-server runner. The runner key prevents a fallback model from
+    // trying to use a session owned by a different app-server process.
+    let session_key = evaluator_session_key(model, &enforced_scope);
     let existing_session = state.sessions.get(&session_key).cloned();
     let had_existing_session = existing_session.is_some();
     let mut session_id = match existing_session {
@@ -772,13 +860,17 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         }
     };
     let prompt = question_prompt(&expectation.q, &enforced_scope)?;
+    let thinking = effective_thinking(&config.agent, expectation);
+    let turn = EvaluatorTurnContext {
+        session_id: &session_id,
+        model,
+        thinking,
+    };
     let response = match ask_with_repairs(
         runner,
-        &session_id,
+        &turn,
         &prompt,
         &config.agent,
-        model,
-        effective_thinking(&config.agent, expectation),
         &mut state.parse_cache,
         diagnostic_log,
         expectation.number,
@@ -822,13 +914,16 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
                 effective_thinking(&config.agent, expectation),
                 &enforced_scope,
             )?;
+            let turn = EvaluatorTurnContext {
+                session_id: &session_id,
+                model,
+                thinking,
+            };
             match ask_with_repairs(
                 runner,
-                &session_id,
+                &turn,
                 &prompt,
                 &config.agent,
-                model,
-                effective_thinking(&config.agent, expectation),
                 &mut state.parse_cache,
                 diagnostic_log,
                 expectation.number,
@@ -854,9 +949,6 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     if response.answer == UNPARSEABLE_OBSERVED {
         response.scope = enforced_scope.to_vec();
     } else {
-        if question_requires_full_scope(&expectation.q) {
-            response.scope = full_scope();
-        }
         if !scope_is_within(&response.scope, &enforced_scope) {
             response = ParsedAnswer {
                 answer: UNPARSEABLE_OBSERVED.to_string(),
@@ -981,7 +1073,7 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
 ) -> Result<QueryInterrogationResult, String> {
     let config = runtime.config;
     let enforced_scope = full_scope();
-    let session_key = enforced_scope.join("\n");
+    let session_key = evaluator_session_key(model, &enforced_scope);
     let existing_session = state.sessions.get(&session_key).cloned();
     let had_existing_session = existing_session.is_some();
     let mut session_id = match existing_session {
@@ -1026,13 +1118,16 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
         }
     };
     let prompt = question_prompt(question, &enforced_scope)?;
+    let turn = EvaluatorTurnContext {
+        session_id: &session_id,
+        model,
+        thinking: &config.agent.thinking,
+    };
     let response = match ask_with_repairs(
         runner,
-        &session_id,
+        &turn,
         &prompt,
         &config.agent,
-        model,
-        &config.agent.thinking,
         &mut state.parse_cache,
         diagnostic_log,
         0,
@@ -1073,13 +1168,16 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
                 &config.agent.thinking,
                 &enforced_scope,
             )?;
+            let turn = EvaluatorTurnContext {
+                session_id: &session_id,
+                model,
+                thinking: &config.agent.thinking,
+            };
             match ask_with_repairs(
                 runner,
-                &session_id,
+                &turn,
                 &prompt,
                 &config.agent,
-                model,
-                &config.agent.thinking,
                 &mut state.parse_cache,
                 diagnostic_log,
                 0,
@@ -1105,9 +1203,6 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
     if response.answer == UNPARSEABLE_OBSERVED {
         response.scope = enforced_scope.to_vec();
     } else {
-        if question_requires_full_scope(question) {
-            response.scope = full_scope();
-        }
         if !scope_is_within(&response.scope, &enforced_scope) {
             response = ParsedAnswer {
                 answer: UNPARSEABLE_OBSERVED.to_string(),
@@ -1202,7 +1297,7 @@ pub(crate) fn record_from_response(
     enforced_scope: Vec<String>,
     scope_hash: String,
 ) -> Result<CheckRecord, String> {
-    let result = if response.answer == expectation.a && response.answer != OBSERVED_MALFORMED {
+    let result = if response.answer == expectation.a {
         RESULT_PASS
     } else {
         RESULT_FAIL
@@ -1224,44 +1319,47 @@ pub(crate) fn is_verified_record(record: &CheckRecord) -> bool {
     is_reusable_history_record(record)
 }
 
+pub(crate) struct EvaluatorTurnContext<'a> {
+    pub(crate) session_id: &'a str,
+    pub(crate) model: Option<&'a str>,
+    pub(crate) thinking: &'a str,
+}
+
 pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
     runner: &mut R,
-    session_id: &str,
+    turn: &EvaluatorTurnContext<'_>,
     prompt: &str,
     agent: &AgentConfig,
-    model: Option<&str>,
-    thinking: &str,
     parser_cache: &mut EvaluatorResponseParseCache,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_number: usize,
 ) -> Result<ParsedAnswer, String> {
     let first = ask_and_log(
         runner,
-        session_id,
+        turn,
         prompt,
-        model,
-        thinking,
         diagnostic_log,
         expectation_number,
         1,
         "initial",
     )?;
+    let mut next_attempt = 2;
+    let mut format_retried = false;
     let mut parsed = match parser_cache.parse(&first, agent) {
         Ok(answer) => answer,
-        Err(err) => {
+        Err(_err) => {
             let first_excerpt = response_excerpt(&first);
-            let repair_prompt = parse_repair_prompt(prompt, &err);
+            format_retried = true;
             let repaired = ask_and_log(
                 runner,
-                session_id,
-                &repair_prompt,
-                model,
-                thinking,
+                turn,
+                prompt,
                 diagnostic_log,
                 expectation_number,
-                2,
+                next_attempt,
                 "parse-retry",
             )?;
+            next_attempt += 1;
             match parser_cache.parse(&repaired, agent) {
                 Ok(answer) => answer,
                 Err(err) => ParsedAnswer {
@@ -1278,35 +1376,17 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
         }
     };
 
-    if parsed.answer == OBSERVED_MALFORMED {
+    if parsed.answer == OBSERVED_MALFORMED && !format_retried {
         let repaired = ask_and_log(
             runner,
-            session_id,
+            turn,
             prompt,
-            model,
-            thinking,
             diagnostic_log,
             expectation_number,
-            2,
+            next_attempt,
             "malformed-retry",
         )?;
-        if let Ok(answer) = parser_cache.parse(&repaired, agent) {
-            parsed = answer;
-        }
-    }
-
-    if parsed.answer == OBSERVED_IDK && should_repair_absence_idk(prompt) {
-        let repaired = ask_and_log(
-            runner,
-            session_id,
-            prompt,
-            model,
-            thinking,
-            diagnostic_log,
-            expectation_number,
-            2,
-            "idk-retry",
-        )?;
+        next_attempt += 1;
         if let Ok(answer) = parser_cache.parse(&repaired, agent) {
             parsed = answer;
         }
@@ -1315,13 +1395,11 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
     if parsed.evidence.trim().is_empty() {
         let repaired = ask_and_log(
             runner,
-            session_id,
+            turn,
             prompt,
-            model,
-            thinking,
             diagnostic_log,
             expectation_number,
-            2,
+            next_attempt,
             "evidence-retry",
         )?;
         if let Ok(answer) = parser_cache.parse(&repaired, agent) {
@@ -1332,22 +1410,10 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
     Ok(parsed)
 }
 
-pub(crate) fn parse_repair_prompt(prompt: &str, error: &str) -> String {
-    format!(
-        "Your previous response was invalid: {error}\n\
-Return exactly one valid JSON object and nothing else.\n\
-Required schema: {{\"answer\":\"<single-line answer>\",\"evidence\":\"<evidence string>\",\"scope\":[\"<path>\"]}}\n\
-Escape all newlines, quotes, and backslashes inside JSON string values.\n\
-Original question:\n{prompt}"
-    )
-}
-
 pub(crate) fn ask_and_log<R: EvaluatorRunner>(
     runner: &mut R,
-    session_id: &str,
+    turn: &EvaluatorTurnContext<'_>,
     prompt: &str,
-    model: Option<&str>,
-    thinking: &str,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_number: usize,
     attempt: usize,
@@ -1365,7 +1431,7 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
             ],
         )?;
     }
-    let response = runner.ask(session_id, prompt, model, thinking)?;
+    let response = runner.ask(turn.session_id, prompt, turn.model, turn.thinking)?;
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_event(
             "info",
@@ -1423,31 +1489,6 @@ pub(crate) fn question_prompt(question: &str, _scope: &[String]) -> Result<Strin
     Ok(question.to_string())
 }
 
-pub(crate) fn question_requires_full_scope(question: &str) -> bool {
-    let lower = question.to_ascii_lowercase();
-    [
-        "project-wide",
-        "whole project",
-        "overall quality",
-        "architectural debt",
-        "maintainability",
-        "consistency",
-        "consistent",
-        "duplication",
-        "duplicated",
-        "garbage",
-        "obsolete",
-        "unused",
-        "stray",
-        "dead-end",
-        "redundant",
-        "dirty hacks",
-        "idiomatic",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
 pub(crate) fn developer_instructions(agent: &AgentConfig, scope: &[String]) -> String {
     format!(
         "{}\n\nEnforced scope: {}\n\nAnswer-selection policy:\n{}\n\nWhen the answer-selection policy says to answer exactly `yes`, `no`, `idk`, `malformed`, or an option letter, put that exact string in the JSON `answer` field. Never output the raw answer as the whole response.",
@@ -1455,13 +1496,6 @@ pub(crate) fn developer_instructions(agent: &AgentConfig, scope: &[String]) -> S
         compact_json_string_array(scope),
         agent.instructions.trim(),
     )
-}
-
-pub(crate) fn should_repair_absence_idk(prompt: &str) -> bool {
-    let question = prompt.trim();
-    question.starts_with("Are there any ")
-        || question.starts_with("Is there any ")
-        || question.starts_with("Can any ")
 }
 
 pub(crate) fn response_format_block() -> &'static str {
@@ -1705,7 +1739,7 @@ pub(crate) fn parse_scope_strings(
             return Err(format!("scope entry must be normalized: {}", raw));
         }
         if normalized != "." && is_denied_path(agent, &normalized) {
-            continue;
+            return Err(format!("scope entry is denied: {}", raw));
         }
         parsed.push(normalized);
     }
@@ -1746,6 +1780,9 @@ pub(crate) fn write_query_output(
     result_output: &mut dyn Write,
     answer: &ParsedAnswer,
 ) -> Result<(), String> {
+    // Query output is intentionally separate from the selected-expectation
+    // check output contract because query mode has no expectation number,
+    // expected answer, reusable history write, or final check summary.
     let output = render_query_output(answer);
     result_output
         .write_all(output.as_bytes())
@@ -1840,7 +1877,7 @@ pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -
 pub(crate) fn pad_summary_line(inner: &str) -> String {
     const WIDTH: usize = 80;
     if inner.len() >= WIDTH {
-        return format!("={}=", inner.trim());
+        return format!("={inner}=");
     }
     let padding = WIDTH - inner.len();
     let left = padding / 2;

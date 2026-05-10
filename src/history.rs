@@ -233,12 +233,12 @@ pub(crate) fn cooldown_history_record(
         if !is_reusable_history_record(&record) {
             continue;
         }
+        let Some(timestamp) = parse_log_record_timestamp(&record.timestamp) else {
+            continue;
+        };
         if !record.passed() {
             return Ok(None);
         }
-        let Some(timestamp) = parse_log_record_timestamp(&record.timestamp) else {
-            return Ok(None);
-        };
         if now.saturating_sub(timestamp) >= cooldown.seconds {
             return Ok(None);
         }
@@ -427,35 +427,4 @@ pub(crate) fn compact_history_temp_path(path: &Path) -> Result<PathBuf, String> 
     let mut temp_name = file_name.to_os_string();
     temp_name.push(".tmp");
     Ok(path.with_file_name(temp_name))
-}
-
-pub(crate) fn rotate_diagnostic_logs_if_needed(log_dir: &Path) -> Result<(), String> {
-    let active = log_dir.join(DIAGNOSTIC_LOG_FILES[0]);
-    let should_rotate = active
-        .metadata()
-        .map(|metadata| metadata.len() > DIAGNOSTIC_LOG_MAX_BYTES)
-        .unwrap_or(false);
-    if !should_rotate {
-        return Ok(());
-    }
-    let oldest = log_dir.join(DIAGNOSTIC_LOG_FILES[3]);
-    if oldest.exists() {
-        fs::remove_file(&oldest)
-            .map_err(|err| format!("failed to remove {}: {}", oldest.display(), err))?;
-    }
-    for index in (0..3).rev() {
-        let from = log_dir.join(DIAGNOSTIC_LOG_FILES[index]);
-        if from.exists() {
-            let to = log_dir.join(DIAGNOSTIC_LOG_FILES[index + 1]);
-            fs::rename(&from, &to).map_err(|err| {
-                format!(
-                    "failed to rename {} to {}: {}",
-                    from.display(),
-                    to.display(),
-                    err
-                )
-            })?;
-        }
-    }
-    Ok(())
 }
