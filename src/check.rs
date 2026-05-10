@@ -66,7 +66,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), St
         .map_err(|err| format!("failed to flush check result to stdout: {}", err))?;
     runner.drain_token_usage_updates();
     let usage = runner.token_usage().unwrap_or_default();
-    diagnostic_log.write_event("info", "token.usage", &[("usage", json!(usage))])?;
+    diagnostic_log.write_event("info", "token.usage", &token_usage_log_fields(usage))?;
     print_token_usage_summary(Some(usage));
     let report = match records_result {
         Ok(report) => report,
@@ -153,7 +153,7 @@ pub(crate) fn run_check_query_command(
     );
     runner.drain_token_usage_updates();
     let usage = runner.token_usage().unwrap_or_default();
-    diagnostic_log.write_event("info", "token.usage", &[("usage", json!(usage))])?;
+    diagnostic_log.write_event("info", "token.usage", &token_usage_log_fields(usage))?;
     let result = match result {
         Ok(result) => result,
         Err(err) => {
@@ -343,6 +343,9 @@ pub(crate) fn has_reusable_head_failure(
 }
 
 pub(crate) fn fail_on_mixed_canon_changes(root: &Path) -> Result<(), String> {
+    // Policy-edit isolation happens before cache lookup or gate evaluation.
+    // Cache behavior only applies after this staged-path preflight accepts the
+    // change set.
     fail_on_mixed_canon_paths(&staged_changed_paths(root)?)
 }
 
@@ -536,7 +539,9 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         }
 
         let record_scope = interrogation.record.scope.clone();
-        if is_strict_scope_subset(&record_scope, &enforced_scope) {
+        if !record_requires_human_review(&interrogation.record)
+            && is_strict_scope_subset(&record_scope, &enforced_scope)
+        {
             narrowing.attempted += 1;
             // A narrower scope from one evaluator response becomes reusable
             // only if an independent interrogation with that same canonical
@@ -806,9 +811,9 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
 ) -> Result<InterrogationResult, String> {
     let config = runtime.config;
     let enforced_scope = sanitize_scope(enforced_scope, &config.agent)?;
-    // Threads are reused only for the same canonical enforced scope within the
-    // same app-server runner. The runner key prevents a fallback model from
-    // trying to use a session owned by a different app-server process.
+    // Threads are reused only for the same canonical enforced scope within one
+    // model-specific app-server runner. Fallback models live in separate
+    // app-server processes, so their session IDs cannot be shared.
     let session_key = evaluator_session_key(model, &enforced_scope);
     let existing_session = state.sessions.get(&session_key).cloned();
     let had_existing_session = existing_session.is_some();
@@ -819,6 +824,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
                     "info",
                     "thread.reuse",
                     &[
+                        ("threadId", json!(existing.clone())),
                         ("scope", json!(enforced_scope)),
                         ("model", json!(model_label(model))),
                         (
@@ -831,32 +837,32 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
             existing
         }
         None => {
+            let developer_instructions = developer_instructions(&config.agent, &enforced_scope);
+            let created = runner.start_session(
+                runtime.snapshot_root,
+                &developer_instructions,
+                &config.agent,
+                model,
+                effective_thinking(&config.agent, expectation),
+                &enforced_scope,
+            )?;
             if let Some(writer) = diagnostic_log.as_deref_mut() {
                 writer.write_event(
                     "info",
                     "thread.start",
                     &[
+                        ("threadId", json!(created.clone())),
                         ("scope", json!(enforced_scope)),
                         ("model", json!(model_label(model))),
                         (
                             "thinking",
                             json!(effective_thinking(&config.agent, expectation)),
                         ),
-                        (
-                            "developerInstructions",
-                            json!(developer_instructions(&config.agent, &enforced_scope)),
-                        ),
+                        ("developerInstructions", json!(developer_instructions)),
                     ],
                 )?;
             }
-            runner.start_session(
-                runtime.snapshot_root,
-                &developer_instructions(&config.agent, &enforced_scope),
-                &config.agent,
-                model,
-                effective_thinking(&config.agent, expectation),
-                &enforced_scope,
-            )?
+            created
         }
     };
     let prompt = question_prompt(&expectation.q, &enforced_scope)?;
@@ -883,37 +889,39 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
                     "warn",
                     "thread.restart",
                     &[
+                        ("threadId", json!(session_id.clone())),
                         ("number", json!(expectation.number)),
                         ("scope", json!(enforced_scope)),
                         ("model", json!(model_label(model))),
                         ("reason", json!(err)),
                     ],
                 )?;
+            }
+            let developer_instructions = developer_instructions(&config.agent, &enforced_scope);
+            session_id = runner.start_session(
+                runtime.snapshot_root,
+                &developer_instructions,
+                &config.agent,
+                model,
+                effective_thinking(&config.agent, expectation),
+                &enforced_scope,
+            )?;
+            if let Some(writer) = diagnostic_log.as_deref_mut() {
                 writer.write_event(
                     "info",
                     "thread.start",
                     &[
+                        ("threadId", json!(session_id.clone())),
                         ("scope", json!(enforced_scope)),
                         ("model", json!(model_label(model))),
                         (
                             "thinking",
                             json!(effective_thinking(&config.agent, expectation)),
                         ),
-                        (
-                            "developerInstructions",
-                            json!(developer_instructions(&config.agent, &enforced_scope)),
-                        ),
+                        ("developerInstructions", json!(developer_instructions)),
                     ],
                 )?;
             }
-            session_id = runner.start_session(
-                runtime.snapshot_root,
-                &developer_instructions(&config.agent, &enforced_scope),
-                &config.agent,
-                model,
-                effective_thinking(&config.agent, expectation),
-                &enforced_scope,
-            )?;
             let turn = EvaluatorTurnContext {
                 session_id: &session_id,
                 model,
@@ -1083,6 +1091,7 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
                     "info",
                     "thread.reuse",
                     &[
+                        ("threadId", json!(existing.clone())),
                         ("scope", json!(enforced_scope)),
                         ("model", json!(model_label(model))),
                         ("thinking", json!(config.agent.thinking.clone())),
@@ -1092,29 +1101,29 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
             existing
         }
         None => {
+            let developer_instructions = developer_instructions(&config.agent, &enforced_scope);
+            let created = runner.start_session(
+                runtime.snapshot_root,
+                &developer_instructions,
+                &config.agent,
+                model,
+                &config.agent.thinking,
+                &enforced_scope,
+            )?;
             if let Some(writer) = diagnostic_log.as_deref_mut() {
                 writer.write_event(
                     "info",
                     "thread.start",
                     &[
+                        ("threadId", json!(created.clone())),
                         ("scope", json!(enforced_scope)),
                         ("model", json!(model_label(model))),
                         ("thinking", json!(config.agent.thinking.clone())),
-                        (
-                            "developerInstructions",
-                            json!(developer_instructions(&config.agent, &enforced_scope)),
-                        ),
+                        ("developerInstructions", json!(developer_instructions)),
                     ],
                 )?;
             }
-            runner.start_session(
-                runtime.snapshot_root,
-                &developer_instructions(&config.agent, &enforced_scope),
-                &config.agent,
-                model,
-                &config.agent.thinking,
-                &enforced_scope,
-            )?
+            created
         }
     };
     let prompt = question_prompt(question, &enforced_scope)?;
@@ -1140,34 +1149,36 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
                     "warn",
                     "thread.restart",
                     &[
+                        ("threadId", json!(session_id.clone())),
                         ("number", json!(0)),
                         ("scope", json!(enforced_scope)),
                         ("model", json!(model_label(model))),
                         ("reason", json!(err)),
                     ],
                 )?;
-                writer.write_event(
-                    "info",
-                    "thread.start",
-                    &[
-                        ("scope", json!(enforced_scope)),
-                        ("model", json!(model_label(model))),
-                        ("thinking", json!(config.agent.thinking.clone())),
-                        (
-                            "developerInstructions",
-                            json!(developer_instructions(&config.agent, &enforced_scope)),
-                        ),
-                    ],
-                )?;
             }
+            let developer_instructions = developer_instructions(&config.agent, &enforced_scope);
             session_id = runner.start_session(
                 runtime.snapshot_root,
-                &developer_instructions(&config.agent, &enforced_scope),
+                &developer_instructions,
                 &config.agent,
                 model,
                 &config.agent.thinking,
                 &enforced_scope,
             )?;
+            if let Some(writer) = diagnostic_log.as_deref_mut() {
+                writer.write_event(
+                    "info",
+                    "thread.start",
+                    &[
+                        ("threadId", json!(session_id.clone())),
+                        ("scope", json!(enforced_scope)),
+                        ("model", json!(model_label(model))),
+                        ("thinking", json!(config.agent.thinking.clone())),
+                        ("developerInstructions", json!(developer_instructions)),
+                    ],
+                )?;
+            }
             let turn = EvaluatorTurnContext {
                 session_id: &session_id,
                 model,
@@ -1275,6 +1286,16 @@ pub(crate) fn effective_thinking<'a>(
 
 pub(crate) fn model_label(model: Option<&str>) -> &str {
     model.unwrap_or("<default>")
+}
+
+pub(crate) fn token_usage_log_fields(usage: TokenUsage) -> Vec<(&'static str, Value)> {
+    vec![
+        ("total", json!(usage.total_tokens)),
+        ("input", json!(usage.input_tokens)),
+        ("cached_input", json!(usage.cached_input_tokens)),
+        ("output", json!(usage.output_tokens)),
+        ("reasoning_output", json!(usage.reasoning_output_tokens)),
+    ]
 }
 
 pub(crate) fn is_model_technical_failure(err: &str) -> bool {

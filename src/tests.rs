@@ -1,9 +1,11 @@
 use crate::*;
 use serde_json::json;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
+static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 struct TestDir {
     path: PathBuf,
@@ -11,8 +13,7 @@ struct TestDir {
 
 impl TestDir {
     fn new(name: &str) -> TestDir {
-        let mut path = PathBuf::from("/tmp");
-        path.push(format!("canon-test-{}-{}", name, process::id()));
+        let path = test_path(name);
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create test directory");
         TestDir { path }
@@ -30,11 +31,18 @@ impl Drop for TestDir {
 }
 
 fn temp_home(name: &str) -> PathBuf {
-    let mut path = PathBuf::from("/tmp");
-    path.push(format!("canon-test-{}-{}", name, process::id()));
+    let path = test_path(name);
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).expect("create test directory");
     path
+}
+
+fn test_path(name: &str) -> PathBuf {
+    let unique = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("test-tmp")
+        .join(format!("canon-test-{}-{}-{}", name, process::id(), unique))
 }
 
 struct EnvSnapshot {
@@ -247,6 +255,21 @@ fn git_project(name: &str) -> PathBuf {
         .current_dir(&root)
         .output()
         .unwrap();
+    for args in [
+        ["config", "core.autocrlf", "false"],
+        ["config", "core.eol", "lf"],
+    ] {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git config failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     fs::write(root.join("README.md"), "hello").unwrap();
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
@@ -459,14 +482,20 @@ fn default_root_uses_tmpdir() {
 }
 
 #[test]
-fn default_root_uses_slash_tmp_without_tmpdir() {
+fn default_root_uses_system_temp_without_tmpdir() {
     let _guard = ENV_LOCK.lock().expect("lock test environment");
     let env_snapshot = EnvSnapshot::capture(&["CANON_HOME", "TMPDIR", "CODEX_THREAD_ID"]);
     env_snapshot.remove("CANON_HOME");
     env_snapshot.remove("TMPDIR");
     env_snapshot.set("CODEX_THREAD_ID", "thread-test");
     let config = Config::from_env().unwrap();
-    assert_eq!(config.root, PathBuf::from("/tmp/canon/codex/thread-test"));
+    assert_eq!(
+        config.root,
+        env::temp_dir()
+            .join("canon")
+            .join("codex")
+            .join("thread-test")
+    );
 }
 
 #[test]
@@ -1302,6 +1331,25 @@ fn check_runner_marks_unparseable_after_response_repair_fails() {
     assert!(!records[0].passed());
     assert_eq!(records[0].observed, UNPARSEABLE_OBSERVED);
     assert!(records[0].evidence.contains("first response: <empty>"));
+    assert!(read_history_records(&root, &options.selected[0])
+        .unwrap()
+        .is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_does_not_verify_narrowed_scope_for_non_answers() {
+    let root = git_project("check-narrow-idk");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let mut runner = FakeRunner::new(&[&answer("idk", "src/main.rs is insufficient", &["src"])]);
+
+    let report =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(report.records[0].observed, OBSERVED_IDK);
+    assert_eq!(report.narrowing.attempted, 0);
+    assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
     assert!(read_history_records(&root, &options.selected[0])
         .unwrap()
         .is_empty());
