@@ -33,7 +33,11 @@ if ! "$canon_bin" help 2>/dev/null | grep -q "canon gate"; then
 fi
 
 echo "canon pre-commit: running canon gate"
+# `canon gate` is intentionally cache-only: missing cached answers and cached
+# failing answers make the hook exit here without invoking `canon check`.
+# Do not add a separate `.canon/**` preflight here; `canon gate` owns the
+# `.canon/**`-only unchanged-visible-content exception.
 if ! "$canon_bin" gate; then
-  echo "canon pre-commit: canon gate failed; run canon check before committing or fix cached failures." >&2
+  echo "canon pre-commit: canon gate failed." >&2
   exit 1
 fi

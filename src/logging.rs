@@ -90,6 +90,28 @@ impl DiagnosticLogWriter {
     }
 }
 
+pub(crate) fn append_runtime_log_event(
+    root: &Path,
+    level: &str,
+    event: &str,
+    fields: &[(&str, Value)],
+) -> Result<(), String> {
+    let log_dir = resolve_git_path(root, GIT_CANON_LOG_DIR)?;
+    ensure_dir(&log_dir)?;
+    rotate_diagnostic_logs_if_needed(&log_dir)?;
+    let path = log_dir.join(DIAGNOSTIC_LOG_FILES[0]);
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
+    let line = render_runtime_log_event(level, event, fields)?;
+    file.write_all(line.as_bytes())
+        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+    file.flush()
+        .map_err(|err| format!("failed to flush {}: {}", path.display(), err))
+}
+
 pub(crate) fn rotate_diagnostic_logs_if_needed(log_dir: &Path) -> Result<(), String> {
     let active = log_dir.join(DIAGNOSTIC_LOG_FILES[0]);
     let should_rotate = active
@@ -99,12 +121,12 @@ pub(crate) fn rotate_diagnostic_logs_if_needed(log_dir: &Path) -> Result<(), Str
     if !should_rotate {
         return Ok(());
     }
-    let oldest = log_dir.join(DIAGNOSTIC_LOG_FILES[3]);
+    let oldest = log_dir.join(DIAGNOSTIC_LOG_FILES[DIAGNOSTIC_LOG_FILES.len() - 1]);
     if oldest.exists() {
         fs::remove_file(&oldest)
             .map_err(|err| format!("failed to remove {}: {}", oldest.display(), err))?;
     }
-    for index in (0..3).rev() {
+    for index in (0..DIAGNOSTIC_LOG_FILES.len() - 1).rev() {
         let from = log_dir.join(DIAGNOSTIC_LOG_FILES[index]);
         if from.exists() {
             let to = log_dir.join(DIAGNOSTIC_LOG_FILES[index + 1]);
@@ -156,13 +178,16 @@ pub(crate) fn render_check_log_record(record: &CheckRecord) -> String {
     let mut first = true;
     append_json_string_field(&mut output, &mut first, "timestamp", &record.timestamp);
     append_json_usize_field(&mut output, &mut first, "number", record.number);
-    append_json_string_field(&mut output, &mut first, "result", &record.result);
+    append_json_string_field(&mut output, &mut first, "result", record.result.as_str());
     append_json_string_field(&mut output, &mut first, "prompt", &record.prompt);
     append_json_string_field(&mut output, &mut first, "expected", &record.expected);
     append_json_string_field(&mut output, &mut first, "observed", &record.observed);
     append_json_string_field(&mut output, &mut first, "evidence", &record.evidence);
     append_json_string_array_field(&mut output, &mut first, "scope", &record.scope);
     append_json_string_field(&mut output, &mut first, "scopeHash", &record.scope_hash);
+    if let Some(cache_key) = &record.cache_key {
+        append_json_string_field(&mut output, &mut first, "cacheKey", cache_key);
+    }
     output.push_str("}\n");
     output
 }

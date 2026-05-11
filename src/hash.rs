@@ -8,6 +8,15 @@ pub(crate) fn expectation_id(prompt: &str, expected: &str) -> String {
     hash_120(format!("q\0{}\0a\0{}", prompt, expected).as_bytes())
 }
 
+pub(crate) fn hash_key(key: &str) -> String {
+    hash_60(key.as_bytes())
+}
+
+pub(crate) fn hash_60(input: &[u8]) -> String {
+    let hash = fnv64_with_seed(FNV_OFFSET, input);
+    encode_60_bits(hash & ((1u64 << 60) - 1))
+}
+
 pub(crate) fn hash_120(input: &[u8]) -> String {
     let first = fnv64_with_seed(FNV_OFFSET, input);
     let second = fnv64_with_seed(FNV_OFFSET ^ 0x9e37_79b9_7f4a_7c15, input);
@@ -41,6 +50,15 @@ pub(crate) fn encode_base64url_no_pad(bytes: &[u8]) -> String {
         if chunk.len() > 2 {
             out.push(B64_URL[(value & 0x3f) as usize] as char);
         }
+    }
+    out
+}
+
+pub(crate) fn encode_60_bits(value: u64) -> String {
+    let mut out = String::with_capacity(10);
+    for shift in (0..60).step_by(6).rev() {
+        let index = ((value >> shift) & 0x3f) as usize;
+        out.push(B64_URL[index] as char);
     }
     out
 }

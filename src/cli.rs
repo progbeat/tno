@@ -1,209 +1,104 @@
-use crate::*;
+use std::borrow::Cow;
+use std::env;
+use std::ffi::OsString;
+use std::path::Path;
+use std::process;
 
-#[derive(Debug)]
-pub(crate) struct Config {
-    pub(crate) root: PathBuf,
-}
+use crate::check_command::run_check_command;
+use crate::evaluator::print_help;
+use crate::gate::run_gate_command;
+use crate::hooks::{run_hook_command, run_init};
+use crate::notes::{append_note, delete_note, ensure_note, read_note, write_note};
+use crate::notes_cli::{arg_to_string, collect_text_or_stdin, require_key, run_rg};
+use crate::project::{git_project_root, print_root, project_root_or_current};
+use crate::types::Config;
 
-#[derive(Debug)]
-pub(crate) struct Note {
-    pub(crate) key: String,
-    pub(crate) hash: String,
-    pub(crate) path: PathBuf,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct CheckConfig {
-    pub(crate) version: u32,
-    pub(crate) agent: AgentConfig,
-    pub(crate) expectations: Vec<Expectation>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RawCheckConfig {
-    pub(crate) version: u32,
-    pub(crate) agent: AgentConfig,
-    pub(crate) expectations: Vec<RawExpectationItem>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AgentConfig {
-    #[serde(default)]
-    pub(crate) model: ModelConfig,
-    #[serde(default = "default_thinking")]
-    pub(crate) thinking: String,
-    pub(crate) instructions: String,
-    pub(crate) ignore: Vec<String>,
-    pub(crate) plugins: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, Default)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ModelConfig {
-    #[serde(default)]
-    pub(crate) primary: Option<String>,
-    #[serde(default)]
-    pub(crate) fallbacks: Vec<String>,
-}
-
-pub(crate) fn default_thinking() -> String {
-    "low".to_string()
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-pub(crate) struct TokenUsage {
-    pub(crate) total_tokens: u64,
-    pub(crate) input_tokens: u64,
-    pub(crate) cached_input_tokens: u64,
-    pub(crate) output_tokens: u64,
-    pub(crate) reasoning_output_tokens: u64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Expectation {
-    pub(crate) q: String,
-    pub(crate) a: String,
-    #[serde(default)]
-    pub(crate) cooldown: Option<String>,
-    #[serde(default)]
-    pub(crate) thinking: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RawExpectationItem {
-    #[serde(default)]
-    pub(crate) q: Option<String>,
-    #[serde(default)]
-    pub(crate) q_template: Option<String>,
-    pub(crate) a: String,
-    #[serde(default)]
-    pub(crate) path: Option<String>,
-    #[serde(default)]
-    pub(crate) cooldown: Option<String>,
-    #[serde(default)]
-    pub(crate) thinking: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SelectedExpectation {
-    pub(crate) number: usize,
-    pub(crate) id: String,
-    pub(crate) q: String,
-    pub(crate) a: String,
-    pub(crate) cooldown: Option<Cooldown>,
-    pub(crate) thinking: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CommandError {
+    Message(Cow<'static, str>),
+    InitDoesNotAcceptArguments,
+    PwdDoesNotAcceptArguments,
+    UnknownOption(String),
+    UnknownCommand(String),
+    CheckFailed,
+    GateFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Cooldown {
-    pub(crate) seconds: u64,
+enum NoteCommand {
+    Pwd,
+    Path,
+    Read,
+    Write,
+    Append,
+    Delete,
+    Search,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ParsedAnswer {
-    pub(crate) answer: String,
-    pub(crate) evidence: String,
-    pub(crate) scope: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct EvaluatorResponseJson {
-    pub(crate) answer: String,
-    pub(crate) evidence: String,
-    pub(crate) scope: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct CheckRecord {
-    pub(crate) timestamp: String,
-    pub(crate) number: usize,
-    pub(crate) result: String,
-    pub(crate) prompt: String,
-    pub(crate) expected: String,
-    pub(crate) observed: String,
-    pub(crate) evidence: String,
-    pub(crate) scope: Vec<String>,
-    #[serde(rename = "scopeHash")]
-    pub(crate) scope_hash: String,
-}
-
-pub(crate) struct CheckOptions {
-    pub(crate) selected: Vec<SelectedExpectation>,
-    pub(crate) fail_fast: bool,
-    pub(crate) ignore_cache: bool,
-}
-
-pub(crate) struct CheckCommandArgs {
-    pub(crate) config_path: PathBuf,
-    pub(crate) query: Option<String>,
-    pub(crate) option_args: Vec<OsString>,
-}
-
-pub(crate) struct InterrogationResult {
-    pub(crate) record: CheckRecord,
-}
-
-pub(crate) struct QueryInterrogationResult {
-    pub(crate) answer: ParsedAnswer,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct NarrowingStats {
-    pub(crate) attempted: usize,
-    pub(crate) accepted: usize,
-    pub(crate) rejected: usize,
-}
-
-pub(crate) struct CheckRunReport {
-    pub(crate) records: Vec<CheckRecord>,
-    pub(crate) skipped: usize,
-    pub(crate) narrowing: NarrowingStats,
-}
-
-impl std::ops::Deref for CheckRunReport {
-    type Target = [CheckRecord];
-
-    fn deref(&self) -> &Self::Target {
-        &self.records
+impl NoteCommand {
+    fn parse(value: &str) -> Option<NoteCommand> {
+        match value {
+            "pwd" => Some(NoteCommand::Pwd),
+            "p" | "path" => Some(NoteCommand::Path),
+            "r" | "read" => Some(NoteCommand::Read),
+            "w" | "write" => Some(NoteCommand::Write),
+            "a" | "append" => Some(NoteCommand::Append),
+            "d" | "del" | "delete" | "rm" => Some(NoteCommand::Delete),
+            "rg" | "g" => Some(NoteCommand::Search),
+            _ => None,
+        }
     }
 }
 
-pub(crate) trait EvaluatorRunner {
-    fn start_session(
-        &mut self,
-        root: &Path,
-        instructions: &str,
-        agent: &AgentConfig,
-        model: Option<&str>,
-        thinking: &str,
-        scope: &[String],
-    ) -> Result<String, String>;
-    fn ask(
-        &mut self,
-        session_id: &str,
-        prompt: &str,
-        model: Option<&str>,
-        thinking: &str,
-    ) -> Result<String, String>;
+impl From<String> for CommandError {
+    fn from(message: String) -> CommandError {
+        CommandError::Message(Cow::Owned(message))
+    }
+}
+
+impl From<&'static str> for CommandError {
+    fn from(message: &'static str) -> CommandError {
+        CommandError::Message(Cow::Borrowed(message))
+    }
+}
+
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CommandError::Message(message) => formatter.write_str(message),
+            CommandError::InitDoesNotAcceptArguments => {
+                formatter.write_str("init does not accept arguments")
+            }
+            CommandError::PwdDoesNotAcceptArguments => {
+                formatter.write_str("pwd does not accept arguments")
+            }
+            CommandError::UnknownOption(option) => write!(formatter, "unknown option: {option}"),
+            CommandError::UnknownCommand(command) => write!(
+                formatter,
+                "unknown command: {command} (use `canon p <key>` to print a note path)"
+            ),
+            CommandError::CheckFailed => formatter.write_str("canon check failed"),
+            CommandError::GateFailed => formatter.write_str("canon gate failed"),
+        }
+    }
 }
 
 pub(crate) fn main() {
     if let Err(err) = run(env::args_os().skip(1).collect()) {
-        if err == CHECK_FAILED_EXIT || err == GATE_FAILED_EXIT {
-            process::exit(1);
+        if command_error_needs_main_print(&err) {
+            eprintln!("canon: {}", err);
         }
-        eprintln!("canon: {}", err);
         process::exit(1);
     }
 }
 
-pub(crate) fn run(args: Vec<OsString>) -> Result<(), String> {
+pub(crate) fn command_error_needs_main_print(err: &CommandError) -> bool {
+    // `canon gate` prints the concrete missing-cache or failing-cache details
+    // before returning GateFailed, so main must not add a generic duplicate.
+    !matches!(err, CommandError::GateFailed)
+}
+
+pub(crate) fn run(args: Vec<OsString>) -> Result<(), CommandError> {
     if args.is_empty() {
         let config = Config::from_env()?;
         print_root(&config)?;
@@ -211,17 +106,17 @@ pub(crate) fn run(args: Vec<OsString>) -> Result<(), String> {
     }
 
     let first = arg_to_string(&args[0])?;
-    match first.as_str() {
+    let note_command = match first.as_str() {
         "init" => {
             if args.len() != 1 {
-                return Err("init does not accept arguments".to_string());
+                return Err(CommandError::InitDoesNotAcceptArguments);
             }
             let root = project_root_or_current(Path::new("."))?;
-            return run_init(&root);
+            return run_init(&root).map_err(CommandError::from);
         }
         "hook" => {
             let root = git_project_root(Path::new("."))?;
-            return run_hook_command(&root, &args[1..]);
+            return run_hook_command(&root, &args[1..]).map_err(CommandError::from);
         }
         "check" => {
             let root = git_project_root(Path::new("."))?;
@@ -235,147 +130,52 @@ pub(crate) fn run(args: Vec<OsString>) -> Result<(), String> {
             print_help();
             return Ok(());
         }
-        _ => {}
-    }
+        value => {
+            if let Some(command) = NoteCommand::parse(value) {
+                command
+            } else if first.starts_with('-') {
+                return Err(CommandError::UnknownOption(first));
+            } else {
+                return Err(CommandError::UnknownCommand(first));
+            }
+        }
+    };
 
     let config = Config::from_env()?;
-    match first.as_str() {
-        "pwd" => {
+    match note_command {
+        NoteCommand::Pwd => {
             if args.len() != 1 {
-                return Err("pwd does not accept arguments".to_string());
+                return Err(CommandError::PwdDoesNotAcceptArguments);
             }
             print_root(&config)?;
         }
-        "p" | "path" => {
+        NoteCommand::Path => {
             let key = require_key(&args, 1)?;
             let note = ensure_note(&config, key)?;
             println!("{}", note.path.display());
         }
-        "r" | "read" => {
+        NoteCommand::Read => {
             let key = require_key(&args, 1)?;
             read_note(&config, key)?;
         }
-        "w" | "write" => {
+        NoteCommand::Write => {
             let key = require_key(&args, 1)?;
             let text = collect_text_or_stdin(&args, 2)?;
             write_note(&config, key, &text)?;
         }
-        "a" | "append" => {
+        NoteCommand::Append => {
             let key = require_key(&args, 1)?;
             let text = collect_text_or_stdin(&args, 2)?;
             append_note(&config, key, &text)?;
         }
-        "d" | "del" | "delete" | "rm" => {
+        NoteCommand::Delete => {
             let key = require_key(&args, 1)?;
             delete_note(&config, key)?;
         }
-        "rg" | "g" => {
+        NoteCommand::Search => {
             run_rg(&config, &args[1..])?;
         }
-        _ => {
-            if first.starts_with('-') {
-                return Err(format!("unknown option: {}", first));
-            }
-            return Err(format!(
-                "unknown command: {} (use `canon p <key>` to print a note path)",
-                first
-            ));
-        }
     }
 
     Ok(())
-}
-
-pub(crate) fn print_root(config: &Config) -> Result<(), String> {
-    ensure_dir(&config.root)?;
-    println!("{}", config.root.display());
-    Ok(())
-}
-
-impl Config {
-    pub(crate) fn from_env() -> Result<Config, String> {
-        let thread_id = env::var("CODEX_THREAD_ID")
-            .map_err(|_| "CODEX_THREAD_ID is required in v1".to_string())?;
-        if thread_id.trim().is_empty() {
-            return Err("CODEX_THREAD_ID is empty".to_string());
-        }
-        if thread_id == "."
-            || thread_id == ".."
-            || thread_id.contains('/')
-            || thread_id.contains('\\')
-        {
-            return Err("CODEX_THREAD_ID must be a single path segment".to_string());
-        }
-
-        if let Some(value) = env::var_os("CANON_HOME") {
-            if !value.is_empty() {
-                return Ok(Config {
-                    root: PathBuf::from(value).join("codex").join(thread_id),
-                });
-            }
-        }
-
-        let temp_root = env::var_os("TMPDIR")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(env::temp_dir);
-
-        Ok(Config {
-            root: temp_root.join("canon").join("codex").join(thread_id),
-        })
-    }
-}
-
-pub(crate) fn project_root_or_current(start: &Path) -> Result<PathBuf, String> {
-    match git_project_root(start) {
-        Ok(root) => Ok(root),
-        Err(_) => env::current_dir().map_err(|err| format!("failed to read current dir: {}", err)),
-    }
-}
-
-pub(crate) fn command_output_utf8<'a>(
-    bytes: &'a [u8],
-    description: &str,
-) -> Result<&'a str, String> {
-    std::str::from_utf8(bytes)
-        .map_err(|err| format!("{} must be valid UTF-8: {}", description, err))
-}
-
-pub(crate) fn command_output_trimmed<'a>(
-    bytes: &'a [u8],
-    description: &str,
-) -> Result<&'a str, String> {
-    Ok(command_output_utf8(bytes, description)?.trim())
-}
-
-pub(crate) fn git_project_root(start: &Path) -> Result<PathBuf, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(start)
-        .arg("rev-parse")
-        .arg("--show-toplevel")
-        .output()
-        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
-    if !output.status.success() {
-        return Err(format!(
-            "failed to find git project root: {}",
-            command_output_trimmed(&output.stderr, "git rev-parse stderr")?
-        ));
-    }
-    Ok(path_from_git_stdout(output.stdout))
-}
-
-pub(crate) fn path_from_git_stdout(mut bytes: Vec<u8>) -> PathBuf {
-    while matches!(bytes.last(), Some(b'\n' | b'\r')) {
-        bytes.pop();
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStringExt;
-        PathBuf::from(std::ffi::OsString::from_vec(bytes))
-    }
-    #[cfg(not(unix))]
-    {
-        PathBuf::from(String::from_utf8_lossy(&bytes).to_string())
-    }
 }

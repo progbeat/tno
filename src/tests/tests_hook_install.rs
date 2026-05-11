@@ -1,0 +1,98 @@
+use super::*;
+
+#[test]
+fn hook_install_creates_reusable_pre_commit_hook() {
+    let root = temp_home("hook-install");
+    run_hook_install(&root).unwrap();
+    let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
+    assert!(!root.join(CHECK_PATH).exists());
+    assert!(!root.join(".gitignore").exists());
+    assert!(!DEFAULT_PRE_COMMIT_HOOK.contains("git status --porcelain -- .canon/"));
+    assert_eq!(
+        fs::read_to_string(&hook_path).unwrap(),
+        DEFAULT_PRE_COMMIT_HOOK
+    );
+    assert_eq!(
+        DEFAULT_PRE_COMMIT_HOOK.matches("canon gate failed").count(),
+        1
+    );
+    assert!(!DEFAULT_PRE_COMMIT_HOOK.contains("run canon check before committing"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_ne!(
+            fs::metadata(&hook_path).unwrap().permissions().mode() & 0o111,
+            0
+        );
+    }
+
+    run_hook_install(&root).unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_install_refuses_non_exact_existing_canon_pre_commit_hook() {
+    let root = temp_home("hook-install-update");
+    let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
+    fs::create_dir_all(hook_path.parent().unwrap()).unwrap();
+    let previous_hook = DEFAULT_PRE_COMMIT_HOOK.replace(
+        "echo \"canon pre-commit: running canon gate\"",
+        "if [ -n \"$(git status --porcelain -- .canon/)\" ]; then\n  echo \"canon pre-commit: .canon/ has uncommitted changes\" >&2\n  git status --porcelain -- .canon/ >&2\n  echo \"Clean .canon/ before committing.\" >&2\n  exit 1\nfi\n\necho \"canon pre-commit: running canon gate\"",
+    );
+    fs::write(&hook_path, previous_hook).unwrap();
+
+    let err = run_hook_install(&root).unwrap_err();
+
+    assert!(err.contains("already exists with different content"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_install_refuses_nonstandard_git_hooks_path() {
+    let root = temp_home("hook-install-nonstandard");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("init")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("config")
+        .arg("--local")
+        .arg("core.hooksPath")
+        .arg(".githooks")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let err = run_hook_install(&root).unwrap_err();
+
+    assert!(err.contains("core.hooksPath is already set to .githooks"));
+    assert!(!root.join(PRE_COMMIT_HOOK_PATH).exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_install_refuses_different_existing_pre_commit_hook() {
+    let root = temp_home("hook-install-existing");
+    let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
+    fs::create_dir_all(hook_path.parent().unwrap()).unwrap();
+    fs::write(&hook_path, "custom hook").unwrap();
+
+    let err = run_hook_install(&root).unwrap_err();
+    assert!(err.contains("already exists with different content"));
+    assert!(!root.join(CHECK_PATH).exists());
+    assert!(!root.join(".gitignore").exists());
+    let _ = fs::remove_dir_all(root);
+}
