@@ -95,8 +95,8 @@ expectation:
 Does `canon check` write stdout in the format specified by [[Check Output]]?
 Expected: yes
 Observed: no
-Evidence: specs/Check Output.md requires human-readable stdout\nsrc/check.rs still writes render_check_log_record(record) to stdout
-Scope: ["specs/Check Output.md","src/check.rs"]
+Evidence: specs/check-output.md requires human-readable stdout\nsrc/check.rs still writes render_check_log_record(record) to stdout
+Scope: ["specs/check-output.md","src/check.rs"]
 ========================= 1 failed, 1 passed in 0.42s =========================
 ```
 
