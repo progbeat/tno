@@ -2,16 +2,6 @@
 
 `canon check` can generate expectations from spec files.
 
-Each spec file is identified by its H1 title. The spec filename must be the
-normalized H1 title with a `.md` extension.
-
-To normalize a spec title for a filename, strip Markdown inline markup such as
-backticks, lowercase the remaining text, replace each run of non-alphanumeric
-ASCII characters with `-`, and trim leading or trailing `-`.
-
-Wikilinks between specs use human titles such as `[[Check Output]]`, not
-normalized filenames.
-
 The active check configuration's `expectations` list may contain explicit
 expectation items and generator items.
 
