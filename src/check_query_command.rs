@@ -40,11 +40,10 @@ pub(crate) fn run_check_query_command(
             write_check_finish_event(
                 &mut diagnostic_log,
                 true,
-                0,
-                0,
-                1,
-                0,
-                NarrowingStats::default(),
+                CheckFinishStats {
+                    errors: 1,
+                    ..CheckFinishStats::default()
+                },
                 Some(&err),
             )?;
             return Err(err);
@@ -54,14 +53,5 @@ pub(crate) fn run_check_query_command(
     let mut stdout = stdout.lock();
     write_query_output(&mut stdout, &result.answer)?;
     print_token_usage_summary(Some(usage));
-    write_check_finish_event(
-        &mut diagnostic_log,
-        true,
-        0,
-        0,
-        0,
-        0,
-        NarrowingStats::default(),
-        None,
-    )
+    write_check_finish_event(&mut diagnostic_log, true, CheckFinishStats::default(), None)
 }

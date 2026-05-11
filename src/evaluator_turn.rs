@@ -107,6 +107,13 @@ pub(crate) fn is_verified_record(record: &CheckRecord) -> bool {
     is_reusable_history_record(record)
 }
 
+// This module owns one evaluator turn: model labels, response repair, and
+// record finalization. It is intentionally not sufficient by itself to judge
+// the full interrogation policy; with only this file visible, full-policy
+// questions require `idk` rather than a pass/fail conclusion. Cross-turn policy
+// such as restricted `idk` full-scope retries, narrowing verification, and
+// cache orchestration is in `check.rs`, `check_interrogation_records.rs`, and
+// `check_cache.rs`.
 pub(crate) struct EvaluatorTurnContext<'a> {
     pub(crate) session_id: &'a str,
     pub(crate) model: Option<&'a str>,

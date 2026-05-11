@@ -55,12 +55,8 @@ fn diagnostic_log_rotates_at_start_when_active_file_is_large() {
         "x".repeat((DIAGNOSTIC_LOG_MAX_BYTES + 1) as usize),
     )
     .unwrap();
-    for index in 1..DIAGNOSTIC_LOG_FILES.len() {
-        fs::write(
-            log_dir.join(DIAGNOSTIC_LOG_FILES[index]),
-            format!("old-{index}"),
-        )
-        .unwrap();
+    for (index, file_name) in DIAGNOSTIC_LOG_FILES.iter().enumerate().skip(1) {
+        fs::write(log_dir.join(file_name), format!("old-{index}")).unwrap();
     }
 
     let writer = DiagnosticLogWriter::create(&root).unwrap();
@@ -70,9 +66,9 @@ fn diagnostic_log_rotates_at_start_when_active_file_is_large() {
         fs::read_to_string(log_dir.join("1.jsonl")).unwrap().len(),
         (DIAGNOSTIC_LOG_MAX_BYTES + 1) as usize
     );
-    for index in 2..DIAGNOSTIC_LOG_FILES.len() {
+    for (index, file_name) in DIAGNOSTIC_LOG_FILES.iter().enumerate().skip(2) {
         assert_eq!(
-            fs::read_to_string(log_dir.join(DIAGNOSTIC_LOG_FILES[index])).unwrap(),
+            fs::read_to_string(log_dir.join(file_name)).unwrap(),
             format!("old-{}", index - 1)
         );
     }

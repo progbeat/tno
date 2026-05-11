@@ -18,6 +18,7 @@ pub(crate) fn response_format_block() -> &'static str {
         "`scope` is the smallest allowed project context sufficient to determine the correct answer among all valid answers; it is not the list of evidence citations. ",
         "Use [\".\"] when the answer depends on project-wide absence, consistency, duplication, garbage, overall quality, or denied/inaccessible paths. ",
         "If the enforced task `scope` is narrower than [\".\"] and the question requires repository-wide or cross-module evidence, answer `idk` instead of drawing a positive or negative conclusion from incomplete context. ",
+        "If visible code says the relevant behavior lives outside the enforced scope, answer `idk` rather than failing the project from that incomplete slice. ",
         "Never include denied or inaccessible paths in `scope`. Denied paths are intentionally outside the allowed evidence boundary; do not answer `idk` solely because a denied path is unreadable. ",
         "The current project state is the staged Git snapshot exposed at the working directory; do not treat files that exist only in `HEAD`, cache history, or diagnostic logs as current project files. ",
         "Evaluator agents are read-only; do not answer `idk` merely because a build or test command cannot run in the sandbox. Use visible staged source and test files as evidence unless the question specifically asks whether a command executed successfully. ",

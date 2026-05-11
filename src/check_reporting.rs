@@ -28,23 +28,30 @@ pub(crate) fn write_check_finish_report_event(
     write_check_finish_event(
         diagnostic_log,
         query,
-        report_passed_count(report),
-        report_failed_count(report),
-        report_error_count(report),
-        report.skipped,
-        report.narrowing,
+        CheckFinishStats {
+            passed: report_passed_count(report),
+            failed: report_failed_count(report),
+            errors: report_error_count(report),
+            skipped: report.skipped,
+            narrowing: report.narrowing,
+        },
         error,
     )
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CheckFinishStats {
+    pub(crate) passed: usize,
+    pub(crate) failed: usize,
+    pub(crate) errors: usize,
+    pub(crate) skipped: usize,
+    pub(crate) narrowing: NarrowingStats,
 }
 
 pub(crate) fn write_check_finish_event(
     diagnostic_log: &mut DiagnosticLogWriter,
     query: bool,
-    passed: usize,
-    failed: usize,
-    errors: usize,
-    skipped: usize,
-    narrowing: NarrowingStats,
+    stats: CheckFinishStats,
     error: Option<&str>,
 ) -> Result<(), String> {
     let mut fields = Vec::new();
@@ -52,13 +59,13 @@ pub(crate) fn write_check_finish_event(
         fields.push(("query", json!(true)));
     }
     fields.extend([
-        ("passed", json!(passed)),
-        ("failed", json!(failed)),
-        ("errors", json!(errors)),
-        ("skipped", json!(skipped)),
-        ("narrowingAttempted", json!(narrowing.attempted)),
-        ("narrowingAccepted", json!(narrowing.accepted)),
-        ("narrowingRejected", json!(narrowing.rejected)),
+        ("passed", json!(stats.passed)),
+        ("failed", json!(stats.failed)),
+        ("errors", json!(stats.errors)),
+        ("skipped", json!(stats.skipped)),
+        ("narrowingAttempted", json!(stats.narrowing.attempted)),
+        ("narrowingAccepted", json!(stats.narrowing.accepted)),
+        ("narrowingRejected", json!(stats.narrowing.rejected)),
     ]);
     if let Some(error) = error {
         fields.push(("error", json!(error)));

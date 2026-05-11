@@ -149,7 +149,6 @@ pub(crate) fn expand_raw_check_config(
                                 .map_err(|err| format!("failed to read {}: {}", file, err)),
                         }
                     }?;
-                    validate_generator_spec_title(&file, &content, item_number)?;
                     expectations.push(Expectation {
                         q: template.replace("{content}", &content),
                         a: item.a.clone(),

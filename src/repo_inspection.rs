@@ -1,12 +1,17 @@
 use crate::*;
 
+type GitPathCacheKey = (PathBuf, String);
+type GeneratorPathsCacheKey = (PathBuf, PathBuf, String, bool);
+type StagedFileContentCacheKey = (PathBuf, String);
+type CheckConfigCacheKey = (PathBuf, PathBuf, String);
+
 #[derive(Default)]
 pub(crate) struct RepoInspectionCache {
-    git_paths: BTreeMap<(PathBuf, String), Result<PathBuf, String>>,
-    generator_paths: BTreeMap<(PathBuf, PathBuf, String, bool), Result<Vec<String>, String>>,
-    staged_file_contents: BTreeMap<(PathBuf, String), Result<String, String>>,
+    git_paths: BTreeMap<GitPathCacheKey, Result<PathBuf, String>>,
+    generator_paths: BTreeMap<GeneratorPathsCacheKey, Result<Vec<String>, String>>,
+    staged_file_contents: BTreeMap<StagedFileContentCacheKey, Result<String, String>>,
     filesystem_text: BTreeMap<PathBuf, Result<String, String>>,
-    check_configs: BTreeMap<(PathBuf, PathBuf, String), Result<CheckConfig, String>>,
+    check_configs: BTreeMap<CheckConfigCacheKey, Result<CheckConfig, String>>,
 }
 
 impl RepoInspectionCache {

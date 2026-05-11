@@ -25,11 +25,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             write_check_finish_event(
                 &mut diagnostic_log,
                 false,
-                0,
-                0,
-                0,
-                0,
-                NarrowingStats::default(),
+                CheckFinishStats::default(),
                 Some(&err),
             )?;
             return Err(err.into());
@@ -115,11 +111,10 @@ pub(crate) fn prepare_check_execution(
         write_check_finish_event(
             diagnostic_log,
             query,
-            0,
-            0,
-            errors_on_failure,
-            0,
-            NarrowingStats::default(),
+            CheckFinishStats {
+                errors: errors_on_failure,
+                ..CheckFinishStats::default()
+            },
             Some(&err),
         )?;
         return Err(err);
@@ -136,11 +131,10 @@ pub(crate) fn prepare_check_execution(
             write_check_finish_event(
                 diagnostic_log,
                 query,
-                0,
-                0,
-                errors_on_failure,
-                0,
-                NarrowingStats::default(),
+                CheckFinishStats {
+                    errors: errors_on_failure,
+                    ..CheckFinishStats::default()
+                },
                 Some(&err),
             )?;
             return Err(err);

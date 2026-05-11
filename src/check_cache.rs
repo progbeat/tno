@@ -17,8 +17,10 @@ pub(crate) fn cached_record_for_expectation(
     history_cache: &mut HistoryCache,
     scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<Option<CheckCacheHit>, String> {
-    // Cooldown hits intentionally bypass exact scopeHash matching; the
-    // age and latest-pass checks live in `cooldown_history_record`.
+    // A "fresh cooldown pass" means the cooldown spec's latest valid history
+    // record is a pass within its cooldown window. Older passes are not
+    // cooldown hits after a newer fail; they can only participate in the exact
+    // scopeHash lookup below.
     if let Some(record) =
         cooldown_history_record(root, agent, expectation, history_cache, unix_timestamp()?)?
     {

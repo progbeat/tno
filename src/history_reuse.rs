@@ -67,9 +67,9 @@ pub(crate) fn cooldown_history_record(
             continue;
         };
         // Cooldown keys off the latest valid history record, not the latest
-        // reusable answer record. A newer fail or human-review-style record
-        // blocks cooldown reuse of an older pass; callers can still continue
-        // with exact-cache lookup or evaluator interrogation.
+        // reusable answer record. This is why a newer fail or human-review-style
+        // record blocks cooldown reuse of an older pass: after a failed check,
+        // the old pass is no longer the spec-defined fresh cooldown pass.
         if !record.passed() {
             return Ok(None);
         }
