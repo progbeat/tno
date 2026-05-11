@@ -9,14 +9,13 @@ Runtime logs are JSON Lines files. Each non-empty line is one complete JSON obje
 The active runtime log file is `LOGS_DIR/0.jsonl`. Older runtime logs may be
 retained as rotated files in the same directory.
 
-Runtime log retention is bounded to four files named `0.jsonl`, `1.jsonl`,
-`2.jsonl`, and `3.jsonl`.
+Runtime log retention is bounded to a finite set of numeric files.
 
 Before the first runtime log event is written during a `canon check` invocation,
-`0.jsonl` is rotated when it is larger than 128 KiB. Rotation deletes `3.jsonl`
-when present, renames `2.jsonl` to `3.jsonl`, renames `1.jsonl` to `2.jsonl`,
-and renames `0.jsonl` to `1.jsonl`. The next runtime log write creates a new
-`0.jsonl`.
+`0.jsonl` is rotated when it is larger than the configured runtime log size
+limit. Rotation deletes the oldest retained log when present, renames existing
+numeric logs to the next older numeric slot, and renames `0.jsonl` to `1.jsonl`.
+The next runtime log write creates a new `0.jsonl`.
 
 Each log record is appended and flushed as soon as the record is produced.
 
