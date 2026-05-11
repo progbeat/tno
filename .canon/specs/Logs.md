@@ -64,7 +64,7 @@ Evaluator agent sessions do not have read access to `LOGS_DIR`.
 
 Warnings, model fallback notices, malformed-answer notices, full-project `idk`
 review-required diagnostics, timestamps, hashes, and internal diagnostics are
-recorded in runtime logs instead of stdout or stderr.
+recorded in runtime logs.
 
 This document defines the runtime log container format and required coverage.
 Event-specific schemas are defined by the event types themselves; examples in
