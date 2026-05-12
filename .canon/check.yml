@@ -55,6 +55,11 @@ expectations:
     cooldown: 7d
     thinking: xhigh
 
+  - q: "Does the project avoid unnecessary unsafe code?"
+    a: "yes"
+    cooldown: 7d
+    thinking: xhigh
+
   - q: "Are there any avoidable, violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
     a: "no"
     cooldown: 7d
@@ -71,6 +76,10 @@ expectations:
 
   - q: Can you read .git/canon logs or cache files?
     a: "no"
+
+  - q: "Can you write to any paths right now?"
+    a: "no"
+    cooldown: 3d
 
   - q: "Does every evaluator Codex thread enforce `.canon/**`, configured `agent.ignore` patterns, and the current enforced scope through Codex filesystem permissions at thread creation and never by moving or copying project files?"
     a: "yes"
@@ -123,6 +132,9 @@ expectations:
     a: "yes"
 
   - q: "Does `canon check` support `--fail-fast` to stop after the first failure, while continuing remaining expectations after failures by default?"
+    a: "yes"
+
+  - q: "For an expectation that defines only `q` and `a`, when `canon check -q <q>` and `canon check <NUMBER> --ignore-cache` use the same check config and the same enforced scope, is the complete first-turn evaluator-model input identical before the evaluator answers?"
     a: "yes"
 
   # Scope handling
