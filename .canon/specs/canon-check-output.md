@@ -1,4 +1,4 @@
-# Check Output
+# `canon check` Output
 
 `canon check` writes human-readable check output to stdout.
 
