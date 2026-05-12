@@ -140,6 +140,12 @@ expectations:
   - q: "When no expectation numbers are provided, do `canon` commands end up with the same final selected expectation set?"
     a: "yes"
 
+  - q: "|selected| + |skipped| == |all expectations|?"
+    a: "yes"
+
+  - q: "When no expectation numbers are provided, are expectations with cached passing results still selected?"
+    a: "yes"
+
   # Scope handling
   - q: "Does `canon check` treat `scope` as the minimal allowed project context needed to answer the expectation with the same observed answer, not as the list of files cited by `evidence`, and keep `scope` as [`.`] for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it?"
     a: "yes"
