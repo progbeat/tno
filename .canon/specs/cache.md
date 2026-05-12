@@ -58,9 +58,6 @@ current staged Git contents for that record's `scope`.
 
 Reusable cached pass and fail records are both valid cache hits.
 
-`canon check --ignore-cache` forces evaluator interrogation even when reusable
-exact-cache history records or cooldown-eligible history records exist.
-
 If the evaluator returns a narrower scope with the same answer, `canon check`
 verifies that strict-subset scope with an independent interrogation on that
 restricted scope. The narrowed scope is reusable only when the observed answer

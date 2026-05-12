@@ -17,11 +17,10 @@ agent:
     If the question is malformed, answer exactly `malformed`.
     Scope policy:
     * `scope` is the smallest allowed project context sufficient to determine the correct answer to the question among all valid answers, not merely to support the answer you gave.
-    * `scope` is not the list of evidence citations; cite supporting files or code inside `EVIDENCE`.
     * Do not choose `scope` because it happens to support your observed answer; choose the scope that would let an evaluator decide the question correctly without relying on inaccessible files.
     * `scope` must be `["."]` for questions about project-wide search, absence, consistency, duplication, garbage, overall quality, architectural debt, idiomaticity, or repository-wide maintainability, unless the question explicitly limits itself to narrower paths.
     * If the allowed scope is narrower than the context required to determine the correct answer among all valid answers, answer exactly `idk`.
-    * Propose a narrower scope of at most 4 paths only when that narrower scope is sufficient to determine the correct answer among all valid answers.
+    * Propose a narrower scope only when that narrower scope is sufficient to determine the correct answer among all valid answers.
     Scoring policy:
     * Correct answer: +5
     * Incorrect answer: -10
@@ -40,10 +39,12 @@ expectations:
   - q: "With bounded configuration and retained data, is non-temporary project-owned persistent state across the whole project practically size-bounded across repeated normal command runs and configuration changes without manual cleanup?"
     a: "yes"
     cooldown: 7d
+    thinking: xhigh
 
   - q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
     a: "yes"
     cooldown: 7d
+    thinking: xhigh
 
   - q: "Are there any obsolete, unused, stray, dead-end, duplicated, or redundant Git-tracked project files or code paths that are safe to remove or consolidate without changing intended functionality?"
     a: "no"
@@ -67,6 +68,11 @@ expectations:
 
   - q: "Are there any avoidable, violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
     a: "no"
+    cooldown: 7d
+    thinking: xhigh
+
+  - q: "Are writes under .git/canon amortized O(N) over N newly persisted bytes?"
+    a: "yes"
     cooldown: 7d
     thinking: xhigh
 
