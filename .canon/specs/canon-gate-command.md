@@ -2,31 +2,27 @@
 
 `canon gate` is the fast pre-commit check for staged changes.
 
-`canon gate` decides pass/fail using this logic:
+`canon gate` decides pass/fail using the following logic:
 
-```text
-if any staged path is under .canon/**:
-    if every staged path is under .canon/**:
-        gate passes
+```
+def gate(active-expectations):
+    if any staged path is under .canon/**:
+        if every staged path is under .canon/**:
+            return Pass
+        else:
+            return Fail
+    has_missing = False
+    for each expectation in active-expectations:
+        prev-res = cached result for expectation at HEAD
+        curr-res = cached result for expectation in the staged Git tree
+        if prev-res is not Fail and curr-res is Fail:  # if regression:
+            return Fail
+        if curr-res is Missing:
+            has_missing = True
+    if has_missing:
+        return Fail
     else:
-        gate fails
-
-has_missing = false
-
-for each selected expectation:
-    previous = cache result for that expectation at HEAD
-    current = cache result for that expectation in the staged Git tree
-
-    if previous is not cached fail and current is cached fail:
-        gate fails
-
-    if current is missing:
-        has_missing = true
-
-if has_missing:
-    gate fails
-
-gate passes
+        return Pass
 ```
 
 Every `canon gate` failure prints an actionable message.
