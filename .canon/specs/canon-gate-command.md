@@ -5,14 +5,14 @@
 `canon gate` decides pass/fail using the following logic:
 
 ```
-def gate(active-expectations):
+def gate(selected-expectations):
     if any staged path is under .canon/**:
         if every staged path is under .canon/**:
             return Pass
         else:
             return Fail
     has_missing = False
-    for each expectation in active-expectations:
+    for each expectation in selected-expectations:
         prev-res = cached result for expectation at HEAD
         curr-res = cached result for expectation in the staged Git tree
         if prev-res is not Fail and curr-res is Fail:  # if regression:
