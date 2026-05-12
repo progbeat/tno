@@ -16,7 +16,7 @@ agent:
     If there is not enough evidence to answer a valid question, answer exactly `idk`.
     If the question is malformed, answer exactly `malformed`.
     Scope policy:
-    * `scope` is the smallest allowed project context sufficient to determine the correct answer to the question among all valid answers, not merely to support the answer you gave.
+    * `scope` is the minimal subset of the evaluator-visible staged Git-tracked snapshot whose unchanged contents make the correct answer invariant to changes outside it.
     * Do not choose `scope` because it happens to support your observed answer; choose the scope that would let an evaluator decide the question correctly without relying on inaccessible files.
     * `scope` must be `["."]` for questions about project-wide search, absence, consistency, duplication, garbage, overall quality, architectural debt, idiomaticity, or repository-wide maintainability, unless the question explicitly limits itself to narrower paths.
     * If the allowed scope is narrower than the context required to determine the correct answer among all valid answers, answer exactly `idk`.
@@ -135,13 +135,6 @@ expectations:
     cooldown: 7d
 
   # Output and selection
-  - q: "Does `canon check` write and flush every non-skipped per-expectation stdout result, reusable history record, and runtime log event as soon as that result or record is produced?"
-    a: "yes"
-    cooldown: 3d
-
-  - q: "Does `canon check` consider all expectations when no numbers are provided, report newly evaluated results and all failing results by default while counting reused passing results as skipped without per-expectation stdout, support rerunning selected expectations by 1-based numbers such as `canon check 4 5 42`, and reject invalid, zero, duplicate, or out-of-range numbers before evaluator interrogation?"
-    a: "yes"
-
   - q: "Does `canon check` support `--fail-fast` to stop after the first failure, while continuing remaining expectations after failures by default?"
     a: "yes"
 
@@ -158,9 +151,6 @@ expectations:
     a: "yes"
 
   # Scope handling
-  - q: "Does `canon check` treat `scope` as the minimal allowed project context needed to answer the expectation with the same observed answer, not as the list of files cited by `evidence`, and keep `scope` as [`.`] for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it?"
-    a: "yes"
-
   - q: "Does the evaluator-response parser either reject the evaluator-provided scope or produce the final `scope`, where `scope` is exactly [`.`] for full project scope or a lexicographically sorted, duplicate-free list of normalized repository-relative paths with redundant child paths removed when a parent directory path already covers them?"
     a: "yes"
 

@@ -39,9 +39,7 @@ lines.
 
 `Scope` is rendered as a compact JSON array on one line.
 
-Reused passing results may be skipped when a reuse policy such as [[Cooldown]]
-allows it. Skipped expectations emit no per-expectation stdout and count as
-`skipped`, not `passed`, in the final summary. Failing results are never
+Skipped expectations emit no per-expectation stdout. Failing results are never
 skipped.
 
 After all selected expectations have been processed, stderr contains exactly one
@@ -75,10 +73,8 @@ is `pass`.
 because the evaluator returned an answer that was parsed successfully and did
 not match the expected answer.
 `errors` is the number of selected expectations whose final result requires
-human review because the evaluator returned `malformed`, returned full-scope
-`idk`, or produced an unparseable response.
-`skipped` is the number of selected expectations satisfied by a reused passing
-result without evaluator interrogation or per-expectation stdout.
+human review.
+`skipped` is the number of non-selected expectations.
 
 Warnings, model fallback notices, review-required diagnostics, timestamps,
 hashes, and internal diagnostics are recorded in [[Logs]] rather than stdout or
