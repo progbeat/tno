@@ -32,6 +32,11 @@ agent:
 
 expectations:
   # Project quality
+  - q: "Can you find any unnecessary copy-pasted code outside tests?"
+    a: "no"
+    cooldown: 7d
+    thinking: xhigh
+
   - q: "With bounded configuration and retained data, is non-temporary project-owned persistent state across the whole project practically size-bounded across repeated normal command runs and configuration changes without manual cleanup?"
     a: "yes"
     cooldown: 7d
