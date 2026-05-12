@@ -93,9 +93,9 @@ pub(crate) fn main() {
 }
 
 pub(crate) fn command_error_needs_main_print(err: &CommandError) -> bool {
-    // `canon gate` prints the concrete missing-cache or failing-cache details
-    // before returning GateFailed, so main must not add a generic duplicate.
-    !matches!(err, CommandError::GateFailed)
+    // These commands already wrote their public diagnostics before returning a
+    // sentinel error for the process exit status.
+    !matches!(err, CommandError::CheckFailed | CommandError::GateFailed)
 }
 
 pub(crate) fn run(args: Vec<OsString>) -> Result<(), CommandError> {

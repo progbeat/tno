@@ -35,7 +35,7 @@ fn gate_fails_when_cache_is_missing() {
 fn gate_failed_error_display_is_descriptive() {
     assert_eq!(CommandError::GateFailed.to_string(), "canon gate failed");
     assert!(!command_error_needs_main_print(&CommandError::GateFailed));
-    assert!(command_error_needs_main_print(&CommandError::CheckFailed));
+    assert!(!command_error_needs_main_print(&CommandError::CheckFailed));
 }
 
 #[test]
