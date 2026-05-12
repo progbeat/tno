@@ -148,7 +148,7 @@ expectations:
     a: "yes"
 
   - q: "When no expectation numbers are provided, are expectations with cached passing results still selected?"
-    a: "yes"
+    a: "no"
 
   # Scope handling
   - q: "Does the evaluator-response parser either reject the evaluator-provided scope or produce the final `scope`, where `scope` is exactly [`.`] for full project scope or a lexicographically sorted, duplicate-free list of normalized repository-relative paths with redundant child paths removed when a parent directory path already covers them?"
