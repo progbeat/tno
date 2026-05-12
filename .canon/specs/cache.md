@@ -66,21 +66,3 @@ verifies that strict-subset scope with an independent interrogation on that
 restricted scope. The narrowed scope is reusable only when the observed answer
 is unchanged. Failed narrowing attempts that change the answer are not written
 to history.
-
-The `canon gate` command is cache-only. It passes only when every selected
-expectation has a reusable cached pass result for the current staged Git tree, a
-fresh cooldown pass, or reusable cached fail results for both the current staged
-Git tree and the `HEAD` tree.
-
-As a preflight exception, `canon gate` passes `.canon/**`-only staged changes
-without checking expectation cache when the full-project `scopeHash` for
-`["."]` is unchanged between the staged Git tree and `HEAD`. This does not
-weaken the cache rule: unchanged visible project content means no expectation can
-regress from pass to fail because of that commit.
-
-When `canon gate` fails because reusable cache records are missing, it prints an
-actionable message asking the user to run `canon check`. When `canon gate` fails
-because there are new cached failures, it reports those failures and does not
-suggest rerunning `canon check` as the fix. `canon gate` prints the concrete
-gate failure details without an additional generic `canon: canon gate failed`
-line; pre-commit hooks may print their own hook-level failure message.
