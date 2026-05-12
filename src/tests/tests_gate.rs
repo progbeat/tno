@@ -39,7 +39,19 @@ fn gate_failed_error_display_is_descriptive() {
 }
 
 #[test]
-fn gate_skips_canon_only_change_when_visible_content_is_unchanged() {
+fn gate_missing_cache_advice_prioritizes_regressions() {
+    assert_eq!(
+        gate_missing_cache_advice(false),
+        Some("canon gate: run `canon check` before committing")
+    );
+    assert_eq!(
+        gate_missing_cache_advice(true),
+        Some("canon gate: fix staged regressions before filling missing cache")
+    );
+}
+
+#[test]
+fn gate_passes_canon_only_change_without_checking_cache() {
     let root = git_project("gate-canon-only");
     commit_all(&root, "initial");
     write_check_config(&root);
@@ -53,6 +65,24 @@ fn gate_skips_canon_only_change_when_visible_content_is_unchanged() {
     let result = run_gate_command(&root, &[]);
 
     assert!(result.is_ok());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn gate_fails_mixed_canon_and_non_canon_change() {
+    let root = git_project("gate-mixed-canon");
+    commit_all(&root, "initial");
+    write_check_config(&root);
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .args(["add", ".canon/check.yml", "README.md"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    let result = run_gate_command(&root, &[]);
+
+    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -83,7 +113,7 @@ fn gate_does_not_skip_non_canon_change_with_missing_cache() {
 }
 
 #[test]
-fn gate_accepts_fresh_cooldown_pass_when_scope_hash_changed() {
+fn gate_deselects_fresh_cooldown_pass_when_scope_hash_changed() {
     let root = git_project("gate-cooldown-pass");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -130,7 +160,7 @@ expectations:
 }
 
 #[test]
-fn gate_prefers_fresh_cooldown_pass_over_older_exact_fail() {
+fn gate_deselects_fresh_cooldown_pass_over_older_exact_fail() {
     let root = git_project("gate-cooldown-over-exact-fail");
     commit_all(&root, "initial");
     let yaml = r#"

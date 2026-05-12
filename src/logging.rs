@@ -99,7 +99,7 @@ pub(crate) fn append_runtime_log_event(
     let log_dir = resolve_git_path(root, GIT_CANON_LOG_DIR)?;
     ensure_dir(&log_dir)?;
     rotate_diagnostic_logs_if_needed(&log_dir)?;
-    let path = log_dir.join(DIAGNOSTIC_LOG_FILES[0]);
+    let path = log_dir.join(diagnostic_log_config().files[0]);
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -113,23 +113,24 @@ pub(crate) fn append_runtime_log_event(
 }
 
 pub(crate) fn rotate_diagnostic_logs_if_needed(log_dir: &Path) -> Result<(), String> {
-    let active = log_dir.join(DIAGNOSTIC_LOG_FILES[0]);
+    let config = diagnostic_log_config();
+    let active = log_dir.join(config.files[0]);
     let should_rotate = active
         .metadata()
-        .map(|metadata| metadata.len() > DIAGNOSTIC_LOG_MAX_BYTES)
+        .map(|metadata| metadata.len() > config.max_bytes)
         .unwrap_or(false);
     if !should_rotate {
         return Ok(());
     }
-    let oldest = log_dir.join(DIAGNOSTIC_LOG_FILES[DIAGNOSTIC_LOG_FILES.len() - 1]);
+    let oldest = log_dir.join(config.files[config.files.len() - 1]);
     if oldest.exists() {
         fs::remove_file(&oldest)
             .map_err(|err| format!("failed to remove {}: {}", oldest.display(), err))?;
     }
-    for index in (0..DIAGNOSTIC_LOG_FILES.len() - 1).rev() {
-        let from = log_dir.join(DIAGNOSTIC_LOG_FILES[index]);
+    for index in (0..config.files.len() - 1).rev() {
+        let from = log_dir.join(config.files[index]);
         if from.exists() {
-            let to = log_dir.join(DIAGNOSTIC_LOG_FILES[index + 1]);
+            let to = log_dir.join(config.files[index + 1]);
             fs::rename(&from, &to).map_err(|err| {
                 format!(
                     "failed to rename {} to {}: {}",
@@ -141,6 +142,12 @@ pub(crate) fn rotate_diagnostic_logs_if_needed(log_dir: &Path) -> Result<(), Str
         }
     }
     Ok(())
+}
+
+pub(crate) fn diagnostic_log_config() -> &'static DiagnosticLogConfig {
+    // The public Logs spec deliberately avoids concrete retention values. The
+    // configured policy lives here as implementation defaults.
+    &DEFAULT_DIAGNOSTIC_LOG_CONFIG
 }
 
 pub(crate) fn render_runtime_log_event(

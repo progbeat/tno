@@ -79,8 +79,8 @@ instead of just a red light.
 > Editing files touched by that stash while the check is running can create
 > restore conflicts.
 
-You can also add Markdown specs under `.canon/specs`; `canon check` includes
-them as additional expectations.
+You can also add a generator item to `.canon/check.yml` so `canon check`
+expands Markdown specs under `.canon/specs` into additional expectations.
 
 Keep `.canon/**` policy changes separate from implementation changes.
 `canon check` rejects staged changes that mix them.

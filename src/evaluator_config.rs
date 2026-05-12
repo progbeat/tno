@@ -141,14 +141,19 @@ pub(crate) fn evaluator_runtime_permissions() -> Vec<(String, String)> {
     .into_iter()
     .map(|path| (path.to_string(), "read".to_string()))
     .collect::<Vec<_>>();
-    permissions.push(("~/.codex/sessions".to_string(), "write".to_string()));
-    permissions.push(("~/.codex/sessions/**".to_string(), "write".to_string()));
+    deny_runtime_tree(&mut permissions, "~/.codex/sessions");
+    deny_runtime_tree(&mut permissions, "~/.codex/memories");
     if let Some(home) = env::var_os("HOME").and_then(|home| home.into_string().ok()) {
-        let sessions = format!("{}/.codex/sessions", home.trim_end_matches('/'));
-        permissions.push((sessions.clone(), "write".to_string()));
-        permissions.push((format!("{}/**", sessions), "write".to_string()));
+        let codex_home = format!("{}/.codex", home.trim_end_matches('/'));
+        deny_runtime_tree(&mut permissions, &format!("{}/sessions", codex_home));
+        deny_runtime_tree(&mut permissions, &format!("{}/memories", codex_home));
     }
     permissions
+}
+
+fn deny_runtime_tree(permissions: &mut Vec<(String, String)>, path: &str) {
+    permissions.push((path.to_string(), "none".to_string()));
+    permissions.push((format!("{}/**", path), "none".to_string()));
 }
 
 pub(crate) fn enabled_plugins_config(agent: &AgentConfig) -> Value {

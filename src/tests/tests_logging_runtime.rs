@@ -48,14 +48,15 @@ fn diagnostic_log_rotates_at_start_when_active_file_is_large() {
     let root = git_project("check-log-rotate");
     let log_dir = root.join(".git/canon/logs");
     fs::create_dir_all(&log_dir).unwrap();
-    assert_eq!(DIAGNOSTIC_LOG_MAX_BYTES, 1024 * 1024);
-    assert_eq!(DIAGNOSTIC_LOG_FILES.len(), 8);
+    let config = diagnostic_log_config();
+    assert_eq!(config.max_bytes, 1024 * 1024);
+    assert_eq!(config.files.len(), 8);
     fs::write(
         log_dir.join("0.jsonl"),
-        "x".repeat((DIAGNOSTIC_LOG_MAX_BYTES + 1) as usize),
+        "x".repeat((config.max_bytes + 1) as usize),
     )
     .unwrap();
-    for (index, file_name) in DIAGNOSTIC_LOG_FILES.iter().enumerate().skip(1) {
+    for (index, file_name) in config.files.iter().enumerate().skip(1) {
         fs::write(log_dir.join(file_name), format!("old-{index}")).unwrap();
     }
 
@@ -64,9 +65,9 @@ fn diagnostic_log_rotates_at_start_when_active_file_is_large() {
     assert!(!log_dir.join("0.jsonl").exists());
     assert_eq!(
         fs::read_to_string(log_dir.join("1.jsonl")).unwrap().len(),
-        (DIAGNOSTIC_LOG_MAX_BYTES + 1) as usize
+        (config.max_bytes + 1) as usize
     );
-    for (index, file_name) in DIAGNOSTIC_LOG_FILES.iter().enumerate().skip(2) {
+    for (index, file_name) in config.files.iter().enumerate().skip(2) {
         assert_eq!(
             fs::read_to_string(log_dir.join(file_name)).unwrap(),
             format!("old-{}", index - 1)
@@ -80,9 +81,10 @@ fn append_runtime_log_event_rotates_before_writing() {
     let root = git_project("runtime-log-append-rotate");
     let log_dir = root.join(".git/canon/logs");
     fs::create_dir_all(&log_dir).unwrap();
+    let config = diagnostic_log_config();
     fs::write(
         log_dir.join("0.jsonl"),
-        "x".repeat((DIAGNOSTIC_LOG_MAX_BYTES + 1) as usize),
+        "x".repeat((config.max_bytes + 1) as usize),
     )
     .unwrap();
 
@@ -92,7 +94,7 @@ fn append_runtime_log_event_rotates_before_writing() {
     assert!(active.contains(r#""event":"worktree.restore.failed""#));
     assert_eq!(
         fs::read_to_string(log_dir.join("1.jsonl")).unwrap().len(),
-        (DIAGNOSTIC_LOG_MAX_BYTES + 1) as usize
+        (config.max_bytes + 1) as usize
     );
     let _ = fs::remove_dir_all(root);
 }

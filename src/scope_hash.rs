@@ -137,9 +137,6 @@ pub(crate) fn sanitize_scope_for_hash(scope: &[String]) -> Result<Vec<String>, S
         if path != "." && (path.contains('*') || path.contains('?')) {
             return Err(format!("scope paths must not be globs: {}", path));
         }
-        if path != "." && is_scope_hash_ignored_path(&path) {
-            return Err(format!("scope path is denied: {}", path));
-        }
         if path == "." {
             has_full_scope = true;
             continue;
@@ -180,9 +177,7 @@ pub(crate) fn staged_scope_entries(root: &Path, scope: &[String]) -> Result<Vec<
     let mut entries = Vec::new();
     for line in stdout.lines() {
         if let Some((metadata, path)) = line.split_once('\t') {
-            if !is_scope_hash_ignored_path(path) {
-                entries.push(normalize_index_metadata(metadata, path)?);
-            }
+            entries.push(normalize_index_metadata(metadata, path)?);
         }
     }
     entries.sort();
@@ -232,20 +227,12 @@ pub(crate) fn head_scope_entries_for_existing_head(
     let mut entries = Vec::new();
     for line in stdout.lines() {
         if let Some((metadata, path)) = line.split_once('\t') {
-            if !is_scope_hash_ignored_path(path) {
-                entries.push(normalize_head_metadata(metadata, path)?);
-            }
+            entries.push(normalize_head_metadata(metadata, path)?);
         }
     }
     entries.sort();
     entries.dedup();
     Ok(entries)
-}
-
-pub(crate) fn is_scope_hash_ignored_path(path: &str) -> bool {
-    MANDATORY_EVALUATOR_DENY_PATTERNS
-        .iter()
-        .any(|pattern| path_matches_pattern(path, pattern))
 }
 
 pub(crate) fn git_has_head(root: &Path) -> Result<bool, String> {

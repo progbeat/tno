@@ -19,10 +19,13 @@ const B64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxy
 const CHECK_PATH: &str = ".canon/check.yml";
 const GIT_CANON_CACHE_DIR: &str = "canon/cache";
 const GIT_CANON_LOG_DIR: &str = "canon/logs";
-const DIAGNOSTIC_LOG_MAX_BYTES: u64 = 1024 * 1024;
-const DIAGNOSTIC_LOG_FILES: [&str; 8] = [
+const DEFAULT_DIAGNOSTIC_LOG_FILES: [&str; 8] = [
     "0.jsonl", "1.jsonl", "2.jsonl", "3.jsonl", "4.jsonl", "5.jsonl", "6.jsonl", "7.jsonl",
 ];
+const DEFAULT_DIAGNOSTIC_LOG_CONFIG: DiagnosticLogConfig = DiagnosticLogConfig {
+    max_bytes: 1024 * 1024,
+    files: &DEFAULT_DIAGNOSTIC_LOG_FILES,
+};
 const HISTORY_COMPACT_KEEP_RECORDS: usize = 5;
 const HISTORY_COMPACT_SAMPLE_INTERVAL: u64 = 15;
 const APP_SERVER_TURN_TIMEOUT_SECS: u64 = 300;
@@ -42,6 +45,11 @@ const UNPARSEABLE_OBSERVED: &str = "unparseable";
 static CHECK_INTERRUPTED: AtomicBool = AtomicBool::new(false);
 static COMPACTION_SAMPLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SIGNAL_HANDLER_INIT: Once = Once::new();
+
+pub(crate) struct DiagnosticLogConfig {
+    pub(crate) max_bytes: u64,
+    pub(crate) files: &'static [&'static str],
+}
 
 #[cfg(unix)]
 unsafe extern "C" {

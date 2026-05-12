@@ -31,6 +31,27 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
         config["permissions"]["canon_check"]["filesystem"]["~/.codex/tmp/**"],
         "read"
     );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["~/.codex/sessions"],
+        "none"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["~/.codex/sessions/**"],
+        "none"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["~/.codex/memories"],
+        "none"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["~/.codex/memories/**"],
+        "none"
+    );
+    assert!(config["permissions"]["canon_check"]["filesystem"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|permission| permission != "write"));
     assert_eq!(config["history"]["persistence"], "none");
     assert!(config.get("plugins").is_none());
 }
@@ -123,6 +144,11 @@ fn app_server_starts_with_plugins_disabled_by_default() {
     assert!(filesystem_arg.contains(r#""target/**"="none""#));
     assert!(filesystem_arg.contains(r#"":root"="read""#));
     assert!(filesystem_arg.contains(r#""glob_scan_max_depth"=32"#));
+    assert!(filesystem_arg.contains(r#""~/.codex/sessions"="none""#));
+    assert!(filesystem_arg.contains(r#""~/.codex/sessions/**"="none""#));
+    assert!(filesystem_arg.contains(r#""~/.codex/memories"="none""#));
+    assert!(filesystem_arg.contains(r#""~/.codex/memories/**"="none""#));
+    assert!(!filesystem_arg.contains(r#""write""#));
     assert!(!filesystem_arg.contains(r#""."="read""#));
 
     let enabled = app_server_args(true, &config.agent);

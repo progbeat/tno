@@ -203,3 +203,22 @@ expectations:
     );
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn scope_hash_includes_tracked_canon_paths() {
+    let root = git_project("history-scope-hash-includes-canon");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let before = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    write_check_config(&root);
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    let after = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+
+    assert_ne!(before, after);
+    let _ = fs::remove_dir_all(root);
+}
