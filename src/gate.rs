@@ -98,17 +98,9 @@ pub(crate) fn select_expectations_for_gate(
     history_cache: &mut HistoryCache,
     now: u64,
 ) -> Result<Vec<SelectedExpectation>, String> {
-    // This constructs the spec-level `selected_expectations` argument passed to
-    // gate(...). This is the cooldown spec's deselection rule: "When cooldown
-    // applies, the expectation is removed from the selected expectation set."
-    let mut remaining = Vec::new();
-    for expectation in select_expectations(config, args)? {
-        if cooldown_history_record(root, &config.agent, &expectation, history_cache, now)?.is_none()
-        {
-            remaining.push(expectation);
-        }
-    }
-    Ok(remaining)
+    let selected = select_expectations(config, args)?;
+    final_selected_expectations(root, &config.agent, selected, history_cache, now)
+        .map(|selection| selection.selected)
 }
 
 #[derive(Debug, Clone)]

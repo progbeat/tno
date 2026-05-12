@@ -26,29 +26,24 @@ pub(crate) fn reusable_history_record_for_source(
     history_cache: &mut HistoryCache,
     scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<Option<CheckRecord>, String> {
-    let records = history_cache.read_records(root, expectation)?;
-    for mut record in records.into_iter().rev() {
-        if !is_reusable_history_record(&record) {
-            continue;
-        }
-        let scope = match sanitize_scope_for_hash(&record.scope) {
-            Ok(scope) => scope,
-            Err(_) => continue,
+    scan_latest_history_records(root, expectation, history_cache, |mut record| {
+        let Some(scope) = sanitized_reusable_history_scope(&record) else {
+            return Ok(HistoryRecordScan::Continue);
         };
         let Some(current_hash) =
             scope_hash_cache.scope_hash_for_source(root, agent, &scope, source)?
         else {
-            continue;
+            return Ok(HistoryRecordScan::Continue);
         };
         if current_hash == record.scope_hash {
             record.scope = scope;
             record.number = expectation.number;
             record.prompt = expectation.q.clone();
             record.expected = expectation.a.clone();
-            return Ok(Some(record));
+            return Ok(HistoryRecordScan::Done(Some(record)));
         }
-    }
-    Ok(None)
+        Ok(HistoryRecordScan::Continue)
+    })
 }
 
 pub(crate) fn cooldown_history_record(
@@ -61,26 +56,24 @@ pub(crate) fn cooldown_history_record(
     let Some(cooldown) = expectation.cooldown else {
         return Ok(None);
     };
-    let records = history_cache.read_records(root, expectation)?;
-    for record in records.into_iter().rev() {
+    scan_latest_history_records(root, expectation, history_cache, |record| {
         let Some(timestamp) = parse_log_record_timestamp(&record.timestamp) else {
-            continue;
+            return Ok(HistoryRecordScan::Continue);
         };
         // Cooldown keys off the latest valid history record, not the latest
         // reusable answer record. This is why a newer fail or human-review-style
         // record blocks cooldown reuse of an older pass: after a failed check,
         // the old pass is no longer the spec-defined fresh cooldown pass.
         if !record.passed() {
-            return Ok(None);
+            return Ok(HistoryRecordScan::Done(None));
         }
         if now.saturating_sub(timestamp) >= cooldown.seconds {
-            return Ok(None);
+            return Ok(HistoryRecordScan::Done(None));
         }
         // Cooldown is deliberately independent of scopeHash. It is the
         // spec-defined exception to exact cache lookup for expensive checks.
-        return Ok(Some(record));
-    }
-    Ok(None)
+        Ok(HistoryRecordScan::Done(Some(record)))
+    })
 }
 
 pub(crate) fn latest_history_scope_with_cache(
@@ -91,20 +84,45 @@ pub(crate) fn latest_history_scope_with_cache(
 ) -> Result<Option<Vec<String>>, String> {
     // This returns only an enforced-scope seed for a fresh interrogation. It is
     // not a cached check result and does not let callers skip evaluator work.
+    scan_latest_history_records(root, expectation, history_cache, |record| {
+        Ok(match sanitized_reusable_history_scope(&record) {
+            Some(scope) => HistoryRecordScan::Done(Some(scope)),
+            None => HistoryRecordScan::Continue,
+        })
+    })
+}
+
+enum HistoryRecordScan<T> {
+    Continue,
+    Done(Option<T>),
+}
+
+fn scan_latest_history_records<T>(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+    mut scan: impl FnMut(CheckRecord) -> Result<HistoryRecordScan<T>, String>,
+) -> Result<Option<T>, String> {
     let records = history_cache.read_records(root, expectation)?;
     for record in records.into_iter().rev() {
-        if !is_reusable_history_record(&record) {
-            continue;
-        }
-        if let Ok(scope) = sanitize_scope_for_hash(&record.scope) {
-            return Ok(Some(scope));
+        match scan(record)? {
+            HistoryRecordScan::Continue => {}
+            HistoryRecordScan::Done(value) => return Ok(value),
         }
     }
     Ok(None)
+}
+
+fn sanitized_reusable_history_scope(record: &CheckRecord) -> Option<Vec<String>> {
+    if !is_reusable_history_record(record) {
+        return None;
+    }
+    sanitize_scope_for_hash(&record.scope).ok()
 }
 
 pub(crate) fn is_reusable_history_record(record: &CheckRecord) -> bool {
     record.observed != OBSERVED_IDK
         && record.observed != OBSERVED_MALFORMED
         && record.observed != UNPARSEABLE_OBSERVED
+        && record.observed != EMPTY_EVIDENCE_OBSERVED
 }

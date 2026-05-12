@@ -22,8 +22,11 @@ pub(crate) fn parse_check_options(
             numbers.push(arg.clone());
         }
     }
+    let selected = select_expectations(config, &numbers)?;
+    let skipped = config.expectations.len().saturating_sub(selected.len());
     Ok(CheckOptions {
-        selected: select_expectations(config, &numbers)?,
+        selected,
+        skipped,
         fail_fast,
         ignore_cache,
     })
@@ -33,6 +36,9 @@ pub(crate) fn select_expectations(
     config: &CheckConfig,
     args: &[OsString],
 ) -> Result<Vec<SelectedExpectation>, String> {
+    // This expands command-line expectation numbers into the candidate set.
+    // The final selected set is resolved later, after cooldown and reusable
+    // passing cache-hit deselection.
     let mut selected_numbers = Vec::new();
     if args.is_empty() {
         selected_numbers.extend(1..=config.expectations.len());
@@ -76,6 +82,37 @@ pub(crate) fn select_expectations(
             })
         })
         .collect::<Result<Vec<_>, _>>()
+}
+
+pub(crate) struct FinalSelection {
+    pub(crate) selected: Vec<SelectedExpectation>,
+    pub(crate) skipped: usize,
+}
+
+pub(crate) fn final_selected_expectations(
+    root: &Path,
+    agent: &AgentConfig,
+    selected: Vec<SelectedExpectation>,
+    history_cache: &mut HistoryCache,
+    now: u64,
+) -> Result<FinalSelection, String> {
+    // CLI number filtering happens before this function. This is the shared
+    // final-selection step for `canon check` and `canon gate`: cooldown removes
+    // matching expectations from the selected set before cache reuse or gate
+    // comparison.
+    let mut remaining = Vec::new();
+    let mut skipped = 0usize;
+    for expectation in selected {
+        if cooldown_history_record(root, agent, &expectation, history_cache, now)?.is_none() {
+            remaining.push(expectation);
+        } else {
+            skipped += 1;
+        }
+    }
+    Ok(FinalSelection {
+        selected: remaining,
+        skipped,
+    })
 }
 
 pub(crate) fn parse_cooldown(value: &str) -> Result<Cooldown, String> {

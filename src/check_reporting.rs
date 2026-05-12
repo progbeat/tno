@@ -32,7 +32,7 @@ pub(crate) fn write_check_finish_report_event(
             passed: report_passed_count(report),
             failed: report_failed_count(report),
             errors: report_error_count(report),
-            skipped: report.skipped,
+            skipped: report_output_skipped_count(report),
             narrowing: report.narrowing,
         },
         error,

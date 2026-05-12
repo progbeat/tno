@@ -240,6 +240,10 @@ pub(crate) fn append_json_string_array_field(
     append_json_separator(output, first);
     push_json_string(output, key);
     output.push(':');
+    append_json_string_array(output, values);
+}
+
+pub(crate) fn append_json_string_array(output: &mut String, values: &[String]) {
     output.push('[');
     for (index, value) in values.iter().enumerate() {
         if index > 0 {

@@ -75,6 +75,8 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
     };
     let mut output = String::new();
     output.push_str(&format!("{}. {}\n", record.number, status));
+    // This is the spec's `<escaped question>` line, not an extra line beyond
+    // the six-line failed and five-line error layouts.
     output.push_str(&escape_check_output_text(&record.prompt));
     output.push('\n');
     output.push_str("Expected: ");
@@ -97,6 +99,9 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
 pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
     // Summary order is fixed to match the spec and pytest-style labels:
     // failed, error/errors, passed, skipped.
+    // `report.skipped` is the selection complement, so
+    // `report.selected + report.skipped` covers the active check configuration.
+    // The public summary's skipped label is this same non-selected count.
     let mut passed = 0usize;
     let mut failed = 0usize;
     let mut errors = 0usize;
@@ -109,7 +114,6 @@ pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -
             failed += 1;
         }
     }
-    passed = passed.saturating_sub(report.skipped);
     let mut outcomes = Vec::new();
     if failed > 0 {
         outcomes.push(format!("{} failed", failed));
@@ -124,8 +128,9 @@ pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -
     if passed > 0 {
         outcomes.push(format!("{} passed", passed));
     }
-    if report.skipped > 0 {
-        outcomes.push(format!("{} skipped", report.skipped));
+    let skipped = report_output_skipped_count(report);
+    if skipped > 0 {
+        outcomes.push(format!("{} skipped", skipped));
     }
     if outcomes.is_empty() {
         outcomes.push("0 passed".to_string());
@@ -151,19 +156,13 @@ pub(crate) fn record_requires_human_review(record: &CheckRecord) -> bool {
     // human-review state described by the check-output contract.
     record.observed == OBSERVED_MALFORMED
         || record.observed == UNPARSEABLE_OBSERVED
+        || record.observed == EMPTY_EVIDENCE_OBSERVED
         || record.observed == OBSERVED_IDK
 }
 
 pub(crate) fn compact_json_string_array(values: &[String]) -> String {
     let mut output = String::new();
-    output.push('[');
-    for (index, value) in values.iter().enumerate() {
-        if index > 0 {
-            output.push(',');
-        }
-        push_json_string(&mut output, value);
-    }
-    output.push(']');
+    append_json_string_array(&mut output, values);
     output
 }
 

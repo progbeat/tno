@@ -153,12 +153,15 @@ pub(crate) fn check_options(
     fail_fast: bool,
     ignore_cache: bool,
 ) -> CheckOptions {
+    let selected = select_expectations(
+        config,
+        &numbers.iter().map(OsString::from).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let skipped = config.expectations.len().saturating_sub(selected.len());
     CheckOptions {
-        selected: select_expectations(
-            config,
-            &numbers.iter().map(OsString::from).collect::<Vec<_>>(),
-        )
-        .unwrap(),
+        selected,
+        skipped,
         fail_fast,
         ignore_cache,
     }

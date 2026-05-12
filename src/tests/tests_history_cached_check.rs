@@ -87,9 +87,99 @@ fn check_runner_skips_cached_pass_without_result_output() {
     )
     .unwrap();
 
-    assert_eq!(report.skipped, 1);
+    assert_eq!(report.selected, 0);
+    assert_eq!(report.skipped, 2);
+    assert_eq!(report.silent, 1);
+    assert_eq!(report.selected + report.skipped, config.expectations.len());
+    assert_eq!(report_output_skipped_count(&report), 2);
     assert_eq!(runner.starts, 0);
     assert_eq!(output.flushes, 0);
     assert!(output.bytes.is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_deselects_fresh_cooldown_pass_before_cache_reuse() {
+    let root = git_project("check-cooldown-deselect");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#,
+    )
+    .unwrap();
+    let options = check_options(&config, &[], false, false);
+    let expectation = options.selected[0].clone();
+    let old_hash = "old-scope".to_string();
+    let mut record = expectation_record(&config.agent, &expectation, "pass", "yes", old_hash);
+    record.timestamp = format_log_record_timestamp(unix_timestamp().unwrap());
+    append_history_record(&root, &expectation, &record).unwrap();
+    let mut runner = FakeRunner::new(&[]);
+    let mut output = FlushCountingWriter::new();
+
+    let report = run_check_with_runner(
+        &root,
+        &root,
+        &config,
+        &options,
+        &mut runner,
+        None,
+        Some(&mut output),
+    )
+    .unwrap();
+
+    assert!(report.records.is_empty());
+    assert_eq!(report.selected, 0);
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.silent, 1);
+    assert_eq!(report.selected + report.skipped, config.expectations.len());
+    assert_eq!(report_output_skipped_count(&report), 1);
+    assert_eq!(runner.starts, 0);
+    assert!(output.bytes.is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_ignore_cache_still_deselects_fresh_cooldown_pass() {
+    let root = git_project("check-cooldown-ignore-cache");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#,
+    )
+    .unwrap();
+    let options = check_options(&config, &[], false, true);
+    let expectation = options.selected[0].clone();
+    let old_hash = "old-scope".to_string();
+    let mut record = expectation_record(&config.agent, &expectation, "pass", "yes", old_hash);
+    record.timestamp = format_log_record_timestamp(unix_timestamp().unwrap());
+    append_history_record(&root, &expectation, &record).unwrap();
+    let mut runner = FakeRunner::new(&[]);
+
+    let report =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(report.len(), 0);
+    assert_eq!(report.selected, 0);
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.silent, 1);
+    assert_eq!(report.selected + report.skipped, config.expectations.len());
+    assert_eq!(report_output_skipped_count(&report), 1);
+    assert_eq!(runner.starts, 0);
     let _ = fs::remove_dir_all(root);
 }

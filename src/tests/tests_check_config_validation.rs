@@ -112,5 +112,6 @@ fn check_options_accept_fail_fast_with_selected_numbers() {
     assert!(options.fail_fast);
     assert_eq!(options.selected.len(), 1);
     assert_eq!(options.selected[0].number, 2);
+    assert_eq!(options.skipped, 1);
     assert!(parse_check_options(&config, &["--fail-fast".into(), "--fail-fast".into()]).is_err());
 }

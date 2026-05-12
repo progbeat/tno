@@ -6,22 +6,7 @@ impl AppServerRunner {
         method: &str,
         params: Value,
     ) -> Result<Value, EvaluatorError> {
-        if check_interrupted() {
-            return Err("interrupted".into());
-        }
-        let id = self.next_id;
-        self.next_id += 1;
-        let request = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params
-        });
-        writeln!(self.stdin, "{}", request)
-            .map_err(|err| format!("failed to write app-server request: {}", err))?;
-        self.stdin
-            .flush()
-            .map_err(|err| format!("failed to flush app-server request: {}", err))?;
+        let id = self.send_json_rpc_request(method, &params, "request")?;
         loop {
             if check_interrupted() {
                 return Err("interrupted".into());
@@ -47,22 +32,7 @@ impl AppServerRunner {
         method: &str,
         params: Value,
     ) -> Result<String, EvaluatorError> {
-        if check_interrupted() {
-            return Err("interrupted".into());
-        }
-        let id = self.next_id;
-        self.next_id += 1;
-        let request = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params
-        });
-        writeln!(self.stdin, "{}", request)
-            .map_err(|err| format!("failed to write app-server request: {}", err))?;
-        self.stdin
-            .flush()
-            .map_err(|err| format!("failed to flush app-server request: {}", err))?;
+        let id = self.send_json_rpc_request(method, &params, "request")?;
 
         let mut saw_response = false;
         let mut saw_completed = false;
@@ -186,23 +156,37 @@ impl AppServerRunner {
         thread_id: &str,
         turn_id: &str,
     ) -> Result<(), EvaluatorError> {
+        let params = json!({
+            "threadId": thread_id,
+            "turnId": turn_id
+        });
+        self.send_json_rpc_request("turn/interrupt", &params, "interrupt")?;
+        Ok(())
+    }
+
+    fn send_json_rpc_request(
+        &mut self,
+        method: &str,
+        params: &Value,
+        operation: &str,
+    ) -> Result<u64, EvaluatorError> {
+        if check_interrupted() {
+            return Err("interrupted".into());
+        }
         let id = self.next_id;
         self.next_id += 1;
         let request = json!({
             "jsonrpc": "2.0",
             "id": id,
-            "method": "turn/interrupt",
-            "params": {
-                "threadId": thread_id,
-                "turnId": turn_id
-            }
+            "method": method,
+            "params": params
         });
         writeln!(self.stdin, "{}", request)
-            .map_err(|err| format!("failed to write app-server interrupt: {}", err))?;
+            .map_err(|err| format!("failed to write app-server {}: {}", operation, err))?;
         self.stdin
             .flush()
-            .map_err(|err| format!("failed to flush app-server interrupt: {}", err))?;
-        Ok(())
+            .map_err(|err| format!("failed to flush app-server {}: {}", operation, err))?;
+        Ok(id)
     }
 
     fn read_message(&mut self) -> Result<Value, EvaluatorError> {

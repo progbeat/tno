@@ -27,31 +27,26 @@ pub(crate) fn read_history_records_from_path(path: &Path) -> Result<Vec<CheckRec
         return Ok(Vec::new());
     }
     let mut records = Vec::new();
-    let file = fs::File::open(path)
-        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
-    for (index, line) in BufReader::new(file).lines().enumerate() {
-        let line = line.map_err(|err| {
-            format!(
-                "failed to read {} line {}: {}",
-                path.display(),
-                index + 1,
-                err
-            )
-        })?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let record = serde_json::from_str::<CheckRecord>(&line).map_err(|err| {
-            format!(
-                "invalid history JSON in {} line {}: {}",
-                path.display(),
-                index + 1,
-                err
-            )
-        })?;
-        records.push(record);
-    }
+    for_each_nonempty_line(path, |line_number, line| {
+        records.push(parse_history_record_line(path, line_number, &line)?);
+        Ok(())
+    })?;
     Ok(records)
+}
+
+pub(crate) fn parse_history_record_line(
+    path: &Path,
+    line_number: usize,
+    line: &str,
+) -> Result<CheckRecord, String> {
+    serde_json::from_str::<CheckRecord>(line).map_err(|err| {
+        format!(
+            "invalid history JSON in {} line {}: {}",
+            path.display(),
+            line_number,
+            err
+        )
+    })
 }
 
 #[derive(Default)]

@@ -1,6 +1,17 @@
 use crate::*;
 
 pub(crate) fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, String> {
+    sanitize_scope_paths(scope, Some(agent))
+}
+
+pub(crate) fn sanitize_scope_for_hash(scope: &[String]) -> Result<Vec<String>, String> {
+    sanitize_scope_paths(scope, None)
+}
+
+fn sanitize_scope_paths(
+    scope: &[String],
+    denied_agent: Option<&AgentConfig>,
+) -> Result<Vec<String>, String> {
     if scope.is_empty() {
         return Err("scope must not be empty".to_string());
     }
@@ -11,7 +22,7 @@ pub(crate) fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Ve
         if path != "." && (path.contains('*') || path.contains('?')) {
             return Err(format!("scope paths must not be globs: {}", path));
         }
-        if path != "." && is_denied_path(agent, &path) {
+        if path != "." && denied_agent.is_some_and(|agent| is_denied_path(agent, &path)) {
             return Err(format!("scope path is denied: {}", path));
         }
         if path == "." {

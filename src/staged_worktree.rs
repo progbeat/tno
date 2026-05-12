@@ -62,17 +62,12 @@ impl Drop for StagedWorktreeView {
                     .status();
             }
             Err(err) => {
-                if let Err(log_err) = append_runtime_log_event(
+                let _ = append_runtime_log_event(
                     &self.root,
                     "error",
                     "worktree.restore.failed",
                     &[("stash", json!(stash_ref)), ("error", json!(err))],
-                ) {
-                    eprintln!(
-                        "canon: failed to write worktree restore diagnostic: {}; original restore error: {}",
-                        log_err, err
-                    );
-                }
+                );
             }
         }
     }

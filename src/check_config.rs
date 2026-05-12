@@ -8,23 +8,17 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
     while index < args.len() {
         let arg = arg_to_string(&args[index])?;
         if arg == "--config" || arg == "-c" {
-            if config_path.is_some() {
-                return Err("duplicate --config".to_string());
-            }
             index += 1;
             let value = args
                 .get(index)
                 .ok_or_else(|| format!("{} requires a path", arg))?;
             let value = arg_to_string(value)?;
-            config_path = Some(normalize_check_config_path(&value)?);
+            set_check_config_path(&mut config_path, &value)?;
         } else if let Some(value) = arg.strip_prefix("--config=") {
-            if config_path.is_some() {
-                return Err("duplicate --config".to_string());
-            }
             if value.is_empty() {
                 return Err("--config requires a path".to_string());
             }
-            config_path = Some(normalize_check_config_path(value)?);
+            set_check_config_path(&mut config_path, value)?;
         } else if arg == "-q" {
             if query.is_some() {
                 return Err("duplicate -q".to_string());
@@ -54,6 +48,14 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
         query,
         option_args,
     })
+}
+
+fn set_check_config_path(config_path: &mut Option<PathBuf>, value: &str) -> Result<(), String> {
+    if config_path.is_some() {
+        return Err("duplicate --config".to_string());
+    }
+    *config_path = Some(normalize_check_config_path(value)?);
+    Ok(())
 }
 
 pub(crate) fn normalize_check_config_path(value: &str) -> Result<PathBuf, String> {

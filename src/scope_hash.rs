@@ -126,30 +126,6 @@ pub(crate) fn scope_hash_for_canonical_scope(
     Ok(entries.map(|entries| hash_120(entries.join("\n").as_bytes())))
 }
 
-pub(crate) fn sanitize_scope_for_hash(scope: &[String]) -> Result<Vec<String>, String> {
-    if scope.is_empty() {
-        return Err("scope must not be empty".to_string());
-    }
-    let mut normalized = Vec::new();
-    let mut has_full_scope = false;
-    for path in scope {
-        let path = normalize_repo_path(path)?;
-        if path != "." && (path.contains('*') || path.contains('?')) {
-            return Err(format!("scope paths must not be globs: {}", path));
-        }
-        if path == "." {
-            has_full_scope = true;
-            continue;
-        }
-        normalized.push(path);
-    }
-    if has_full_scope || normalized.is_empty() {
-        Ok(full_scope())
-    } else {
-        Ok(canonicalize_scope_paths(normalized))
-    }
-}
-
 pub(crate) fn staged_scope_entries(root: &Path, scope: &[String]) -> Result<Vec<String>, String> {
     let mut command = Command::new("git");
     command

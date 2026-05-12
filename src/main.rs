@@ -42,6 +42,7 @@ const OBSERVED_MALFORMED: &str = "malformed";
 const MALFORMED_REVIEW_WARNING: &str =
     "human review required: evaluator marked the expectation question as malformed";
 const UNPARSEABLE_OBSERVED: &str = "unparseable";
+const EMPTY_EVIDENCE_OBSERVED: &str = "empty-evidence";
 static CHECK_INTERRUPTED: AtomicBool = AtomicBool::new(false);
 static COMPACTION_SAMPLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SIGNAL_HANDLER_INIT: Once = Once::new();

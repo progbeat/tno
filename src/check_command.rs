@@ -108,15 +108,7 @@ pub(crate) fn prepare_check_execution(
 ) -> Result<PreparedCheckExecution, String> {
     if let Err(err) = staged_changed_paths(root).and_then(|paths| fail_on_mixed_canon_paths(&paths))
     {
-        write_check_finish_event(
-            diagnostic_log,
-            query,
-            CheckFinishStats {
-                errors: errors_on_failure,
-                ..CheckFinishStats::default()
-            },
-            Some(&err),
-        )?;
+        write_prepare_check_failure(diagnostic_log, query, errors_on_failure, &err)?;
         return Err(err);
     }
     // Apply the staged Git snapshot as an in-place index view: unstaged and
@@ -128,15 +120,7 @@ pub(crate) fn prepare_check_execution(
     let staged_view = match StagedWorktreeView::apply(root) {
         Ok(staged_view) => staged_view,
         Err(err) => {
-            write_check_finish_event(
-                diagnostic_log,
-                query,
-                CheckFinishStats {
-                    errors: errors_on_failure,
-                    ..CheckFinishStats::default()
-                },
-                Some(&err),
-            )?;
+            write_prepare_check_failure(diagnostic_log, query, errors_on_failure, &err)?;
             return Err(err);
         }
     };
@@ -145,4 +129,21 @@ pub(crate) fn prepare_check_execution(
         _staged_view: staged_view,
         runner,
     })
+}
+
+fn write_prepare_check_failure(
+    diagnostic_log: &mut DiagnosticLogWriter,
+    query: bool,
+    errors_on_failure: usize,
+    err: &str,
+) -> Result<(), String> {
+    write_check_finish_event(
+        diagnostic_log,
+        query,
+        CheckFinishStats {
+            errors: errors_on_failure,
+            ..CheckFinishStats::default()
+        },
+        Some(err),
+    )
 }

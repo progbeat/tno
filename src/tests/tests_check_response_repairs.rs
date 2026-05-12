@@ -80,17 +80,34 @@ fn check_runner_parse_retry_repeats_same_question() {
 }
 
 #[test]
-fn check_runner_warns_when_evidence_stays_empty() {
+fn check_runner_requires_human_review_when_evidence_stays_empty() {
     let root = git_project("check-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[&answer("yes", "", &["."]), &answer("yes", "", &["."])]);
-    let records =
-        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(records[0].passed());
-    assert!(records[0].evidence.is_empty());
+    let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
+    let records = run_check_with_runner(
+        &root,
+        &root,
+        &config,
+        &options,
+        &mut runner,
+        Some(&mut diagnostic_log),
+        None,
+    )
+    .unwrap();
+    assert!(!records[0].passed());
+    assert!(record_requires_human_review(&records[0]));
+    assert_eq!(records[0].observed, EMPTY_EVIDENCE_OBSERVED);
+    assert!(records[0].evidence.contains("empty after retry"));
     assert_eq!(runner.prompts.len(), 2);
     assert_eq!(runner.prompts[1], runner.prompts[0]);
+    let log = fs::read_to_string(diagnostic_log.path).unwrap();
+    assert!(log.contains(r#""event":"review.required""#));
+    assert!(log.contains(r#""reason":"empty evaluator evidence""#));
+    assert!(read_history_records(&root, &options.selected[0])
+        .unwrap()
+        .is_empty());
     let _ = fs::remove_dir_all(root);
 }
 

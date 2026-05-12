@@ -32,7 +32,50 @@ pub(crate) fn finalize_interrogation_response(
     Ok(InterrogationResult { record })
 }
 
-fn enforce_response_scope(response: ParsedAnswer, enforced_scope: &[String]) -> ParsedAnswer {
+pub(crate) fn finalize_query_response(
+    runtime: &CheckRuntime<'_>,
+    question: &str,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    state: &mut InterrogationState,
+    response: ParsedAnswer,
+) -> Result<QueryInterrogationResult, EvaluatorError> {
+    let enforced_scope = full_scope();
+    let mut response = enforce_response_scope(response, &enforced_scope);
+    if response.answer == UNPARSEABLE_OBSERVED {
+        response.scope = enforced_scope;
+    }
+    let scope_hash = state.scope_hash_cache.staged_scope_hash(
+        runtime.root,
+        &runtime.config.agent,
+        &response.scope,
+    )?;
+    write_parsed_answer_review_events(
+        diagnostic_log,
+        0,
+        &full_scope(),
+        &response.answer,
+        &response.evidence,
+    )?;
+    if let Some(writer) = diagnostic_log.as_deref_mut() {
+        writer.write_event(
+            "info",
+            "query.result",
+            &[
+                ("prompt", json!(question)),
+                ("observed", json!(response.answer.clone())),
+                ("evidence", json!(response.evidence.clone())),
+                ("scope", json!(response.scope.clone())),
+                ("scopeHash", json!(scope_hash.clone())),
+            ],
+        )?;
+    }
+    Ok(QueryInterrogationResult { answer: response })
+}
+
+pub(crate) fn enforce_response_scope(
+    response: ParsedAnswer,
+    enforced_scope: &[String],
+) -> ParsedAnswer {
     if response.answer == UNPARSEABLE_OBSERVED || scope_is_within(&response.scope, enforced_scope) {
         return response;
     }
@@ -77,16 +120,35 @@ fn write_review_events(
     enforced_scope: &[String],
     record: &CheckRecord,
 ) -> Result<(), EvaluatorError> {
-    if record.observed == OBSERVED_MALFORMED {
+    write_parsed_answer_review_events(
+        diagnostic_log,
+        number,
+        enforced_scope,
+        &record.observed,
+        &record.evidence,
+    )
+}
+
+pub(crate) fn write_parsed_answer_review_events(
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    number: usize,
+    enforced_scope: &[String],
+    observed: &str,
+    evidence: &str,
+) -> Result<(), EvaluatorError> {
+    if observed == OBSERVED_MALFORMED {
         write_review_required(diagnostic_log, number, MALFORMED_REVIEW_WARNING)?;
     }
-    if record.observed == UNPARSEABLE_OBSERVED {
+    if observed == UNPARSEABLE_OBSERVED {
         write_review_required(diagnostic_log, number, "unparseable evaluator response")?;
     }
-    if record.observed == OBSERVED_IDK && enforced_scope == full_scope() {
+    if observed == EMPTY_EVIDENCE_OBSERVED {
+        write_review_required(diagnostic_log, number, "empty evaluator evidence")?;
+    }
+    if observed == OBSERVED_IDK && enforced_scope == full_scope() {
         write_review_required(diagnostic_log, number, "full-scope idk")?;
     }
-    if record.evidence.trim().is_empty() {
+    if evidence.trim().is_empty() {
         if let Some(writer) = diagnostic_log.as_deref_mut() {
             writer.write_event("warn", "evidence.empty", &[("number", json!(number))])?;
         }

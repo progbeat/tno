@@ -158,7 +158,11 @@ pub(crate) struct CheckRecord {
 }
 
 pub(crate) struct CheckOptions {
+    // CLI-expanded expectation candidates. This is not the final selected set:
+    // cooldown and reusable passing cache hits can remove candidates before the
+    // check report records its selected/skipped counts.
     pub(crate) selected: Vec<SelectedExpectation>,
+    pub(crate) skipped: usize,
     pub(crate) fail_fast: bool,
     pub(crate) ignore_cache: bool,
 }
@@ -187,7 +191,9 @@ pub(crate) struct NarrowingStats {
 #[derive(Debug, Clone)]
 pub(crate) struct CheckRunReport {
     pub(crate) records: Vec<CheckRecord>,
+    pub(crate) selected: usize,
     pub(crate) skipped: usize,
+    pub(crate) silent: usize,
     pub(crate) narrowing: NarrowingStats,
 }
 
@@ -199,7 +205,9 @@ pub(crate) struct CheckRunError {
 
 pub(crate) fn check_run_error(
     records: &[CheckRecord],
+    selected: usize,
     skipped: usize,
+    silent: usize,
     narrowing: NarrowingStats,
     error: String,
 ) -> CheckRunError {
@@ -207,7 +215,9 @@ pub(crate) fn check_run_error(
         error,
         report: CheckRunReport {
             records: records.to_vec(),
+            selected,
             skipped,
+            silent,
             narrowing,
         },
     }

@@ -38,6 +38,27 @@ fn check_output_escapes_non_ascii_control_characters() {
 }
 
 #[test]
+fn check_output_failed_and_error_records_use_specified_line_counts() {
+    let mut record = CheckRecord {
+        timestamp: "1970-01-01T00:00:00Z".to_string(),
+        number: 7,
+        result: CheckResult::Fail,
+        prompt: "Question?".to_string(),
+        expected: "yes".to_string(),
+        observed: "no".to_string(),
+        evidence: "evidence".to_string(),
+        scope: vec!["src".to_string()],
+        scope_hash: "hash".to_string(),
+        cache_key: None,
+    };
+
+    assert_eq!(render_check_output_record(&record).lines().count(), 6);
+
+    record.observed = OBSERVED_IDK.to_string();
+    assert_eq!(render_check_output_record(&record).lines().count(), 5);
+}
+
+#[test]
 fn query_mode_uses_agent_and_does_not_write_history() {
     let root = git_project("query-mode");
     let config = parse_check_config(check_config_yaml()).unwrap();

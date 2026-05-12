@@ -83,7 +83,8 @@ pub(crate) fn record_from_response(
 ) -> Result<CheckRecord, String> {
     let requires_human_review = response.answer == OBSERVED_MALFORMED
         || response.answer == UNPARSEABLE_OBSERVED
-        || response.answer == OBSERVED_IDK;
+        || response.answer == OBSERVED_IDK
+        || response.answer == EMPTY_EVIDENCE_OBSERVED;
     let result = if !requires_human_review && response.answer == expectation.a {
         CheckResult::Pass
     } else {
@@ -203,6 +204,17 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
         if let Ok(answer) = parser_cache.parse(&repaired, agent) {
             parsed = answer;
         }
+    }
+
+    if parsed.evidence.trim().is_empty()
+        && parsed.answer != OBSERVED_MALFORMED
+        && parsed.answer != UNPARSEABLE_OBSERVED
+    {
+        parsed = ParsedAnswer {
+            answer: EMPTY_EVIDENCE_OBSERVED.to_string(),
+            evidence: "evaluator response evidence was empty after retry".to_string(),
+            scope: parsed.scope,
+        };
     }
 
     Ok(parsed)

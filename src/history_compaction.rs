@@ -35,36 +35,17 @@ pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }
-    let file = fs::File::open(path)
-        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
     let mut total_lines = 0usize;
     let mut lines = std::collections::VecDeque::new();
-    for (index, line) in BufReader::new(file).lines().enumerate() {
-        let line = line.map_err(|err| {
-            format!(
-                "failed to read {} line {}: {}",
-                path.display(),
-                index + 1,
-                err
-            )
-        })?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        serde_json::from_str::<CheckRecord>(&line).map_err(|err| {
-            format!(
-                "invalid history JSON in {} line {}: {}",
-                path.display(),
-                index + 1,
-                err
-            )
-        })?;
+    for_each_nonempty_line(path, |line_number, line| {
+        parse_history_record_line(path, line_number, &line)?;
         total_lines += 1;
         lines.push_back(line);
         if lines.len() > HISTORY_COMPACT_KEEP_RECORDS {
             lines.pop_front();
         }
-    }
+        Ok(())
+    })?;
     if total_lines <= HISTORY_COMPACT_KEEP_RECORDS {
         return Ok(());
     }
@@ -80,18 +61,7 @@ pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
     file.flush()
         .map_err(|err| format!("failed to flush {}: {}", temp_path.display(), err))?;
     drop(file);
-    replace_history_file(&temp_path, path)
-}
-
-pub(crate) fn replace_history_file(temp_path: &Path, path: &Path) -> Result<(), String> {
-    fs::rename(temp_path, path).map_err(|err| {
-        format!(
-            "failed to replace {} with {}: {}",
-            path.display(),
-            temp_path.display(),
-            err
-        )
-    })
+    replace_file_with_temp(&temp_path, path)
 }
 
 pub(crate) fn compact_history_temp_path(path: &Path) -> Result<PathBuf, String> {

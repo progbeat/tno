@@ -201,6 +201,13 @@ fn check_runner_fail_fast_stops_after_first_failure() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
     assert_eq!(records.len(), 1);
+    assert_eq!(records.selected, 2);
+    assert_eq!(records.skipped, 0);
+    assert_eq!(
+        records.selected + records.skipped,
+        config.expectations.len()
+    );
+    assert_eq!(report_output_skipped_count(&records), 0);
     assert!(!records[0].passed());
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);

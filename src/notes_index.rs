@@ -91,37 +91,25 @@ pub(crate) fn read_index(path: &Path) -> Result<Vec<(String, String)>, String> {
         return Ok(Vec::new());
     }
     let mut entries = Vec::new();
-    let file = fs::File::open(path)
-        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
-    for (line_number, line) in BufReader::new(file).lines().enumerate() {
-        let line = line.map_err(|err| {
-            format!(
-                "failed to read line {} in {}: {}",
-                line_number + 1,
-                path.display(),
-                err
-            )
-        })?;
-        if line.trim().is_empty() {
-            continue;
-        }
+    for_each_nonempty_line(path, |line_number, line| {
         let Some((hash, key)) = line.split_once('\t') else {
             return Err(format!(
                 "malformed index line {} in {}",
-                line_number + 1,
+                line_number,
                 path.display()
             ));
         };
         validate_index_entry(hash, key).map_err(|err| {
             format!(
                 "malformed index line {} in {}: {}",
-                line_number + 1,
+                line_number,
                 path.display(),
                 err
             )
         })?;
         entries.push((hash.to_string(), key.to_string()));
-    }
+        Ok(())
+    })?;
     Ok(entries)
 }
 
@@ -159,13 +147,5 @@ pub(crate) fn write_file_atomically(path: &Path, content: &[u8]) -> Result<(), S
     let temp_path = path.with_file_name(format!(".{}.{}.tmp", file_name, process::id()));
     fs::write(&temp_path, content)
         .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-    fs::rename(&temp_path, path).map_err(|err| {
-        let _ = fs::remove_file(&temp_path);
-        format!(
-            "failed to replace {} with {}: {}",
-            path.display(),
-            temp_path.display(),
-            err
-        )
-    })
+    replace_file_with_temp(&temp_path, path)
 }
