@@ -109,7 +109,7 @@ expectations:
   - q: "Are expectation ID prefixes limited to human-readable output and CLI selection, with all non-temporary persistent state under CANON_STATE_DIR storing expectation references by full ID rather than minimal or user-provided prefixes?"
     a: "yes"
 
-  - q: "Is every public stdout or stderr byte produced by a `canon` command written as soon as that byte is known?"
+  - q: "Does every `canon` command write and flush the next contiguous stdout or stderr text segment as soon as that segment is known?"
     a: "yes"
 
   # Scope handling
