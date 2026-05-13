@@ -69,13 +69,13 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
             ));
         }
     };
-    let final_selected_numbers = final_selection
+    let final_selected_ids = final_selection
         .selected
         .iter()
-        .map(|expectation| expectation.number)
+        .map(|expectation| expectation.id.clone())
         .collect::<BTreeSet<_>>();
     for expectation in &options.selected {
-        if !final_selected_numbers.contains(&expectation.number) {
+        if !final_selected_ids.contains(&expectation.id) {
             non_selected.push(expectation.clone());
         }
     }
@@ -169,8 +169,8 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         ))
         .unwrap_or_else(full_scope);
         // Response-format problems are handled inside this call: malformed,
-        // unparseable, and empty-evidence evaluator responses get their one
-        // same-interrogation retry; response parsing rejects extra JSON keys,
+        // unparseable, and empty-evidence evaluator responses become
+        // human-review records. Response parsing rejects extra JSON keys,
         // non-single-line answers, and non-normalized scope entries before
         // finalization can return a human-review record as Ok(...). Err here
         // means a technical runner/model/logging failure.
@@ -196,7 +196,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         debug_assert!(scope_is_within(&record_scope, &enforced_scope));
         // Cache-spec narrowing verification applies only to verified answers.
         // Non-answer states (`idk`, `malformed`, unparseable) are never reusable
-        // cache records and are handled by the response-repair/idk policy above.
+        // cache records and are handled by the review-required/idk policy above.
         if !record_requires_human_review(&interrogation.record)
             && is_strict_scope_subset(&record_scope, &enforced_scope)
         {
@@ -223,7 +223,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 narrowing.accepted += 1;
                 run_try!(write_scope_narrowing_event(
                     &mut diagnostic_log,
-                    expectation.number,
+                    &expectation.id,
                     &enforced_scope,
                     &record_scope,
                     true,
@@ -235,7 +235,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 narrowing.rejected += 1;
                 run_try!(write_scope_narrowing_event(
                     &mut diagnostic_log,
-                    expectation.number,
+                    &expectation.id,
                     &enforced_scope,
                     &record_scope,
                     false,
@@ -296,19 +296,23 @@ pub(crate) fn initial_non_selected_expectations(
     config: &CheckConfig,
     selected: &[SelectedExpectation],
 ) -> Vec<SelectedExpectation> {
-    let selected_numbers = selected
+    let selected_ids = selected
         .iter()
-        .map(|expectation| expectation.number)
+        .map(|expectation| expectation.id.clone())
         .collect::<BTreeSet<_>>();
+    let identities =
+        expectation_identities(config).expect("validated check config has unique expectation IDs");
     config
         .expectations
         .iter()
         .enumerate()
         .filter_map(|(index, expectation)| {
+            let identity = identities.get(index)?;
             let number = index + 1;
-            (!selected_numbers.contains(&number)).then(|| SelectedExpectation {
+            (!selected_ids.contains(&identity.id)).then(|| SelectedExpectation {
                 number,
-                id: expectation_id(&expectation.q, &expectation.a),
+                id: identity.id.clone(),
+                display_id: identity.display_id.clone(),
                 q: expectation.q.clone(),
                 a: expectation.a.clone(),
                 cooldown: None,
@@ -380,7 +384,7 @@ fn interrogate_or_error_record<R: EvaluatorRunner>(
     interrogation_state: &mut InterrogationState,
     scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<InterrogationResult, String> {
-    match interrogate_expectation_with_response_repairs(
+    match interrogate_expectation_with_model_fallbacks(
         call.runtime,
         call.expectation,
         runner,
@@ -408,7 +412,7 @@ pub(crate) fn narrowed_scope_is_accepted(wide: &CheckRecord, narrowed: &CheckRec
 
 fn write_scope_narrowing_event(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    number: usize,
+    id: &str,
     enforced_scope: &[String],
     record_scope: &[String],
     accepted: bool,
@@ -422,7 +426,7 @@ fn write_scope_narrowing_event(
         "info",
         "scope.narrowing",
         &scope_narrowing_log_fields(
-            number,
+            id,
             enforced_scope,
             record_scope,
             accepted,

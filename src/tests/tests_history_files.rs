@@ -88,7 +88,11 @@ fn compact_history_replaces_file_after_writing_latest_lines() {
     let path = root.join(".git/canon/cache/example/history.jsonl");
     ensure_dir(path.parent().unwrap()).unwrap();
     let records = (1..=7)
-        .map(|number| serde_json::to_string(&sample_record(number, "pass")).unwrap())
+        .map(|number| {
+            let mut record = sample_record(number, "pass");
+            record.evidence = format!("record {number}");
+            serde_json::to_string(&record).unwrap()
+        })
         .collect::<Vec<_>>();
     fs::write(&path, format!("{}\n", records.join("\n"))).unwrap();
 
@@ -99,9 +103,9 @@ fn compact_history_replaces_file_after_writing_latest_lines() {
     assert_eq!(
         compacted
             .iter()
-            .map(|record| record.number)
+            .map(|record| record.evidence.clone())
             .collect::<Vec<_>>(),
-        vec![3, 4, 5, 6, 7]
+        vec!["record 3", "record 4", "record 5", "record 6", "record 7"]
     );
     assert!(!compact_history_temp_path(&path).unwrap().exists());
     let _ = fs::remove_dir_all(root);
@@ -113,9 +117,11 @@ fn compact_history_drops_malformed_lines_and_keeps_latest_valid_records() {
     let path = root.join(".git/canon/cache/example/history.jsonl");
     ensure_dir(path.parent().unwrap()).unwrap();
     let mut lines = vec!["not json".to_string()];
-    lines.extend(
-        (1..=7).map(|number| serde_json::to_string(&sample_record(number, "pass")).unwrap()),
-    );
+    lines.extend((1..=7).map(|number| {
+        let mut record = sample_record(number, "pass");
+        record.evidence = format!("record {number}");
+        serde_json::to_string(&record).unwrap()
+    }));
     fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
 
     compact_history(&path).unwrap();
@@ -125,9 +131,9 @@ fn compact_history_drops_malformed_lines_and_keeps_latest_valid_records() {
     assert_eq!(
         compacted
             .iter()
-            .map(|record| record.number)
+            .map(|record| record.evidence.clone())
             .collect::<Vec<_>>(),
-        vec![3, 4, 5, 6, 7]
+        vec!["record 3", "record 4", "record 5", "record 6", "record 7"]
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -150,7 +156,7 @@ fn compact_history_drops_non_record_json_objects() {
 
     let compacted = read_history_records_from_path(&path).unwrap();
     assert_eq!(compacted.len(), 1);
-    assert_eq!(compacted[0].number, 1);
+    assert_eq!(compacted[0].id, expectation_id("Question?", "yes"));
     let _ = fs::remove_dir_all(root);
 }
 

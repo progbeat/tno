@@ -52,12 +52,12 @@ impl DiagnosticLogWriter {
             "info",
             event,
             &[
+                ("id", json!(record.id)),
                 ("result", json!(record.result)),
                 ("observed", json!(record.observed)),
                 ("evidence", json!(record.evidence)),
                 ("scope", json!(record.scope)),
                 ("scopeHash", json!(record.scope_hash)),
-                ("number", json!(record.number)),
                 ("prompt", json!(record.prompt)),
                 ("expected", json!(record.expected)),
             ],
@@ -189,7 +189,7 @@ pub(crate) fn render_check_log_record(record: &CheckRecord) -> String {
     append_json_string_field(&mut output, &mut first, "evidence", &record.evidence);
     append_json_string_array_field(&mut output, &mut first, "scope", &record.scope);
     append_json_string_field(&mut output, &mut first, "scopeHash", &record.scope_hash);
-    append_json_usize_field(&mut output, &mut first, "number", record.number);
+    append_json_string_field(&mut output, &mut first, "id", &record.id);
     append_json_string_field(&mut output, &mut first, "prompt", &record.prompt);
     append_json_string_field(&mut output, &mut first, "expected", &record.expected);
     if let Some(cache_key) = &record.cache_key {
@@ -217,18 +217,6 @@ pub(crate) fn append_json_string_field(
     push_json_string(output, key);
     output.push(':');
     push_json_string(output, value);
-}
-
-pub(crate) fn append_json_usize_field(
-    output: &mut String,
-    first: &mut bool,
-    key: &str,
-    value: usize,
-) {
-    append_json_separator(output, first);
-    push_json_string(output, key);
-    output.push(':');
-    output.push_str(&value.to_string());
 }
 
 pub(crate) fn append_json_string_array_field(
@@ -280,10 +268,10 @@ pub(crate) fn push_json_control_escape(output: &mut String, ch: char) {
     output.push(HEX[code & 0x0f] as char);
 }
 
-pub(crate) fn join_numbers(numbers: &[usize]) -> String {
-    numbers
+pub(crate) fn join_display_ids(expectations: &[SelectedExpectation]) -> String {
+    expectations
         .iter()
-        .map(usize::to_string)
+        .map(|expectation| expectation.display_id.clone())
         .collect::<Vec<_>>()
         .join(", ")
 }

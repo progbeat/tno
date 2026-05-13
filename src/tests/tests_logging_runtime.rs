@@ -16,7 +16,8 @@ fn diagnostic_log_is_written_to_numeric_active_file_and_flushed() {
     assert_eq!(lines.len(), 1);
     let json: Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(json["result"], "pass");
-    assert_eq!(json["number"], 1);
+    assert_eq!(json["id"], expectation_id("Question?", "yes"));
+    assert!(json.get("number").is_none());
     assert_eq!(json["prompt"], "Question?");
     assert_eq!(json["expected"], "yes");
     assert_eq!(json["observed"], "yes");
@@ -25,12 +26,12 @@ fn diagnostic_log_is_written_to_numeric_active_file_and_flushed() {
     assert_eq!(json["scopeHash"], "AAAAAAAAAAAAAAAAAAAA");
     let expected_order = [
         "\"timestamp\"",
+        "\"id\"",
         "\"result\"",
         "\"observed\"",
         "\"evidence\"",
         "\"scope\"",
         "\"scopeHash\"",
-        "\"number\"",
         "\"prompt\"",
         "\"expected\"",
     ];

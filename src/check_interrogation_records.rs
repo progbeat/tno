@@ -25,7 +25,12 @@ pub(crate) fn finalize_interrogation_response(
         record_scope,
         scope_hash,
     )?;
-    write_review_events(diagnostic_log, expectation.number, enforced_scope, &record)?;
+    write_review_events(
+        diagnostic_log,
+        Some(&expectation.id),
+        enforced_scope,
+        &record,
+    )?;
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_interrogation_record(&record)?;
     }
@@ -51,7 +56,7 @@ pub(crate) fn finalize_query_response(
     )?;
     write_parsed_answer_review_events(
         diagnostic_log,
-        0,
+        None,
         &full_scope(),
         &response.answer,
         &response.evidence,
@@ -116,13 +121,13 @@ fn rejected_widened_scope_message(response_scope: &[String], enforced_scope: &[S
 
 fn write_review_events(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    number: usize,
+    expectation_id: Option<&str>,
     enforced_scope: &[String],
     record: &CheckRecord,
 ) -> Result<(), EvaluatorError> {
     write_parsed_answer_review_events(
         diagnostic_log,
-        number,
+        expectation_id,
         enforced_scope,
         &record.observed,
         &record.evidence,
@@ -131,26 +136,30 @@ fn write_review_events(
 
 pub(crate) fn write_parsed_answer_review_events(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    number: usize,
+    expectation_id: Option<&str>,
     enforced_scope: &[String],
     observed: &str,
     evidence: &str,
 ) -> Result<(), EvaluatorError> {
     if observed == OBSERVED_MALFORMED {
-        write_review_required(diagnostic_log, number, MALFORMED_REVIEW_WARNING)?;
+        write_review_required(diagnostic_log, expectation_id, MALFORMED_REVIEW_WARNING)?;
     }
     if observed == UNPARSEABLE_OBSERVED {
-        write_review_required(diagnostic_log, number, "unparseable evaluator response")?;
+        write_review_required(
+            diagnostic_log,
+            expectation_id,
+            "unparseable evaluator response",
+        )?;
     }
     if observed == EMPTY_EVIDENCE_OBSERVED {
-        write_review_required(diagnostic_log, number, "empty evaluator evidence")?;
+        write_review_required(diagnostic_log, expectation_id, "empty evaluator evidence")?;
     }
     if observed == OBSERVED_IDK && enforced_scope == full_scope() {
-        write_review_required(diagnostic_log, number, "full-scope idk")?;
+        write_review_required(diagnostic_log, expectation_id, "full-scope idk")?;
     }
     if evidence.trim().is_empty() {
         if let Some(writer) = diagnostic_log.as_deref_mut() {
-            writer.write_event("warn", "evidence.empty", &[("number", json!(number))])?;
+            writer.write_event("warn", "evidence.empty", &[("id", json!(expectation_id))])?;
         }
     }
     Ok(())
@@ -158,14 +167,14 @@ pub(crate) fn write_parsed_answer_review_events(
 
 fn write_review_required(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    number: usize,
+    expectation_id: Option<&str>,
     reason: &str,
 ) -> Result<(), EvaluatorError> {
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_event(
             "warn",
             "review.required",
-            &[("number", json!(number)), ("reason", json!(reason))],
+            &[("id", json!(expectation_id)), ("reason", json!(reason))],
         )?;
     }
     Ok(())

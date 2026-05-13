@@ -22,7 +22,7 @@ fn gate_passes_with_current_cached_pass() {
     )
     .unwrap();
 
-    let result = run_gate_command(&root, &[OsString::from("1")]);
+    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
@@ -41,7 +41,8 @@ fn gate_fails_when_cache_is_missing() {
         .unwrap();
     commit_all(&root, "add check config");
 
-    let result = run_gate_command(&root, &[OsString::from("1")]);
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let result = run_gate_command(&root, &[OsString::from(test_selector(&config, "1"))]);
 
     assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
@@ -122,7 +123,8 @@ fn gate_does_not_skip_non_canon_change_with_missing_cache() {
         .output()
         .unwrap();
 
-    let result = run_gate_command(&root, &[OsString::from("1")]);
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let result = run_gate_command(&root, &[OsString::from(test_selector(&config, "1"))]);
 
     assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
@@ -169,7 +171,7 @@ expectations:
     let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
     assert_ne!(current_hash, old_hash);
 
-    let result = run_gate_command(&root, &[OsString::from("1")]);
+    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
@@ -225,7 +227,7 @@ expectations:
     pass.timestamp = format_log_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &pass).unwrap();
 
-    let result = run_gate_command(&root, &[OsString::from("1")]);
+    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
@@ -260,7 +262,7 @@ fn gate_fails_for_new_current_failure_without_head_failure() {
     )
     .unwrap();
 
-    let result = run_gate_command(&root, &[OsString::from("1")]);
+    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
     assert!(result.is_err());
     let _ = fs::remove_dir_all(root);
@@ -305,7 +307,7 @@ fn gate_accepts_failure_already_present_on_head() {
     )
     .unwrap();
 
-    let result = run_gate_command(&root, &[OsString::from("1")]);
+    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);

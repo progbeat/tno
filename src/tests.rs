@@ -20,7 +20,7 @@ mod tests_check_lazy_reset;
 mod tests_check_model_recovery;
 mod tests_check_parser;
 mod tests_check_query_output;
-mod tests_check_response_repairs;
+mod tests_check_response_review;
 mod tests_check_restricted_scope;
 mod tests_cli_aliases;
 mod tests_config_env;

@@ -1,26 +1,28 @@
 use super::*;
 
 #[test]
-fn check_runner_repairs_malformed_response_once() {
-    let root = git_project("check-repair");
+fn check_runner_requires_human_review_for_unparseable_response() {
+    let root = git_project("check-unparseable-first-response");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let repaired = answer("yes", "README.md", &["."]);
-    let mut runner = FakeRunner::new(&["not parseable", &repaired]);
+    let mut runner = FakeRunner::new(&["not parseable"]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(records[0].passed());
-    assert_eq!(runner.prompts.len(), 2);
-    assert_eq!(runner.prompts[1], runner.prompts[0]);
+    assert!(!records[0].passed());
+    assert_eq!(records[0].observed, UNPARSEABLE_OBSERVED);
+    assert_eq!(runner.prompts.len(), 1);
+    assert!(read_history_records(&root, &options.selected[0])
+        .unwrap()
+        .is_empty());
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_marks_unparseable_after_response_repair_fails() {
+fn check_runner_marks_unparseable_after_response_parse_fails() {
     let root = git_project("check-unparseable");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let mut runner = FakeRunner::new(&["", ""]);
+    let mut runner = FakeRunner::new(&[""]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
     let records = run_check_with_runner(
         &root,
@@ -34,7 +36,8 @@ fn check_runner_marks_unparseable_after_response_repair_fails() {
     .unwrap();
     assert!(!records[0].passed());
     assert_eq!(records[0].observed, UNPARSEABLE_OBSERVED);
-    assert!(records[0].evidence.contains("first response: <empty>"));
+    assert!(records[0].evidence.contains("response: <empty>"));
+    assert_eq!(runner.prompts.len(), 1);
     let log = fs::read_to_string(diagnostic_log.path).unwrap();
     assert!(log.contains(r#""event":"review.required""#));
     assert!(log.contains(r#""reason":"unparseable evaluator response""#));
@@ -64,18 +67,19 @@ fn check_runner_retries_full_scope_for_restricted_idk_non_answer() {
 }
 
 #[test]
-fn check_runner_parse_retry_repeats_same_question() {
-    let root = git_project("check-parse-retry-prompt");
+fn check_runner_does_not_retry_unparseable_response() {
+    let root = git_project("check-unparseable-no-retry");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let repaired = answer("yes", "README.md", &["."]);
-    let mut runner = FakeRunner::new(&["not json", &repaired]);
+    let later_answer = answer("yes", "README.md", &["."]);
+    let mut runner = FakeRunner::new(&["not json", &later_answer]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records[0].passed());
-    assert_eq!(runner.prompts[1], options.selected[0].q);
+    assert!(!records[0].passed());
+    assert_eq!(records[0].observed, UNPARSEABLE_OBSERVED);
+    assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -84,7 +88,7 @@ fn check_runner_requires_human_review_when_evidence_stays_empty() {
     let root = git_project("check-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let mut runner = FakeRunner::new(&[&answer("yes", "", &["."]), &answer("yes", "", &["."])]);
+    let mut runner = FakeRunner::new(&[&answer("yes", "", &["."])]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
     let records = run_check_with_runner(
         &root,
@@ -99,9 +103,8 @@ fn check_runner_requires_human_review_when_evidence_stays_empty() {
     assert!(!records[0].passed());
     assert!(record_requires_human_review(&records[0]));
     assert_eq!(records[0].observed, EMPTY_EVIDENCE_OBSERVED);
-    assert!(records[0].evidence.contains("empty after retry"));
-    assert_eq!(runner.prompts.len(), 2);
-    assert_eq!(runner.prompts[1], runner.prompts[0]);
+    assert!(records[0].evidence.contains("evidence was empty"));
+    assert_eq!(runner.prompts.len(), 1);
     let log = fs::read_to_string(diagnostic_log.path).unwrap();
     assert!(log.contains(r#""event":"review.required""#));
     assert!(log.contains(r#""reason":"empty evaluator evidence""#));
@@ -117,17 +120,17 @@ fn check_runner_requires_human_review_for_malformed_answer() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let malformed = answer("malformed", "question is malformed", &["."]);
-    let mut runner = FakeRunner::new(&[&malformed, &malformed, &malformed, &malformed]);
+    let mut runner = FakeRunner::new(&[&malformed]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
     assert!(!records[0].passed());
     assert_eq!(records[0].observed, "malformed");
-    assert_eq!(runner.prompts.len(), 2);
+    assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_does_not_evidence_retry_after_malformed_retry() {
+fn check_runner_does_not_retry_after_malformed_answer() {
     let root = git_project("check-malformed-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -139,27 +142,24 @@ fn check_runner_does_not_evidence_retry_after_malformed_retry() {
 
     assert!(!records[0].passed());
     assert_eq!(records[0].observed, "malformed");
-    assert_eq!(runner.prompts.len(), 2);
+    assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_evidence_retries_after_parse_repair_returns_answer() {
-    let root = git_project("check-parse-repair-empty-evidence");
+fn check_runner_does_not_retry_after_empty_evidence() {
+    let root = git_project("check-empty-evidence-no-retry");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let mut runner = FakeRunner::new(&[
-        "not parseable",
-        &answer("yes", "", &["."]),
-        &answer("yes", "README.md has evidence", &["."]),
-    ]);
+    let later_answer = answer("yes", "README.md has evidence", &["."]);
+    let mut runner = FakeRunner::new(&[&answer("yes", "", &["."]), &later_answer]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records[0].passed());
-    assert_eq!(records[0].evidence, "README.md has evidence");
-    assert_eq!(runner.prompts.len(), 3);
+    assert!(!records[0].passed());
+    assert_eq!(records[0].observed, EMPTY_EVIDENCE_OBSERVED);
+    assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -168,11 +168,11 @@ fn check_runner_keeps_semantic_malformed_as_human_review_failure() {
     let root = git_project("check-full-malformed");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let mut runner = FakeRunner::new(&[
-        &answer("malformed", "full scope response stayed malformed", &["."]),
-        &answer("malformed", "question is malformed", &["."]),
-        &answer("malformed", "question is malformed", &["."]),
-    ]);
+    let mut runner = FakeRunner::new(&[&answer(
+        "malformed",
+        "full scope response stayed malformed",
+        &["."],
+    )]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();

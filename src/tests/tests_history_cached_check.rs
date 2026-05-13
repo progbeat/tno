@@ -25,7 +25,9 @@ expectations:
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:20Z".to_string(),
-            number: 1,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
             result: CheckResult::Fail,
             prompt: expectation.q.clone(),
             expected: expectation.a.clone(),
@@ -61,7 +63,9 @@ fn check_runner_skips_cached_pass_without_result_output() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:20Z".to_string(),
-            number: 1,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
             expected: expectation.a.clone(),
@@ -99,7 +103,7 @@ fn check_runner_skips_cached_pass_without_result_output() {
 }
 
 #[test]
-fn check_runner_deselects_cached_pass_when_no_numbers_are_given() {
+fn check_runner_deselects_cached_pass_when_no_selectors_are_given() {
     let root = git_project("check-cache-pass-default-selection");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &[], false, false);
@@ -110,7 +114,9 @@ fn check_runner_deselects_cached_pass_when_no_numbers_are_given() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:20Z".to_string(),
-            number: 1,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
             expected: expectation.a.clone(),
@@ -143,8 +149,8 @@ fn check_runner_deselects_cached_pass_when_no_numbers_are_given() {
     assert_eq!(report.silent, 1);
     assert_eq!(runner.starts, 1);
     let lines = String::from_utf8(output.bytes).unwrap();
-    assert!(lines.contains("2. OK"));
-    assert!(!lines.contains("1. OK"));
+    assert!(lines.contains(&format!("{}. OK", report.records[0].display_id)));
+    assert!(!lines.contains(&format!("{}. OK", expectation.display_id)));
     let _ = fs::remove_dir_all(root);
 }
 

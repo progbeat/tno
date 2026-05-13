@@ -149,13 +149,17 @@ impl std::io::Write for FlushCountingWriter {
 
 pub(crate) fn check_options(
     config: &CheckConfig,
-    numbers: &[&str],
+    selectors: &[&str],
     fail_fast: bool,
     ignore_cache: bool,
 ) -> CheckOptions {
+    let selectors = selectors
+        .iter()
+        .map(|selector| test_selector(config, selector))
+        .collect::<Vec<_>>();
     let selected = select_expectations(
         config,
-        &numbers.iter().map(OsString::from).collect::<Vec<_>>(),
+        &selectors.iter().map(OsString::from).collect::<Vec<_>>(),
     )
     .unwrap();
     let skipped = config.expectations.len().saturating_sub(selected.len());
@@ -165,6 +169,15 @@ pub(crate) fn check_options(
         fail_fast,
         ignore_cache,
     }
+}
+
+pub(crate) fn test_selector(config: &CheckConfig, selector: &str) -> String {
+    if let Ok(number) = selector.parse::<usize>() {
+        if let Some(expectation) = config.expectations.get(number.saturating_sub(1)) {
+            return expectation_id(&expectation.q, &expectation.a);
+        }
+    }
+    selector.to_string()
 }
 
 pub(crate) fn answer(answer: &str, evidence: &str, scope: &[&str]) -> String {
@@ -185,12 +198,17 @@ fn check_result_from_label(label: &str) -> CheckResult {
 }
 
 pub(crate) fn sample_record(number: usize, result: &str) -> CheckRecord {
+    let prompt = "Question?".to_string();
+    let expected = "yes".to_string();
+    let id = expectation_id(&prompt, &expected);
     CheckRecord {
         timestamp: "1970-01-01T00:00:00Z".to_string(),
+        id: id.clone(),
+        display_id: id[..1].to_string(),
         number,
         result: check_result_from_label(result),
-        prompt: "Question?".to_string(),
-        expected: "yes".to_string(),
+        prompt,
+        expected,
         observed: if result == "pass" { "yes" } else { "no" }.to_string(),
         evidence: "README.md has evidence".to_string(),
         scope: vec![".".to_string()],
@@ -208,6 +226,8 @@ pub(crate) fn expectation_record(
 ) -> CheckRecord {
     CheckRecord {
         timestamp: "1970-01-01T00:00:00Z".to_string(),
+        id: expectation.id.clone(),
+        display_id: expectation.display_id.clone(),
         number: expectation.number,
         result: check_result_from_label(result),
         prompt: expectation.q.clone(),

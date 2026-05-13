@@ -1,6 +1,6 @@
 use crate::*;
 
-pub(crate) fn interrogate_expectation_with_response_repairs<R: EvaluatorRunner>(
+pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     expectation: &SelectedExpectation,
     runner: &mut R,
@@ -12,7 +12,7 @@ pub(crate) fn interrogate_expectation_with_response_repairs<R: EvaluatorRunner>(
         &runtime.config.agent,
         state,
         diagnostic_log,
-        expectation.number,
+        Some(&expectation.id),
         |state, diagnostic_log, model| {
             interrogate_expectation_with_model(
                 runtime,
@@ -31,7 +31,7 @@ pub(crate) fn run_with_model_fallbacks<T>(
     agent: &AgentConfig,
     state: &mut InterrogationState,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    number: usize,
+    expectation_id: Option<&str>,
     mut attempt: impl FnMut(
         &mut InterrogationState,
         &mut Option<&mut DiagnosticLogWriter>,
@@ -53,7 +53,7 @@ pub(crate) fn run_with_model_fallbacks<T>(
                 }
                 write_model_fallback_events(
                     diagnostic_log,
-                    number,
+                    expectation_id,
                     model.as_deref(),
                     next_model.and_then(Option::as_deref),
                     err.message_str(),
@@ -75,7 +75,7 @@ pub(crate) fn run_with_model_fallbacks<T>(
 
 pub(crate) fn write_model_fallback_events(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    number: usize,
+    expectation_id: Option<&str>,
     model: Option<&str>,
     next_model: Option<&str>,
     error: &str,
@@ -87,7 +87,7 @@ pub(crate) fn write_model_fallback_events(
         "warn",
         "model.failure",
         &[
-            ("number", json!(number)),
+            ("id", json!(expectation_id)),
             ("model", json!(model_label(model))),
             ("error", json!(error)),
         ],
@@ -97,7 +97,7 @@ pub(crate) fn write_model_fallback_events(
             "warn",
             "model.fallback",
             &[
-                ("number", json!(number)),
+                ("id", json!(expectation_id)),
                 ("from", json!(model_label(model))),
                 ("to", json!(model_label(Some(next_model)))),
                 ("reason", json!(error)),

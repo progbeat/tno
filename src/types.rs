@@ -95,6 +95,7 @@ pub(crate) struct RawExpectationItem {
 pub(crate) struct SelectedExpectation {
     pub(crate) number: usize,
     pub(crate) id: String,
+    pub(crate) display_id: String,
     pub(crate) q: String,
     pub(crate) a: String,
     pub(crate) cooldown: Option<Cooldown>,
@@ -146,6 +147,7 @@ impl std::fmt::Display for CheckResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CheckRecord {
     pub(crate) timestamp: String,
+    #[serde(default, skip_serializing)]
     pub(crate) number: usize,
     pub(crate) result: CheckResult,
     pub(crate) prompt: String,
@@ -155,6 +157,10 @@ pub(crate) struct CheckRecord {
     pub(crate) scope: Vec<String>,
     #[serde(rename = "scopeHash")]
     pub(crate) scope_hash: String,
+    #[serde(default)]
+    pub(crate) id: String,
+    #[serde(default, skip)]
+    pub(crate) display_id: String,
     #[serde(default, rename = "cacheKey", skip_serializing_if = "Option::is_none")]
     pub(crate) cache_key: Option<String>,
 }
@@ -194,11 +200,11 @@ pub(crate) struct NarrowingStats {
 pub(crate) struct CheckRunReport {
     pub(crate) records: Vec<CheckRecord>,
     pub(crate) non_selected: Vec<SelectedExpectation>,
-    // Final selected count after every deselection rule has run. This excludes
-    // command-number misses, cooldown matches, and reusable passing cache hits.
+    // Final selected count after every selection rule has run. This excludes
+    // command-selector misses, cooldown matches, and reusable passing cache hits.
     pub(crate) selected: usize,
-    // Final non-selected count. It is the complement to `selected` across the
-    // active check configuration, not merely the original CLI number filter.
+    // Final non-selected count. Reusable passing cache hits are non-selected
+    // for reporting because they produce no per-expectation stdout.
     pub(crate) skipped: usize,
     // Non-selected expectations that intentionally produce no per-expectation
     // stdout, currently cooldown matches and reusable passing cache hits.

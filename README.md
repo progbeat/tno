@@ -119,10 +119,11 @@ canon check
 Run all expectations from `.canon/check.yml`.
 
 ```sh
-canon check 2 5 9
+canon check a7F K9m
 ```
 
-Run selected expectations by 1-based number.
+Run selected expectations by unique ID prefix. Full expectation IDs are also
+accepted.
 
 ```sh
 canon check -q "Does the app still have Undo?"
@@ -141,7 +142,7 @@ Force fresh evaluation, stop after the first failure, or use another config.
 
 ```sh
 canon gate
-canon gate 2 5 9
+canon gate a7F K9m
 ```
 
 Run the pre-commit gate manually for all or selected expectations.

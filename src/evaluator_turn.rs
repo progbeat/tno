@@ -85,6 +85,8 @@ pub(crate) fn record_from_response(
     };
     Ok(CheckRecord {
         timestamp: format_log_record_timestamp(unix_timestamp()?),
+        id: expectation.id.clone(),
+        display_id: expectation.display_id.clone(),
         number: expectation.number,
         result,
         prompt: expectation.q.clone(),
@@ -101,7 +103,7 @@ pub(crate) fn is_verified_record(record: &CheckRecord) -> bool {
     is_reusable_history_record(record)
 }
 
-// This module owns one evaluator turn: model labels, response repair, and
+// This module owns one evaluator turn: model labels, response parsing, and
 // record finalization. It is intentionally not sufficient by itself to judge
 // the full interrogation policy; with only this file visible, full-policy
 // questions require `idk` rather than a pass/fail conclusion. Cross-turn policy
@@ -114,90 +116,36 @@ pub(crate) struct EvaluatorTurnContext<'a> {
     pub(crate) thinking: &'a str,
 }
 
-pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
+pub(crate) fn ask_once<R: EvaluatorRunner>(
     runner: &mut R,
     turn: &EvaluatorTurnContext<'_>,
     prompt: &str,
     agent: &AgentConfig,
     parser_cache: &mut EvaluatorResponseParseCache,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    expectation_number: usize,
+    expectation_id: Option<&str>,
 ) -> Result<ParsedAnswer, EvaluatorError> {
-    let first = ask_and_log(
+    let response = ask_and_log(
         runner,
         turn,
         prompt,
         diagnostic_log,
-        expectation_number,
+        expectation_id,
         1,
         "initial",
     )?;
-    let mut next_attempt = 2;
-    let mut format_retried = false;
-    let mut parsed = match parser_cache.parse(&first, agent) {
+    let mut parsed = match parser_cache.parse(&response, agent) {
         Ok(answer) => answer,
-        Err(_err) => {
-            let first_excerpt = response_excerpt(&first);
-            format_retried = true;
-            let repaired = ask_and_log(
-                runner,
-                turn,
-                prompt,
-                diagnostic_log,
-                expectation_number,
-                next_attempt,
-                "parse-retry",
-            )?;
-            next_attempt += 1;
-            match parser_cache.parse(&repaired, agent) {
-                Ok(answer) => answer,
-                Err(err) => ParsedAnswer {
-                    answer: UNPARSEABLE_OBSERVED.to_string(),
-                    evidence: format!(
-                        "evaluator response could not be parsed after retry: {}\nfirst response: {}\nrepair response: {}",
-                        err,
-                        first_excerpt,
-                        response_excerpt(&repaired)
-                    ),
-                    scope: full_scope(),
-                },
-            }
-        }
+        Err(err) => ParsedAnswer {
+            answer: UNPARSEABLE_OBSERVED.to_string(),
+            evidence: format!(
+                "evaluator response could not be parsed: {}\nresponse: {}",
+                err,
+                response_excerpt(&response)
+            ),
+            scope: full_scope(),
+        },
     };
-
-    if parsed.answer == OBSERVED_MALFORMED && !format_retried {
-        let repaired = ask_and_log(
-            runner,
-            turn,
-            prompt,
-            diagnostic_log,
-            expectation_number,
-            next_attempt,
-            "malformed-retry",
-        )?;
-        next_attempt += 1;
-        if let Ok(answer) = parser_cache.parse(&repaired, agent) {
-            parsed = answer;
-        }
-    }
-
-    if parsed.evidence.trim().is_empty()
-        && parsed.answer != OBSERVED_MALFORMED
-        && parsed.answer != UNPARSEABLE_OBSERVED
-    {
-        let repaired = ask_and_log(
-            runner,
-            turn,
-            prompt,
-            diagnostic_log,
-            expectation_number,
-            next_attempt,
-            "evidence-retry",
-        )?;
-        if let Ok(answer) = parser_cache.parse(&repaired, agent) {
-            parsed = answer;
-        }
-    }
 
     if parsed.evidence.trim().is_empty()
         && parsed.answer != OBSERVED_MALFORMED
@@ -205,7 +153,7 @@ pub(crate) fn ask_with_repairs<R: EvaluatorRunner>(
     {
         parsed = ParsedAnswer {
             answer: EMPTY_EVIDENCE_OBSERVED.to_string(),
-            evidence: "evaluator response evidence was empty after retry".to_string(),
+            evidence: "evaluator response evidence was empty".to_string(),
             scope: parsed.scope,
         };
     }
@@ -218,7 +166,7 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
     turn: &EvaluatorTurnContext<'_>,
     prompt: &str,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    expectation_number: usize,
+    expectation_id: Option<&str>,
     attempt: usize,
     reason: &str,
 ) -> Result<String, EvaluatorError> {
@@ -233,7 +181,7 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
             "info",
             "agent.request",
             &[
-                ("number", json!(expectation_number)),
+                ("id", json!(expectation_id)),
                 ("attempt", json!(attempt)),
                 ("reason", json!(reason)),
                 ("raw", json!(prompt)),
@@ -252,7 +200,7 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
             "info",
             "agent.response",
             &[
-                ("number", json!(expectation_number)),
+                ("id", json!(expectation_id)),
                 ("attempt", json!(attempt)),
                 ("reason", json!(reason)),
                 ("raw", json!(response.clone())),

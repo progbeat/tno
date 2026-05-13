@@ -39,7 +39,7 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
     }
     if query.is_some() && !option_args.is_empty() {
         return Err(
-            "canon check -q cannot be combined with expectation numbers, --fail-fast, or --ignore-cache"
+            "canon check -q cannot be combined with expectation selectors, --fail-fast, or --ignore-cache"
                 .to_string(),
         );
     }

@@ -94,7 +94,7 @@ expectations:
         config: &config,
     };
     let mut state = InterrogationState::new();
-    let result = interrogate_expectation_with_response_repairs(
+    let result = interrogate_expectation_with_model_fallbacks(
         &runtime,
         &options.selected[0],
         &mut runner,

@@ -24,7 +24,9 @@ expectations:
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:10Z".to_string(),
-            number: 1,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
             expected: expectation.a.clone(),
@@ -41,7 +43,9 @@ expectations:
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:20Z".to_string(),
-            number: 1,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
             result: CheckResult::Fail,
             prompt: expectation.q.clone(),
             expected: expectation.a.clone(),
@@ -58,7 +62,9 @@ expectations:
         &expectation,
         &CheckRecord {
             timestamp: "not-a-timestamp".to_string(),
-            number: 1,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
             result: CheckResult::Fail,
             prompt: expectation.q.clone(),
             expected: expectation.a.clone(),
@@ -103,7 +109,9 @@ expectations:
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:10Z".to_string(),
-            number: 1,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
             expected: expectation.a.clone(),
@@ -120,7 +128,9 @@ expectations:
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:20Z".to_string(),
-            number: 1,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
             result: CheckResult::Fail,
             prompt: expectation.q.clone(),
             expected: expectation.a.clone(),
@@ -165,7 +175,9 @@ expectations:
         &expectation,
         &CheckRecord {
             timestamp: "2099-01-01T00:00:00Z".to_string(),
-            number: 1,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
             expected: expectation.a.clone(),
@@ -268,7 +280,9 @@ expectations:
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:10Z".to_string(),
-            number: 1,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
             expected: expectation.a.clone(),
@@ -285,7 +299,9 @@ expectations:
         &expectation,
         &CheckRecord {
             timestamp: "not-a-timestamp".to_string(),
-            number: 1,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
             expected: expectation.a.clone(),
@@ -307,7 +323,7 @@ expectations:
 }
 
 #[test]
-fn cooldown_reuse_returns_history_record_without_updating_metadata() {
+fn cooldown_reuse_returns_persisted_history_record_without_rehydrating_metadata() {
     let root = git_project("history-cooldown-preserves-record");
     let config = parse_check_config(
         r#"
@@ -327,6 +343,8 @@ expectations:
     let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
     let record = CheckRecord {
         timestamp: "1970-01-01T00:00:10Z".to_string(),
+        id: expectation.id.clone(),
+        display_id: expectation.display_id.clone(),
         number: 42,
         result: CheckResult::Pass,
         prompt: "Question?".to_string(),
@@ -346,7 +364,8 @@ expectations:
             .unwrap()
             .unwrap();
 
-    assert_eq!(reused.number, 42);
+    assert_eq!(reused.id, expectation.id);
+    assert_eq!(reused.number, 0);
     assert_eq!(reused.prompt, "Question?");
     assert_eq!(reused.expected, "yes");
     assert_eq!(reused.timestamp, "1970-01-01T00:00:10Z");

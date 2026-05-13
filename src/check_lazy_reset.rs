@@ -22,11 +22,11 @@ pub(crate) fn apply_lazy_full_scope_reset(
             ("candidates", json!(non_selected.len())),
             ("reset", json!(reset.expectations.len())),
             (
-                "numbers",
+                "ids",
                 json!(reset
                     .expectations
                     .iter()
-                    .map(|expectation| expectation.number)
+                    .map(|expectation| expectation.id.clone())
                     .collect::<Vec<_>>()),
             ),
         ],

@@ -32,8 +32,14 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
     // records and new cached failures that were not already failing at HEAD.
     let mut history_cache = HistoryCache::new();
     let now = unix_timestamp()?;
-    let selected_expectations =
-        select_expectations_for_gate(root, &config, args, &mut history_cache, now)?;
+    let selected_expectations = select_expectations_for_gate(
+        root,
+        &config,
+        args,
+        &mut history_cache,
+        &mut scope_hash_cache,
+        now,
+    )?;
     let mut missing = Vec::new();
     let mut failing = Vec::new();
     for expectation in &selected_expectations {
@@ -58,7 +64,7 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
             GateCacheResult::Pass => {}
             GateCacheResult::Fail(_) if previous.is_fail() => {}
             GateCacheResult::Fail(record) => failing.push(*record),
-            GateCacheResult::Missing => missing.push(expectation.number),
+            GateCacheResult::Missing => missing.push(expectation.clone()),
         }
     }
 
@@ -74,7 +80,7 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
     if !missing.is_empty() {
         eprintln!(
             "canon gate: missing cached answers for expectations: {}",
-            join_numbers(&missing)
+            join_display_ids(&missing)
         );
         if let Some(advice) = gate_missing_cache_advice(!failing.is_empty()) {
             eprintln!("{advice}");
@@ -98,12 +104,30 @@ pub(crate) fn select_expectations_for_gate(
     config: &CheckConfig,
     args: &[OsString],
     history_cache: &mut HistoryCache,
+    scope_hash_cache: &mut ScopeHashCache,
     now: u64,
 ) -> Result<Vec<SelectedExpectation>, String> {
     let selected = select_expectations(config, args)?;
-    final_selected_expectations(root, &config.agent, selected, history_cache, now)
-        .map(|selection| selection.selected)
-        .map_err(|err| err.error)
+    let final_selection =
+        final_selected_expectations(root, &config.agent, selected, history_cache, now)
+            .map(|selection| selection.selected)
+            .map_err(|err| err.error)?;
+    let mut remaining = Vec::new();
+    for expectation in final_selection {
+        if cached_record_for_expectation(
+            root,
+            &config.agent,
+            &expectation,
+            history_cache,
+            scope_hash_cache,
+        )?
+        .is_some_and(|hit| hit.record.passed())
+        {
+            continue;
+        }
+        remaining.push(expectation);
+    }
+    Ok(remaining)
 }
 
 #[derive(Debug, Clone)]

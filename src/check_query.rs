@@ -12,7 +12,7 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
         &runtime.config.agent,
         state,
         &mut diagnostic_log,
-        0,
+        None,
         |state, diagnostic_log, model| {
             interrogate_query_with_model(runtime, question, runner, diagnostic_log, state, model)
         },
@@ -39,7 +39,7 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
             enforced_scope: &enforced_scope,
             model,
             thinking: &config.agent.thinking,
-            number: 0,
+            expectation_id: None,
             prompt: &prompt,
         },
     )?;

@@ -11,6 +11,8 @@ fn reusable_history_record_uses_current_expectation_metadata() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: 99,
             result: CheckResult::Pass,
             prompt: "old prompt text".to_string(),
@@ -143,6 +145,8 @@ expectations:
         &old_expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: old_expectation.id.clone(),
+            display_id: old_expectation.display_id.clone(),
             number: old_expectation.number,
             result: CheckResult::Pass,
             prompt: old_expectation.q.clone(),

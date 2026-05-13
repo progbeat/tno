@@ -50,6 +50,7 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 .map_err(|err| format!("expectation {} thinking: {}", number, err))?;
         }
     }
+    expectation_identities(config)?;
     Ok(())
 }
 

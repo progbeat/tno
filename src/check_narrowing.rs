@@ -1,7 +1,7 @@
 use crate::*;
 
 pub(crate) fn scope_narrowing_log_fields(
-    number: usize,
+    id: &str,
     original_scope: &[String],
     proposed_scope: &[String],
     accepted: bool,
@@ -9,7 +9,7 @@ pub(crate) fn scope_narrowing_log_fields(
     verification: &CheckRecord,
 ) -> Vec<(&'static str, Value)> {
     vec![
-        ("number", json!(number)),
+        ("id", json!(id)),
         ("originalScope", json!(original_scope)),
         ("proposedScope", json!(proposed_scope)),
         ("accepted", json!(accepted)),

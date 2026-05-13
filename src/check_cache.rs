@@ -43,7 +43,7 @@ pub(crate) fn write_cache_hit(
         "info",
         "cache.exact_hit",
         &[
-            ("number", json!(hit.record.number)),
+            ("id", json!(hit.record.id)),
             ("result", json!(hit.record.result)),
             ("scope", json!(hit.record.scope)),
             ("scopeHash", json!(hit.record.scope_hash)),

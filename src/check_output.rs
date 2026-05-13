@@ -35,7 +35,7 @@ pub(crate) fn write_query_output(
     answer: &ParsedAnswer,
 ) -> Result<(), String> {
     // Query output is intentionally separate from the selected-expectation
-    // check output contract because query mode has no expectation number,
+    // check output contract because query mode has no expectation selector,
     // expected answer, reusable history write, or final check summary.
     let output = render_query_output(answer);
     result_output
@@ -66,7 +66,7 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
     // without Scope. Every evaluator-supplied text field is escaped here
     // before stdout sees it.
     if record.passed() {
-        return format!("{}. OK\n", record.number);
+        return format!("{}. OK\n", record.display_id);
     }
     let status = if record_requires_human_review(record) {
         "ERROR"
@@ -74,7 +74,7 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
         "FAILED"
     };
     let mut output = String::new();
-    output.push_str(&format!("{}. {}\n", record.number, status));
+    output.push_str(&format!("{}. {}\n", record.display_id, status));
     // This is the spec's `<escaped question>` line, not an extra line beyond
     // the six-line failed and five-line error layouts.
     output.push_str(&escape_check_output_text(&record.prompt));
@@ -99,10 +99,9 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
 pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
     // Summary order is fixed to match the spec and pytest-style labels:
     // failed, error/errors, passed, skipped.
-    // `report.skipped` is the final selection complement, so
-    // `report.selected + report.skipped` covers the active check configuration.
-    // This includes expectations deselected by reusable passing cache hits:
-    // they are no longer selected, and therefore are public-summary skipped.
+    // `report.skipped` is the final non-selected count. Reusable passing cache
+    // hits are not selected at final reporting time: they produce no
+    // per-expectation stdout and count only in the public skipped total.
     let mut passed = 0usize;
     let mut failed = 0usize;
     let mut errors = 0usize;

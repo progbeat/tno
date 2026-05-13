@@ -24,8 +24,8 @@ fn check_runner_streams_result_output() {
     assert_eq!(output.flushes, 2);
     let lines = String::from_utf8(output.bytes).unwrap();
     assert_eq!(lines.lines().count(), 2);
-    assert!(lines.contains("1. OK"));
-    assert!(lines.contains("2. OK"));
+    assert!(lines.contains(&format!("{}. OK", options.selected[0].display_id)));
+    assert!(lines.contains(&format!("{}. OK", options.selected[1].display_id)));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -41,6 +41,8 @@ fn check_output_escapes_non_ascii_control_characters() {
 fn check_output_failed_and_error_records_use_specified_line_counts() {
     let mut record = CheckRecord {
         timestamp: "1970-01-01T00:00:00Z".to_string(),
+        id: "AAAAAAAAAAAAAAAAAAAA".to_string(),
+        display_id: "A".to_string(),
         number: 7,
         result: CheckResult::Fail,
         prompt: "Question?".to_string(),

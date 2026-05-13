@@ -11,6 +11,8 @@ fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
@@ -28,6 +30,8 @@ fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Fail,
             prompt: expectation.q.clone(),
@@ -68,6 +72,8 @@ fn check_runner_rejects_widened_idk_scope_then_retries_full_scope() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
@@ -119,6 +125,8 @@ fn check_runner_starts_from_latest_reusable_history_scope_even_when_failed() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Fail,
             prompt: expectation.q.clone(),
@@ -156,6 +164,8 @@ fn check_runner_ignore_cache_uses_latest_history_scope() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
@@ -193,6 +203,8 @@ fn check_runner_verifies_narrowed_scope_after_restricted_idk_widens() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
@@ -210,6 +222,8 @@ fn check_runner_verifies_narrowed_scope_after_restricted_idk_widens() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Fail,
             prompt: expectation.q.clone(),
@@ -256,6 +270,8 @@ fn check_runner_does_not_widen_restricted_answer_mismatch() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
@@ -293,6 +309,8 @@ fn check_runner_rejects_restricted_scope_widening_without_full_scope_retry() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
@@ -332,6 +350,8 @@ fn check_runner_does_not_widen_restricted_unparseable_response() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Pass,
             prompt: expectation.q.clone(),
@@ -349,6 +369,8 @@ fn check_runner_does_not_widen_restricted_unparseable_response() {
         &expectation,
         &CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Fail,
             prompt: expectation.q.clone(),

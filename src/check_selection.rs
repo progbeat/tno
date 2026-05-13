@@ -6,7 +6,7 @@ pub(crate) fn parse_check_options(
 ) -> Result<CheckOptions, String> {
     let mut fail_fast = false;
     let mut ignore_cache = false;
-    let mut numbers = Vec::new();
+    let mut selectors = Vec::new();
     for arg in args {
         if arg.to_str() == Some("--fail-fast") {
             if fail_fast {
@@ -19,10 +19,10 @@ pub(crate) fn parse_check_options(
             }
             ignore_cache = true;
         } else {
-            numbers.push(arg.clone());
+            selectors.push(arg.clone());
         }
     }
-    let selected = select_expectations(config, &numbers)?;
+    let selected = select_expectations(config, &selectors)?;
     let skipped = config.expectations.len().saturating_sub(selected.len());
     Ok(CheckOptions {
         selected,
@@ -36,41 +36,44 @@ pub(crate) fn select_expectations(
     config: &CheckConfig,
     args: &[OsString],
 ) -> Result<Vec<SelectedExpectation>, String> {
-    // This expands command-line expectation numbers into the candidate set.
+    // This expands command-line expectation selectors into the candidate set.
     // The final selected set is resolved later, after cooldown and reusable
     // passing cache-hit deselection.
-    let mut selected_numbers = Vec::new();
+    let identities = expectation_identities(config)?;
+    let mut selected_indexes = Vec::new();
     if args.is_empty() {
-        selected_numbers.extend(1..=config.expectations.len());
+        selected_indexes.extend(0..config.expectations.len());
     } else {
         let mut seen = BTreeSet::new();
         for arg in args {
             let text = arg
                 .to_str()
-                .ok_or("expectation number must be valid UTF-8".to_string())?;
-            let number = text
-                .parse::<usize>()
-                .map_err(|_| format!("invalid expectation number: {}", text))?;
-            if number == 0 {
-                return Err("expectation numbers are 1-based".to_string());
+                .ok_or("expectation selector must be valid UTF-8".to_string())?;
+            if text.is_empty() {
+                return Err("expectation selector must not be empty".to_string());
             }
-            if number > config.expectations.len() {
-                return Err(format!("expectation number out of range: {}", number));
+            let matches = matching_expectation_indexes(&identities, text);
+            let index = match matches.as_slice() {
+                [] => return Err(format!("unknown expectation selector: {}", text)),
+                [index] => *index,
+                _ => return Err(format!("ambiguous expectation selector: {}", text)),
+            };
+            if !seen.insert(index) {
+                return Err(format!("duplicate expectation selector: {}", text));
             }
-            if !seen.insert(number) {
-                return Err(format!("duplicate expectation number: {}", number));
-            }
-            selected_numbers.push(number);
+            selected_indexes.push(index);
         }
     }
 
-    selected_numbers
+    selected_indexes
         .into_iter()
-        .map(|number| -> Result<SelectedExpectation, String> {
-            let expectation = &config.expectations[number - 1];
+        .map(|index| -> Result<SelectedExpectation, String> {
+            let identity = &identities[index];
+            let expectation = &config.expectations[index];
             Ok(SelectedExpectation {
-                number,
-                id: expectation_id(&expectation.q, &expectation.a),
+                number: index + 1,
+                id: identity.id.clone(),
+                display_id: identity.display_id.clone(),
                 q: expectation.q.clone(),
                 a: expectation.a.clone(),
                 cooldown: expectation
@@ -82,6 +85,57 @@ pub(crate) fn select_expectations(
             })
         })
         .collect::<Result<Vec<_>, _>>()
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ExpectationIdentity {
+    pub(crate) id: String,
+    pub(crate) display_id: String,
+}
+
+pub(crate) fn expectation_identities(
+    config: &CheckConfig,
+) -> Result<Vec<ExpectationIdentity>, String> {
+    let ids = config
+        .expectations
+        .iter()
+        .map(|expectation| expectation_id(&expectation.q, &expectation.a))
+        .collect::<Vec<_>>();
+    let mut seen = BTreeSet::new();
+    for id in &ids {
+        if !seen.insert(id.clone()) {
+            return Err(format!("duplicate expectation ID: {}", id));
+        }
+    }
+    ids.iter()
+        .map(|id| {
+            let display_id = minimal_unique_expectation_prefix(id, &ids)
+                .ok_or_else(|| format!("expectation ID is not unique: {}", id))?;
+            Ok(ExpectationIdentity {
+                id: id.clone(),
+                display_id,
+            })
+        })
+        .collect()
+}
+
+fn matching_expectation_indexes(identities: &[ExpectationIdentity], selector: &str) -> Vec<usize> {
+    identities
+        .iter()
+        .enumerate()
+        .filter_map(|(index, identity)| identity.id.starts_with(selector).then_some(index))
+        .collect()
+}
+
+fn minimal_unique_expectation_prefix(id: &str, ids: &[String]) -> Option<String> {
+    (1..=id.len()).find_map(|end| {
+        let prefix = &id[..end];
+        let matches = ids
+            .iter()
+            .filter(|candidate| candidate.starts_with(prefix))
+            .count();
+        (matches == 1).then(|| prefix.to_string())
+    })
 }
 
 pub(crate) struct FinalSelection {
@@ -101,7 +155,7 @@ pub(crate) fn final_selected_expectations(
     history_cache: &mut HistoryCache,
     now: u64,
 ) -> Result<FinalSelection, FinalSelectionError> {
-    // CLI number filtering happens before this function. This is the shared
+    // CLI selector filtering happens before this function. This is the shared
     // final-selection step for `canon check` and `canon gate`: cooldown removes
     // matching expectations from the selected set before cache reuse or gate
     // comparison.

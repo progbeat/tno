@@ -36,6 +36,8 @@ pub(crate) fn reusable_history_record_for_source(
             return Ok(HistoryRecordScan::Continue);
         };
         if current_hash == record.scope_hash {
+            record.id = expectation.id.clone();
+            record.display_id = expectation.display_id.clone();
             record.scope = scope;
             record.number = expectation.number;
             record.prompt = expectation.q.clone();

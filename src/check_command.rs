@@ -15,7 +15,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
                 "check.start",
                 &[
                     ("query", json!(command.query.is_some())),
-                    ("selected", json!(Vec::<usize>::new())),
+                    ("selected", json!(Vec::<String>::new())),
                 ],
             )?;
             write_check_finish_event(
@@ -42,7 +42,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             diagnostic_log.write_event(
                 "info",
                 "check.start",
-                &[("selected", json!(Vec::<usize>::new()))],
+                &[("selected", json!(Vec::<String>::new()))],
             )?;
             write_check_finish_event(
                 &mut diagnostic_log,
@@ -61,7 +61,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             json!(options
                 .selected
                 .iter()
-                .map(|expectation| expectation.number)
+                .map(|expectation| expectation.id.clone())
                 .collect::<Vec<_>>()),
         )],
     )?;
@@ -97,7 +97,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let mut result_output: &mut dyn Write = &mut stdout;
     // `run_check_with_runner` calls `write_and_flush_result_output` after each
     // selected expectation; that helper renders the public human-readable
-    // check-output record (`N. OK`, `N. FAILED`, or `N. ERROR`) and flushes it
+    // check-output record (`P. OK`, `P. FAILED`, or `P. ERROR`) and flushes it
     // before the next expectation starts.
     let records_result = run_check_with_runner(
         root,

@@ -145,23 +145,35 @@ fn plugin_keys_must_have_exactly_one_nonempty_separator() {
 }
 
 #[test]
-fn selected_expectation_numbers_are_validated() {
+fn selected_expectation_selectors_are_validated() {
     let config = parse_check_config(check_config_yaml()).unwrap();
+    let second_id = test_selector(&config, "2");
+    let second_prefix = expectation_identities(&config).unwrap()[1]
+        .display_id
+        .clone();
     assert_eq!(select_expectations(&config, &[]).unwrap().len(), 2);
     assert_eq!(
-        select_expectations(&config, &["2".into()]).unwrap()[0].number,
+        select_expectations(&config, &[second_id.into()]).unwrap()[0].number,
         2
     );
-    assert!(select_expectations(&config, &["0".into()]).is_err());
-    assert!(select_expectations(&config, &["3".into()]).is_err());
-    assert!(select_expectations(&config, &["1".into(), "1".into()]).is_err());
-    assert!(select_expectations(&config, &["x".into()]).is_err());
+    assert_eq!(
+        select_expectations(&config, &[second_prefix.into()]).unwrap()[0].number,
+        2
+    );
+    assert!(select_expectations(&config, &["".into()]).is_err());
+    assert!(select_expectations(&config, &["not-a-prefix".into()]).is_err());
+    let duplicate = test_selector(&config, "1");
+    assert!(select_expectations(&config, &[duplicate.clone().into(), duplicate.into()]).is_err());
 }
 
 #[test]
-fn check_options_accept_fail_fast_with_selected_numbers() {
+fn check_options_accept_fail_fast_with_selected_selectors() {
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let options = parse_check_options(&config, &["--fail-fast".into(), "2".into()]).unwrap();
+    let options = parse_check_options(
+        &config,
+        &["--fail-fast".into(), test_selector(&config, "2").into()],
+    )
+    .unwrap();
     assert!(options.fail_fast);
     assert_eq!(options.selected.len(), 1);
     assert_eq!(options.selected[0].number, 2);

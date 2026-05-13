@@ -5,7 +5,7 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) enforced_scope: &'a [String],
     pub(crate) model: Option<&'a str>,
     pub(crate) thinking: &'a str,
-    pub(crate) number: usize,
+    pub(crate) expectation_id: Option<&'a str>,
     pub(crate) prompt: &'a str,
 }
 
@@ -47,7 +47,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             remove_thread_session(state, &session_key);
             write_model_fallback_events(
                 diagnostic_log,
-                request.number,
+                request.expectation_id,
                 request.model,
                 None,
                 err.message_str(),
@@ -105,14 +105,14 @@ fn ask_in_thread<R: EvaluatorRunner>(
         model: request.model,
         thinking: request.thinking,
     };
-    ask_with_repairs(
+    ask_once(
         runner,
         &turn,
         request.prompt,
         agent,
         parse_cache,
         diagnostic_log,
-        request.number,
+        request.expectation_id,
     )
 }
 
@@ -198,7 +198,7 @@ fn write_thread_restart_event(
         "thread.restart",
         &[
             ("threadId", json!(session_id)),
-            ("number", json!(request.number)),
+            ("id", json!(request.expectation_id)),
             ("scope", json!(request.enforced_scope)),
             ("model", json!(model_label(request.model))),
             ("reason", json!(reason)),
@@ -234,7 +234,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
             enforced_scope: &enforced_scope,
             model,
             thinking,
-            number: expectation.number,
+            expectation_id: Some(&expectation.id),
             prompt: &prompt,
         },
     )?;

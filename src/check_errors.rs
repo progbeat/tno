@@ -11,6 +11,8 @@ pub(crate) fn error_record_from_interrogation_error(
     let scope_hash = scope_hash_cache.staged_scope_hash(root, agent, scope)?;
     Ok(CheckRecord {
         timestamp: format_log_record_timestamp(unix_timestamp()?),
+        id: expectation.id.clone(),
+        display_id: expectation.display_id.clone(),
         number: expectation.number,
         result: CheckResult::Fail,
         prompt: expectation.q.clone(),
