@@ -59,4 +59,7 @@ fn developer_instructions_include_agent_instructions_and_response_format() {
     assert!(instructions.contains(
         "if a question asks whether you can read or open `.canon/check.yml`, answer `no`"
     ));
+    assert!(instructions.contains(
+        "if a question asks whether you can read files under `CANON_STATE_DIR`, answer `no`"
+    ));
 }

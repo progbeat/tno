@@ -47,16 +47,26 @@ fn index_updates_do_not_drop_hash_collisions() {
         .unwrap();
 
         upsert_index(&config, "samehash", "target-key").unwrap();
-        let index = fs::read_to_string(config.root.join("index.tsv")).unwrap();
+        let index = read_index(&config.root.join("index.tsv")).unwrap();
 
-        assert!(index.contains("samehash\tother-key\n"));
-        assert!(!index.contains("oldhash\ttarget-key\n"));
-        assert!(index.contains("samehash\ttarget-key\n"));
+        assert!(index
+            .iter()
+            .any(|(hash, key)| hash == "samehash" && key == "other-key"));
+        assert!(!index
+            .iter()
+            .any(|(hash, key)| hash == "oldhash" && key == "target-key"));
+        assert!(index
+            .iter()
+            .any(|(hash, key)| hash == "samehash" && key == "target-key"));
 
         remove_index(&config, "samehash", "target-key").unwrap();
-        let index = fs::read_to_string(config.root.join("index.tsv")).unwrap();
-        assert!(index.contains("samehash\tother-key\n"));
-        assert!(!index.contains("samehash\ttarget-key\n"));
+        let index = read_index(&config.root.join("index.tsv")).unwrap();
+        assert!(index
+            .iter()
+            .any(|(hash, key)| hash == "samehash" && key == "other-key"));
+        assert!(!index
+            .iter()
+            .any(|(hash, key)| hash == "samehash" && key == "target-key"));
     });
 }
 

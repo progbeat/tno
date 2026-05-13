@@ -99,9 +99,10 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
 pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
     // Summary order is fixed to match the spec and pytest-style labels:
     // failed, error/errors, passed, skipped.
-    // `report.skipped` is the selection complement, so
+    // `report.skipped` is the final selection complement, so
     // `report.selected + report.skipped` covers the active check configuration.
-    // The public summary's skipped label is this same non-selected count.
+    // This includes expectations deselected by reusable passing cache hits:
+    // they are no longer selected, and therefore are public-summary skipped.
     let mut passed = 0usize;
     let mut failed = 0usize;
     let mut errors = 0usize;

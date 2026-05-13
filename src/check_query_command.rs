@@ -4,12 +4,11 @@ pub(crate) fn run_check_query_command(
     root: &Path,
     config: &CheckConfig,
     question: &str,
-    repo_cache: &mut RepoInspectionCache,
+    mut diagnostic_log: DiagnosticLogWriter,
 ) -> Result<(), String> {
     // `canon check -q` is an ad-hoc interrogation mode. It loads the active
     // evaluator config, but it does not select or run expectations and is not a
     // per-expectation check run governed by the normal check-output summary.
-    let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, repo_cache)?;
     diagnostic_log.write_event(
         "info",
         "check.start",
@@ -32,7 +31,21 @@ pub(crate) fn run_check_query_command(
         Some(&mut diagnostic_log),
         &mut interrogation_state,
     );
-    let usage = collect_check_token_usage(&mut execution.runner, &mut diagnostic_log)?;
+    let usage = match collect_check_token_usage(&mut execution.runner, &mut diagnostic_log) {
+        Ok(usage) => usage,
+        Err(err) => {
+            write_check_finish_event(
+                &mut diagnostic_log,
+                true,
+                CheckFinishStats {
+                    errors: 1,
+                    ..CheckFinishStats::default()
+                },
+                Some(&err),
+            )?;
+            return Err(err);
+        }
+    };
     let result = match result {
         Ok(result) => result,
         Err(err) => {
@@ -51,7 +64,18 @@ pub(crate) fn run_check_query_command(
     };
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
-    write_query_output(&mut stdout, &result.answer)?;
+    if let Err(err) = write_query_output(&mut stdout, &result.answer) {
+        write_check_finish_event(
+            &mut diagnostic_log,
+            true,
+            CheckFinishStats {
+                errors: 1,
+                ..CheckFinishStats::default()
+            },
+            Some(&err),
+        )?;
+        return Err(err);
+    }
     print_token_usage_summary(Some(usage));
     write_check_finish_event(&mut diagnostic_log, true, CheckFinishStats::default(), None)
 }

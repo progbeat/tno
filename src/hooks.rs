@@ -6,6 +6,8 @@ pub(crate) fn run_init(root: &Path) -> Result<(), String> {
         return Err(format!("{} already exists", CHECK_PATH));
     }
 
+    // These are user-owned project configuration files, not canon runtime
+    // state: they live in the worktree so humans can review and version them.
     if let Some(parent) = check_path.parent() {
         ensure_dir(parent)?;
     }
@@ -87,6 +89,9 @@ pub(crate) fn install_pre_commit_hook_with_state(
     root: &Path,
     state: &HookInstallState,
 ) -> Result<(), String> {
+    // Hook installation writes Git integration configuration, not canon-owned
+    // persistent state. Internal cache, logs, and note state stay under the
+    // repository's `git rev-parse --git-path canon` directory.
     let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
     if let Some(parent) = hook_path.parent() {
         ensure_dir(parent)?;

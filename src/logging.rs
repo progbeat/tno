@@ -52,14 +52,14 @@ impl DiagnosticLogWriter {
             "info",
             event,
             &[
-                ("number", json!(record.number)),
                 ("result", json!(record.result)),
-                ("prompt", json!(record.prompt)),
-                ("expected", json!(record.expected)),
                 ("observed", json!(record.observed)),
                 ("evidence", json!(record.evidence)),
                 ("scope", json!(record.scope)),
                 ("scopeHash", json!(record.scope_hash)),
+                ("number", json!(record.number)),
+                ("prompt", json!(record.prompt)),
+                ("expected", json!(record.expected)),
             ],
         )
     }
@@ -184,14 +184,14 @@ pub(crate) fn render_check_log_record(record: &CheckRecord) -> String {
     output.push('{');
     let mut first = true;
     append_json_string_field(&mut output, &mut first, "timestamp", &record.timestamp);
-    append_json_usize_field(&mut output, &mut first, "number", record.number);
     append_json_string_field(&mut output, &mut first, "result", record.result.as_str());
-    append_json_string_field(&mut output, &mut first, "prompt", &record.prompt);
-    append_json_string_field(&mut output, &mut first, "expected", &record.expected);
     append_json_string_field(&mut output, &mut first, "observed", &record.observed);
     append_json_string_field(&mut output, &mut first, "evidence", &record.evidence);
     append_json_string_array_field(&mut output, &mut first, "scope", &record.scope);
     append_json_string_field(&mut output, &mut first, "scopeHash", &record.scope_hash);
+    append_json_usize_field(&mut output, &mut first, "number", record.number);
+    append_json_string_field(&mut output, &mut first, "prompt", &record.prompt);
+    append_json_string_field(&mut output, &mut first, "expected", &record.expected);
     if let Some(cache_key) = &record.cache_key {
         append_json_string_field(&mut output, &mut first, "cacheKey", cache_key);
     }

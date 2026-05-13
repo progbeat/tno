@@ -21,26 +21,29 @@ impl Config {
             return Err("CODEX_THREAD_ID must be a single path segment".to_string());
         }
 
+        #[cfg(test)]
         if let Some(value) = env::var_os("CANON_HOME") {
             if !value.is_empty() {
-                // This directory holds user-retained notes for the active
-                // Codex thread. It is bounded by the retained note set; cache
-                // and log state use separate project-local bounded stores.
                 return Ok(Config {
-                    root: PathBuf::from(value).join("codex").join(thread_id),
+                    root: PathBuf::from(value)
+                        .join(".git")
+                        .join("canon")
+                        .join("codex")
+                        .join(thread_id),
                 });
             }
         }
 
-        let temp_root = env::var_os("TMPDIR")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(env::temp_dir);
+        let current_dir =
+            env::current_dir().map_err(|err| format!("failed to read current dir: {}", err))?;
+        let project_root = git_project_root(&current_dir)?;
+        Config::for_project_thread(&project_root, &thread_id)
+    }
 
+    pub(crate) fn for_project_thread(root: &Path, thread_id: &str) -> Result<Config, String> {
+        let state_root = resolve_git_path(root, "canon")?;
         Ok(Config {
-            // TMPDIR fallback has the same retained-note semantics as
-            // CANON_HOME, but lives under the OS temporary hierarchy.
-            root: temp_root.join("canon").join("codex").join(thread_id),
+            root: state_root.join("codex").join(thread_id),
         })
     }
 }

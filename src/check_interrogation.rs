@@ -80,6 +80,10 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         }
         Err(err) => {
             if session_failure_invalidates_thread(&err) {
+                // A technical turn failure can leave the thread with an active
+                // or failed turn even when the app-server process is still
+                // usable. Drop only this session so model fallback starts from
+                // a clean thread in the same app-server process.
                 remove_thread_session(state, &session_key);
             }
             return Err(err);

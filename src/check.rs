@@ -48,8 +48,9 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     for expectation in &final_selection.selected {
         // Each branch that produces a selected CheckRecord writes and flushes
         // that record before moving to the next expectation. Reused passing
-        // cache hits are removed from the final selected set and counted as
-        // skipped, so they intentionally emit no per-expectation stdout.
+        // cache hits are final-selection deselections: once a cached pass has
+        // satisfied the candidate, it is no longer a selected expectation and
+        // is counted in the public "skipped" total as a non-selected one.
         if check_interrupted() {
             return Err(check_run_error(
                 &records,
@@ -75,6 +76,9 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 if hit.record.passed() {
                     // A reusable passing exact-cache hit satisfies the
                     // candidate without leaving it in the final selected set.
+                    // This keeps `selected + skipped == all expectations` and
+                    // matches the check-output definition of skipped as the
+                    // final non-selected expectation count.
                     selected = selected.saturating_sub(1);
                     skipped += 1;
                     silent += 1;
@@ -144,8 +148,10 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         {
             narrowing.attempted += 1;
             // A narrower scope from one evaluator response becomes reusable
-            // only if an independent interrogation with that same canonical
-            // scope preserves the answer.
+            // when an independent interrogation with that same canonical scope
+            // either preserves the answer or still finds the expectation
+            // failing. A changed failing answer is safe to keep because it
+            // remains an actionable incorrect result for the narrower scope.
             let initial_record = interrogation.record.clone();
             let narrowed = run_try!(interrogate_or_error_record(
                 InterrogationCall {
@@ -159,7 +165,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 &mut interrogation_state,
                 &mut scope_hash_cache,
             ));
-            if narrowed.record.observed == interrogation.record.observed {
+            if narrowed_scope_is_accepted(&interrogation.record, &narrowed.record) {
                 narrowing.accepted += 1;
                 run_try!(write_scope_narrowing_event(
                     &mut diagnostic_log,
@@ -313,6 +319,10 @@ fn interrogate_or_error_record<R: EvaluatorRunner>(
             )?,
         }),
     }
+}
+
+pub(crate) fn narrowed_scope_is_accepted(wide: &CheckRecord, narrowed: &CheckRecord) -> bool {
+    narrowed.observed == wide.observed || (is_verified_record(narrowed) && !narrowed.passed())
 }
 
 fn write_scope_narrowing_event(

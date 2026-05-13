@@ -191,8 +191,14 @@ pub(crate) struct NarrowingStats {
 #[derive(Debug, Clone)]
 pub(crate) struct CheckRunReport {
     pub(crate) records: Vec<CheckRecord>,
+    // Final selected count after every deselection rule has run. This excludes
+    // command-number misses, cooldown matches, and reusable passing cache hits.
     pub(crate) selected: usize,
+    // Final non-selected count. It is the complement to `selected` across the
+    // active check configuration, not merely the original CLI number filter.
     pub(crate) skipped: usize,
+    // Non-selected expectations that intentionally produce no per-expectation
+    // stdout, currently cooldown matches and reusable passing cache hits.
     pub(crate) silent: usize,
     pub(crate) narrowing: NarrowingStats,
 }

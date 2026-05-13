@@ -83,16 +83,3 @@ where
     env_snapshot.set("CODEX_THREAD_ID", "thread-test");
     f(home.path());
 }
-
-pub(crate) fn with_tmpdir<F>(name: &str, f: F)
-where
-    F: FnOnce(PathBuf),
-{
-    let _guard = ENV_LOCK.lock().expect("lock test environment");
-    let env_snapshot = EnvSnapshot::capture(&["CANON_HOME", "TMPDIR", "CODEX_THREAD_ID"]);
-    let temp = TestDir::new(name);
-    env_snapshot.remove("CANON_HOME");
-    env_snapshot.set("TMPDIR", temp.path());
-    env_snapshot.set("CODEX_THREAD_ID", "thread-test");
-    f(temp.path());
-}

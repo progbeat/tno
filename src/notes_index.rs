@@ -1,22 +1,19 @@
 use crate::*;
 
 pub(crate) fn upsert_index(config: &Config, hash: &str, key: &str) -> Result<(), String> {
+    validate_index_entry(hash, key)?;
     ensure_dir(&config.root)?;
     let _lock = lock_index(config)?;
     let path = config.root.join("index.tsv");
-    let mut entries = read_index(&path)?;
-    entries.retain(|(_, existing_key)| existing_key != key);
-    entries.push((hash.to_string(), key.to_string()));
-    write_index(&path, &entries)
+    append_index_entry(&path, hash, key)
 }
 
 pub(crate) fn remove_index(config: &Config, _hash: &str, key: &str) -> Result<(), String> {
+    validate_note_key(key)?;
     ensure_dir(&config.root)?;
     let _lock = lock_index(config)?;
     let path = config.root.join("index.tsv");
-    let mut entries = read_index(&path)?;
-    entries.retain(|(_, existing_key)| existing_key != key);
-    write_index(&path, &entries)
+    append_index_tombstone(&path, key)
 }
 
 pub(crate) struct IndexLock {
@@ -86,6 +83,7 @@ pub(crate) fn lock_index(config: &Config) -> Result<IndexLock, String> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn read_index(path: &Path) -> Result<Vec<(String, String)>, String> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -99,15 +97,29 @@ pub(crate) fn read_index(path: &Path) -> Result<Vec<(String, String)>, String> {
                 path.display()
             ));
         };
-        validate_index_entry(hash, key).map_err(|err| {
-            format!(
-                "malformed index line {} in {}: {}",
-                line_number,
-                path.display(),
-                err
-            )
-        })?;
-        entries.push((hash.to_string(), key.to_string()));
+        if hash.is_empty() {
+            validate_note_key(key).map_err(|err| {
+                format!(
+                    "malformed index line {} in {}: {}",
+                    line_number,
+                    path.display(),
+                    err
+                )
+            })?;
+        } else {
+            validate_index_entry(hash, key).map_err(|err| {
+                format!(
+                    "malformed index line {} in {}: {}",
+                    line_number,
+                    path.display(),
+                    err
+                )
+            })?;
+        }
+        entries.retain(|(_, existing_key)| existing_key != key);
+        if !hash.is_empty() {
+            entries.push((hash.to_string(), key.to_string()));
+        }
         Ok(())
     })?;
     Ok(entries)
@@ -123,17 +135,28 @@ pub(crate) fn validate_index_entry(hash: &str, key: &str) -> Result<(), String> 
     validate_note_key(key)
 }
 
-pub(crate) fn write_index(path: &Path, entries: &[(String, String)]) -> Result<(), String> {
-    let mut content = String::new();
-    for (hash, key) in entries {
-        validate_index_entry(hash, key)
-            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-        content.push_str(hash);
-        content.push('\t');
-        content.push_str(key);
-        content.push('\n');
+fn append_index_entry(path: &Path, hash: &str, key: &str) -> Result<(), String> {
+    validate_index_entry(hash, key)
+        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+    append_index_record(path, hash, key)
+}
+
+fn append_index_tombstone(path: &Path, key: &str) -> Result<(), String> {
+    validate_note_key(key).map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+    append_index_record(path, "", key)
+}
+
+fn append_index_record(path: &Path, hash: &str, key: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        ensure_dir(parent)?;
     }
-    write_file_atomically(path, content.as_bytes())
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
+    writeln!(file, "{}\t{}", hash, key)
+        .map_err(|err| format!("failed to write {}: {}", path.display(), err))
 }
 
 pub(crate) fn write_file_atomically(path: &Path, content: &[u8]) -> Result<(), String> {

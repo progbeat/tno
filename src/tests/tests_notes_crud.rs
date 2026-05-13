@@ -27,10 +27,26 @@ fn write_and_append_preserve_metadata() {
         write_note(&config, "src/main.rs", "body").unwrap();
         append_note(&config, "src/main.rs", "decision").unwrap();
         let note = note_for_key(&config, "src/main.rs").unwrap();
-        let content = fs::read_to_string(note.path).unwrap();
+        let raw = fs::read_to_string(&note.path).unwrap();
+        let content = materialize_note_content(&note, &raw).unwrap();
         assert!(content.starts_with("<!-- canon key=\"src/main.rs\" hash=\""));
         assert!(content.contains("\nbody\n"));
         assert!(content.contains("decision"));
+    });
+}
+
+#[test]
+fn write_replaces_visible_note_content_without_rewriting_log() {
+    with_env("write-replace", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "old body").unwrap();
+        write_note(&config, "src/main.rs", "new body").unwrap();
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let raw = fs::read_to_string(&note.path).unwrap();
+        let content = materialize_note_content(&note, &raw).unwrap();
+        assert!(!content.contains("old body"));
+        assert!(content.contains("new body"));
+        assert!(raw.contains("old body"));
     });
 }
 
@@ -43,9 +59,9 @@ fn delete_removes_only_target() {
         delete_note(&config, "one").unwrap();
         assert!(!first.path.exists());
         assert!(second.path.exists());
-        let index = fs::read_to_string(config.root.join("index.tsv")).unwrap();
-        assert!(!index.contains("\tone\n"));
-        assert!(index.contains("\ttwo\n"));
+        let index = read_index(&config.root.join("index.tsv")).unwrap();
+        assert!(!index.iter().any(|(_, key)| key == "one"));
+        assert!(index.iter().any(|(_, key)| key == "two"));
     });
 }
 
@@ -60,8 +76,8 @@ fn delete_verifies_note_before_removing_index_entry() {
 
         assert!(err.contains("belongs to key"));
         assert!(note.path.exists());
-        let index = fs::read_to_string(config.root.join("index.tsv")).unwrap();
-        assert!(index.contains("\tone\n"));
+        let index = read_index(&config.root.join("index.tsv")).unwrap();
+        assert!(index.iter().any(|(_, key)| key == "one"));
     });
 }
 

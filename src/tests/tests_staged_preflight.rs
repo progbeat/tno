@@ -75,3 +75,30 @@ fn check_command_logs_start_and_finish_for_mixed_canon_preflight_failure() {
     assert!(log.contains(r#""error":"canon check failed: .canon/** changes must not be mixed"#));
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn check_command_logs_start_and_finish_for_config_load_failure() {
+    let root = git_project("check-config-load-log");
+    fs::create_dir_all(root.join(".canon")).unwrap();
+    fs::write(root.join(CHECK_PATH), "version: 1\nagent: []\n").unwrap();
+    let output = Command::new("git")
+        .args(["add", CHECK_PATH])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let err = run_check_command(&root, &[]).unwrap_err();
+
+    assert!(err.to_string().contains("failed to parse .canon/check.yml"));
+    let log = fs::read_to_string(root.join(".git/canon/logs/0.jsonl")).unwrap();
+    assert!(log.contains(r#""event":"check.start""#));
+    assert!(log.contains(r#""event":"check.finish""#));
+    assert!(log.contains(r#""errors":1"#));
+    assert!(log.contains("failed to parse .canon/check.yml"));
+    let _ = fs::remove_dir_all(root);
+}

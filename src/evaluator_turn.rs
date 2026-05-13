@@ -67,10 +67,7 @@ impl EvaluatorFailureKind {
     }
 
     pub(crate) fn invalidates_thread(self) -> bool {
-        matches!(
-            self,
-            EvaluatorFailureKind::TurnTimeout | EvaluatorFailureKind::ContextWindow
-        )
+        self.is_model_technical()
     }
 }
 
@@ -230,6 +227,12 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
     reason: &str,
 ) -> Result<String, EvaluatorError> {
     if let Some(writer) = diagnostic_log.as_deref_mut() {
+        let raw_request = json!({
+            "sessionId": turn.session_id,
+            "prompt": prompt,
+            "model": turn.model,
+            "thinking": turn.thinking,
+        });
         writer.write_event(
             "info",
             "agent.request",
@@ -238,20 +241,17 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
                 ("attempt", json!(attempt)),
                 ("reason", json!(reason)),
                 ("raw", json!(prompt)),
-                (
-                    "request",
-                    json!({
-                        "sessionId": turn.session_id,
-                        "prompt": prompt,
-                        "model": model_label(turn.model),
-                        "thinking": turn.thinking,
-                    }),
-                ),
+                ("rawRequest", raw_request.clone()),
+                ("request", raw_request),
             ],
         )?;
     }
     let response = runner.ask(turn.session_id, prompt, turn.model, turn.thinking)?;
     if let Some(writer) = diagnostic_log.as_deref_mut() {
+        let raw_response = json!({
+            "sessionId": turn.session_id,
+            "text": response.clone(),
+        });
         writer.write_event(
             "info",
             "agent.response",
@@ -260,13 +260,8 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
                 ("attempt", json!(attempt)),
                 ("reason", json!(reason)),
                 ("raw", json!(response.clone())),
-                (
-                    "response",
-                    json!({
-                        "sessionId": turn.session_id,
-                        "raw": response.clone(),
-                    }),
-                ),
+                ("rawResponse", json!(response.clone())),
+                ("response", raw_response),
             ],
         )?;
     }

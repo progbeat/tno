@@ -65,7 +65,7 @@ fn evaluator_failure_classification_uses_typed_error() {
         "app-server turn/start failed: usageLimitExceeded",
     );
     assert!(is_model_technical_failure(&usage_limit));
-    assert!(!session_failure_invalidates_thread(&usage_limit));
+    assert!(session_failure_invalidates_thread(&usage_limit));
     assert!(!is_model_technical_failure(&EvaluatorError::message(
         "evaluator response scope [\"context window\"] widens enforced scope [\".\"]"
     )));

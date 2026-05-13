@@ -6,12 +6,34 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     CHECK_INTERRUPTED.store(false, Ordering::SeqCst);
     let command = parse_check_command_args(args)?;
     let mut repo_cache = RepoInspectionCache::new();
-    let config = repo_cache.load_check_config(root, &command.config_path)?;
+    let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
+    let config = match repo_cache.load_check_config(root, &command.config_path) {
+        Ok(config) => config,
+        Err(err) => {
+            diagnostic_log.write_event(
+                "info",
+                "check.start",
+                &[
+                    ("query", json!(command.query.is_some())),
+                    ("selected", json!(Vec::<usize>::new())),
+                ],
+            )?;
+            write_check_finish_event(
+                &mut diagnostic_log,
+                command.query.is_some(),
+                CheckFinishStats {
+                    errors: 1,
+                    ..CheckFinishStats::default()
+                },
+                Some(&err),
+            )?;
+            return Err(err.into());
+        }
+    };
     if let Some(question) = command.query.as_deref() {
-        return run_check_query_command(root, &config, question, &mut repo_cache)
+        return run_check_query_command(root, &config, question, diagnostic_log)
             .map_err(CommandError::from);
     }
-    let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     // `canon check` accepts `--fail-fast` through `parse_check_options`; the
     // `canon gate` rejection below is gate-specific and does not apply here.
     let options = match parse_check_options(&config, &command.option_args) {
@@ -72,10 +94,33 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         Some(&mut diagnostic_log),
         Some(&mut result_output),
     );
-    result_output
-        .flush()
-        .map_err(|err| format!("failed to flush check result to stdout: {}", err))?;
-    let _usage = collect_and_print_check_token_usage(&mut execution.runner, &mut diagnostic_log)?;
+    if let Err(err) = result_output.flush() {
+        let err = format!("failed to flush check result to stdout: {}", err);
+        write_check_finish_event(
+            &mut diagnostic_log,
+            false,
+            CheckFinishStats {
+                errors: 1,
+                ..CheckFinishStats::default()
+            },
+            Some(&err),
+        )?;
+        return Err(err.into());
+    }
+    if let Err(err) =
+        collect_and_print_check_token_usage(&mut execution.runner, &mut diagnostic_log)
+    {
+        write_check_finish_event(
+            &mut diagnostic_log,
+            false,
+            CheckFinishStats {
+                errors: 1,
+                ..CheckFinishStats::default()
+            },
+            Some(&err),
+        )?;
+        return Err(err.into());
+    }
     let report = match records_result {
         Ok(report) => report,
         Err(err) => {

@@ -26,35 +26,26 @@ fn unsafe_thread_id_segments_fail() {
 }
 
 #[test]
-fn canon_home_overrides_default_root() {
+fn test_home_uses_git_canon_layout() {
     with_env("home-override", |home| {
-        let config = Config::from_env().unwrap();
-        assert_eq!(config.root, home.join("codex").join("thread-test"));
-    });
-}
-
-#[test]
-fn default_root_uses_tmpdir() {
-    with_tmpdir("tmpdir-root", |temp| {
         let config = Config::from_env().unwrap();
         assert_eq!(
             config.root,
-            temp.join("canon").join("codex").join("thread-test")
+            home.join(".git")
+                .join("canon")
+                .join("codex")
+                .join("thread-test")
         );
     });
 }
 
 #[test]
-fn default_root_uses_system_temp_without_tmpdir() {
-    let _guard = ENV_LOCK.lock().expect("lock test environment");
-    let env_snapshot = EnvSnapshot::capture(&["CANON_HOME", "TMPDIR", "CODEX_THREAD_ID"]);
-    env_snapshot.remove("CANON_HOME");
-    env_snapshot.remove("TMPDIR");
-    env_snapshot.set("CODEX_THREAD_ID", "thread-test");
-    let config = Config::from_env().unwrap();
+fn project_root_uses_git_canon_state_dir() {
+    let root = git_project("config-git-state");
+    let config = Config::for_project_thread(&root, "thread-test").unwrap();
     assert_eq!(
         config.root,
-        env::temp_dir()
+        root.join(".git")
             .join("canon")
             .join("codex")
             .join("thread-test")

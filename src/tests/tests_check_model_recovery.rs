@@ -16,9 +16,18 @@ fn check_runner_uses_model_fallback_after_usage_limit() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
     assert!(records[0].passed());
-    assert_eq!(runner.starts, 1);
-    assert_eq!(runner.start_models, vec![Some("gpt-5.4-mini".to_string())]);
-    assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
+    assert_eq!(runner.starts, 2);
+    assert_eq!(
+        runner.start_models,
+        vec![
+            Some("gpt-5.4-mini".to_string()),
+            Some("gpt-5.3-codex-spark".to_string())
+        ]
+    );
+    assert_eq!(
+        runner.start_scopes,
+        vec![vec![".".to_string()], vec![".".to_string()]]
+    );
     assert_eq!(
         runner.ask_models,
         vec![
@@ -28,7 +37,7 @@ fn check_runner_uses_model_fallback_after_usage_limit() {
     );
     assert_eq!(
         runner.sessions,
-        vec!["session-1".to_string(), "session-1".to_string()]
+        vec!["session-1".to_string(), "session-2".to_string()]
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -51,8 +60,14 @@ fn check_runner_keeps_using_fallback_after_model_failure() {
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert!(records.iter().all(CheckRecord::passed));
-    assert_eq!(runner.starts, 1);
-    assert_eq!(runner.start_models, vec![Some("gpt-5.4-mini".to_string())]);
+    assert_eq!(runner.starts, 2);
+    assert_eq!(
+        runner.start_models,
+        vec![
+            Some("gpt-5.4-mini".to_string()),
+            Some("gpt-5.3-codex-spark".to_string())
+        ]
+    );
     assert_eq!(
         runner.ask_models,
         vec![
@@ -65,8 +80,8 @@ fn check_runner_keeps_using_fallback_after_model_failure() {
         runner.sessions,
         vec![
             "session-1".to_string(),
-            "session-1".to_string(),
-            "session-1".to_string()
+            "session-2".to_string(),
+            "session-2".to_string()
         ]
     );
     let _ = fs::remove_dir_all(root);

@@ -25,14 +25,14 @@ fn diagnostic_log_is_written_to_numeric_active_file_and_flushed() {
     assert_eq!(json["scopeHash"], "AAAAAAAAAAAAAAAAAAAA");
     let expected_order = [
         "\"timestamp\"",
-        "\"number\"",
         "\"result\"",
-        "\"prompt\"",
-        "\"expected\"",
         "\"observed\"",
         "\"evidence\"",
         "\"scope\"",
         "\"scopeHash\"",
+        "\"number\"",
+        "\"prompt\"",
+        "\"expected\"",
     ];
     let mut previous = 0;
     for key in expected_order {

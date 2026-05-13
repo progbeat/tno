@@ -95,6 +95,30 @@ fn query_mode_uses_agent_and_does_not_write_history() {
     );
     let log = fs::read_to_string(diagnostic_log.path).unwrap();
     assert!(log.contains(r#""event":"query.result""#));
+    let log_events: Vec<serde_json::Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let request = log_events
+        .iter()
+        .find(|event| event["event"] == "agent.request")
+        .unwrap();
+    assert_eq!(
+        request["rawRequest"]["sessionId"].as_str(),
+        Some("session-1")
+    );
+    assert_eq!(
+        request["rawRequest"]["prompt"].as_str(),
+        Some("Ad-hoc question?")
+    );
+    let response = log_events
+        .iter()
+        .find(|event| event["event"] == "agent.response")
+        .unwrap();
+    assert!(response["rawResponse"]
+        .as_str()
+        .unwrap()
+        .starts_with(r#"{"answer":"no""#));
     assert!(!log.contains(r#""event":"expectation.result""#));
     let _ = fs::remove_dir_all(root);
 }
@@ -140,8 +164,8 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     let options = check_options(&config, &["1"], false, true);
     let expectation = options.selected[0].clone();
     let mut runner = FakeRunner::new(&[
-        &answer("yes", "full answer", &["src"]),
-        &answer("no", "narrow answer", &["src"]),
+        &answer("no", "full answer", &["src"]),
+        &answer("yes", "narrow answer", &["src"]),
     ]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
 
@@ -159,7 +183,7 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     assert_eq!(report.narrowing.attempted, 1);
     assert_eq!(report.narrowing.accepted, 0);
     assert_eq!(report.narrowing.rejected, 1);
-    assert_eq!(report.records[0].observed, "yes");
+    assert_eq!(report.records[0].observed, "no");
     assert_eq!(report.records[0].scope, vec!["."]);
     let history = read_history_records(&root, &expectation).unwrap();
     assert!(history.is_empty());
