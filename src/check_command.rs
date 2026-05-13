@@ -67,7 +67,21 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     )?;
     let mut execution = prepare_check_execution(root, &config, &mut diagnostic_log, false, 0)
         .map_err(CommandError::from)?;
-    let cleanup = maybe_cleanup_stale_cache_dirs(root, &config)?;
+    let cleanup = match maybe_cleanup_stale_cache_dirs(root, &config) {
+        Ok(cleanup) => cleanup,
+        Err(err) => {
+            write_check_finish_event(
+                &mut diagnostic_log,
+                false,
+                CheckFinishStats {
+                    errors: 1,
+                    ..CheckFinishStats::default()
+                },
+                Some(&err),
+            )?;
+            return Err(err.into());
+        }
+    };
     if cleanup.sampled {
         diagnostic_log.write_event(
             "info",

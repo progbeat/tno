@@ -95,153 +95,153 @@ pub(crate) fn expand_raw_check_config(
     root: Option<&Path>,
     config_path: &Path,
     raw: RawCheckConfig,
-    mut cache: Option<&mut RepoInspectionCache>,
+    cache: Option<&mut RepoInspectionCache>,
 ) -> Result<CheckConfig, String> {
-    let mut expectations = Vec::new();
-    let mut expanded_paths = BTreeSet::new();
-    let staged = config_path == Path::new(CHECK_PATH);
-    expand_raw_expectation_items(
+    let mut expansion = RawExpectationExpansion {
         root,
-        config_path,
-        raw.expectations,
-        &mut cache,
-        staged,
-        &mut Vec::new(),
-        &mut expanded_paths,
-        &mut expectations,
-    )?;
+        cache,
+        staged: config_path == Path::new(CHECK_PATH),
+        include_stack: Vec::new(),
+        expanded_paths: BTreeSet::new(),
+        expectations: Vec::new(),
+    };
+    expansion.expand_items(config_path, raw.expectations)?;
     Ok(CheckConfig {
         version: raw.version,
         agent: raw.agent,
-        expectations,
+        expectations: expansion.expectations,
     })
 }
 
-fn expand_raw_expectation_items(
-    root: Option<&Path>,
-    config_path: &Path,
-    items: Vec<RawExpectationItem>,
-    cache: &mut Option<&mut RepoInspectionCache>,
+struct RawExpectationExpansion<'a> {
+    root: Option<&'a Path>,
+    cache: Option<&'a mut RepoInspectionCache>,
     staged: bool,
-    include_stack: &mut Vec<String>,
-    expanded_paths: &mut BTreeSet<String>,
-    expectations: &mut Vec<Expectation>,
-) -> Result<(), String> {
-    for (index, item) in items.into_iter().enumerate() {
-        match raw_expectation_kind(&item) {
-            RawExpectationKind::Explicit => {
-                expectations.push(Expectation {
+    include_stack: Vec<String>,
+    expanded_paths: BTreeSet<String>,
+    expectations: Vec<Expectation>,
+}
+
+impl RawExpectationExpansion<'_> {
+    fn expand_items(
+        &mut self,
+        config_path: &Path,
+        items: Vec<RawExpectationItem>,
+    ) -> Result<(), String> {
+        for (index, item) in items.into_iter().enumerate() {
+            match raw_expectation_kind(&item) {
+                RawExpectationKind::Explicit => self.expectations.push(Expectation {
                     q: item.q.unwrap_or_default(),
                     a: item.a.unwrap_or_default(),
                     cooldown: item.cooldown,
                     thinking: item.thinking,
-                });
-            }
-            RawExpectationKind::Generator => {
-                let item_number = index + 1;
-                let path = item.path.as_deref().unwrap_or_default();
-                let template = item.q_template.as_deref().unwrap_or_default();
-                validate_generator_template(template, item_number)?;
-                let root = root.ok_or_else(|| {
-                    format!(
-                        "expectation {} uses path but config expansion has no project root",
-                        item_number
-                    )
-                })?;
-                let files = match cache.as_deref_mut() {
-                    Some(cache) => cache.generator_paths(root, config_path, path, staged),
-                    None => expand_generator_paths(root, config_path, path, staged),
-                }?;
-                if files.is_empty() {
-                    return Err(format!(
-                        "expectation {} path matched no files: {}",
-                        item_number, path
-                    ));
+                }),
+                RawExpectationKind::Generator => {
+                    self.expand_path_generator(config_path, index, item)?
                 }
-                for file in files {
-                    if !expanded_paths.insert(file.clone()) {
-                        return Err(format!(
-                            "expectation {} expands duplicate spec path: {}",
-                            item_number, file
-                        ));
-                    }
-                    let content = if staged {
-                        match cache.as_deref_mut() {
-                            Some(cache) => cache.staged_file_content(root, &file),
-                            None => read_staged_file_content(root, &file),
-                        }
-                    } else {
-                        let absolute = root.join(&file);
-                        match cache.as_deref_mut() {
-                            Some(cache) => cache.read_to_string(&absolute),
-                            None => fs::read_to_string(&absolute)
-                                .map_err(|err| format!("failed to read {}: {}", file, err)),
-                        }
-                    }?;
-                    expectations.push(Expectation {
-                        q: template.replace("{content}", &content),
-                        a: item.a.clone().unwrap_or_default(),
-                        cooldown: item.cooldown.clone(),
-                        thinking: item.thinking.clone(),
-                    });
+                RawExpectationKind::Include => self.expand_include(config_path, index, item)?,
+                RawExpectationKind::Invalid(message) => {
+                    return Err(format!("expectation {} {}", index + 1, message));
                 }
             }
-            RawExpectationKind::Include => {
-                let item_number = index + 1;
-                let include = item.include.as_deref().unwrap_or_default();
-                let root = root.ok_or_else(|| {
-                    format!(
-                        "expectation {} uses include but config expansion has no project root",
-                        item_number
-                    )
-                })?;
-                let files = match cache.as_deref_mut() {
-                    Some(cache) => cache.generator_paths(root, config_path, include, staged),
-                    None => expand_generator_paths(root, config_path, include, staged),
-                }?;
-                if files.is_empty() {
-                    return Err(format!(
-                        "expectation {} include matched no files: {}",
-                        item_number, include
-                    ));
-                }
-                for file in files {
-                    if include_stack.contains(&file) {
-                        return Err(format!("recursive expectation include: {}", file));
-                    }
-                    let content = if staged {
-                        match cache.as_deref_mut() {
-                            Some(cache) => cache.staged_file_content(root, &file),
-                            None => read_staged_file_content(root, &file),
-                        }
-                    } else {
-                        let absolute = root.join(&file);
-                        match cache.as_deref_mut() {
-                            Some(cache) => cache.read_to_string(&absolute),
-                            None => fs::read_to_string(&absolute)
-                                .map_err(|err| format!("failed to read {}: {}", file, err)),
-                        }
-                    }?;
-                    let included: Vec<RawExpectationItem> = serde_yaml::from_str(&content)
-                        .map_err(|err| format!("failed to parse {}: {}", file, err))?;
-                    include_stack.push(file.clone());
-                    expand_raw_expectation_items(
-                        Some(root),
-                        Path::new(&file),
-                        included,
-                        cache,
-                        staged,
-                        include_stack,
-                        expanded_paths,
-                        expectations,
-                    )?;
-                    include_stack.pop();
-                }
+        }
+        Ok(())
+    }
+
+    fn expand_path_generator(
+        &mut self,
+        config_path: &Path,
+        index: usize,
+        item: RawExpectationItem,
+    ) -> Result<(), String> {
+        let item_number = index + 1;
+        let path = item.path.as_deref().unwrap_or_default();
+        let template = item.q_template.as_deref().unwrap_or_default();
+        validate_generator_template(template, item_number)?;
+        let files = self.expand_paths(config_path, path, item_number, "path")?;
+        for file in files {
+            if !self.expanded_paths.insert(file.clone()) {
+                return Err(format!(
+                    "expectation {} expands duplicate spec path: {}",
+                    item_number, file
+                ));
             }
-            RawExpectationKind::Invalid(message) => {
-                return Err(format!("expectation {} {}", index + 1, message));
+            let content = self.read_expanded_file(&file)?;
+            self.expectations.push(Expectation {
+                q: template.replace("{content}", &content),
+                a: item.a.clone().unwrap_or_default(),
+                cooldown: item.cooldown.clone(),
+                thinking: item.thinking.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn expand_include(
+        &mut self,
+        config_path: &Path,
+        index: usize,
+        item: RawExpectationItem,
+    ) -> Result<(), String> {
+        let item_number = index + 1;
+        let include = item.include.as_deref().unwrap_or_default();
+        let files = self.expand_paths(config_path, include, item_number, "include")?;
+        for file in files {
+            if self.include_stack.contains(&file) {
+                return Err(format!("recursive expectation include: {}", file));
+            }
+            let content = self.read_expanded_file(&file)?;
+            let included: Vec<RawExpectationItem> = serde_yaml::from_str(&content)
+                .map_err(|err| format!("failed to parse {}: {}", file, err))?;
+            self.include_stack.push(file.clone());
+            self.expand_items(Path::new(&file), included)?;
+            self.include_stack.pop();
+        }
+        Ok(())
+    }
+
+    fn expand_paths(
+        &mut self,
+        config_path: &Path,
+        path: &str,
+        item_number: usize,
+        label: &str,
+    ) -> Result<Vec<String>, String> {
+        let root = self.root.ok_or_else(|| {
+            format!(
+                "expectation {} uses {} but config expansion has no project root",
+                item_number, label
+            )
+        })?;
+        let files = match self.cache.as_deref_mut() {
+            Some(cache) => cache.generator_paths(root, config_path, path, self.staged),
+            None => expand_generator_paths(root, config_path, path, self.staged),
+        }?;
+        if files.is_empty() {
+            return Err(format!(
+                "expectation {} {} matched no files: {}",
+                item_number, label, path
+            ));
+        }
+        Ok(files)
+    }
+
+    fn read_expanded_file(&mut self, file: &str) -> Result<String, String> {
+        let root = self
+            .root
+            .ok_or_else(|| "config expansion has no project root".to_string())?;
+        if self.staged {
+            match self.cache.as_deref_mut() {
+                Some(cache) => cache.staged_file_content(root, file),
+                None => read_staged_file_content(root, file),
+            }
+        } else {
+            let absolute = root.join(file);
+            match self.cache.as_deref_mut() {
+                Some(cache) => cache.read_to_string(&absolute),
+                None => fs::read_to_string(&absolute)
+                    .map_err(|err| format!("failed to read {}: {}", file, err)),
             }
         }
     }
-    Ok(())
 }

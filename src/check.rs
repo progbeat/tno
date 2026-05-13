@@ -133,7 +133,6 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         ));
 
         let record_scope = interrogation.record.scope.clone();
-        let mut write_reusable_history = true;
         // Interrogation finalization rejects evaluator-proposed widening before
         // this point: non-idk widening becomes an unparseable review record,
         // while restricted idk rejects the proposed scope and returns an
@@ -179,7 +178,6 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 interrogation = narrowed;
             } else {
                 narrowing.rejected += 1;
-                write_reusable_history = false;
                 run_try!(write_scope_narrowing_event(
                     &mut diagnostic_log,
                     expectation.number,
@@ -199,9 +197,9 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
             }
         }
         // Only verified yes/no/option answer records are reusable. Human-review
-        // states such as idk, malformed, rejected widened scopes, and rejected
-        // narrowing attempts are not written to history.
-        if write_reusable_history && is_verified_record(&interrogation.record) {
+        // states such as idk, malformed, and rejected widened scopes are not
+        // written to history.
+        if is_verified_record(&interrogation.record) {
             run_try!(append_history_record_with_cache(
                 root,
                 expectation,

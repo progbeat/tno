@@ -35,18 +35,22 @@ pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }
-    let mut total_lines = 0usize;
+    let mut valid_lines = 0usize;
+    let mut invalid_lines = 0usize;
     let mut lines = std::collections::VecDeque::new();
     for_each_nonempty_line(path, |line_number, line| {
-        parse_history_record_line(path, line_number, &line)?;
-        total_lines += 1;
-        lines.push_back(line);
-        if lines.len() > HISTORY_COMPACT_KEEP_RECORDS {
-            lines.pop_front();
+        if parse_history_record_line(path, line_number, &line).is_ok() {
+            valid_lines += 1;
+            lines.push_back(line);
+            if lines.len() > HISTORY_COMPACT_KEEP_RECORDS {
+                lines.pop_front();
+            }
+        } else {
+            invalid_lines += 1;
         }
         Ok(())
     })?;
-    if total_lines <= HISTORY_COMPACT_KEEP_RECORDS {
+    if valid_lines <= HISTORY_COMPACT_KEEP_RECORDS && invalid_lines == 0 {
         return Ok(());
     }
     let temp_path = compact_history_temp_path(path)?;

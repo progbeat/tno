@@ -166,7 +166,9 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
     assert_eq!(records[0].observed, "no");
     assert_eq!(records[0].scope, vec!["."]);
     let history = read_history_records(&root, &options.selected[0]).unwrap();
-    assert!(history.is_empty());
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].observed, "no");
+    assert_eq!(history[0].scope, vec!["."]);
     let _ = fs::remove_dir_all(root);
 }
 

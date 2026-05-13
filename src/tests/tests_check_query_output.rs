@@ -186,7 +186,9 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     assert_eq!(report.records[0].observed, "no");
     assert_eq!(report.records[0].scope, vec!["."]);
     let history = read_history_records(&root, &expectation).unwrap();
-    assert!(history.is_empty());
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].observed, "no");
+    assert_eq!(history[0].scope, vec!["."]);
     let log = fs::read_to_string(diagnostic_log.path).unwrap();
     assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);
     assert_eq!(log.matches(r#""event":"interrogation.result""#).count(), 2);

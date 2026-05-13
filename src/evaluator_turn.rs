@@ -32,10 +32,6 @@ pub(crate) fn is_model_technical_failure(err: &EvaluatorError) -> bool {
         .is_some_and(EvaluatorFailureKind::is_model_technical)
 }
 
-pub(crate) fn is_turn_timeout_failure(err: &EvaluatorError) -> bool {
-    err.kind() == Some(EvaluatorFailureKind::TurnTimeout)
-}
-
 pub(crate) fn is_context_window_failure(err: &EvaluatorError) -> bool {
     err.kind() == Some(EvaluatorFailureKind::ContextWindow)
 }

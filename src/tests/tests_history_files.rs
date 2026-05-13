@@ -108,37 +108,49 @@ fn compact_history_replaces_file_after_writing_latest_lines() {
 }
 
 #[test]
-fn compact_history_reports_malformed_json_lines() {
+fn compact_history_drops_malformed_lines_and_keeps_latest_valid_records() {
     let root = git_project("history-compact-malformed");
+    let path = root.join(".git/canon/cache/example/history.jsonl");
+    ensure_dir(path.parent().unwrap()).unwrap();
+    let mut lines = vec!["not json".to_string()];
+    lines.extend(
+        (1..=7).map(|number| serde_json::to_string(&sample_record(number, "pass")).unwrap()),
+    );
+    fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+
+    compact_history(&path).unwrap();
+
+    let compacted = read_history_records_from_path(&path).unwrap();
+    assert_eq!(compacted.len(), 5);
+    assert_eq!(
+        compacted
+            .iter()
+            .map(|record| record.number)
+            .collect::<Vec<_>>(),
+        vec![3, 4, 5, 6, 7]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn compact_history_drops_non_record_json_objects() {
+    let root = git_project("history-compact-non-record");
     let path = root.join(".git/canon/cache/example/history.jsonl");
     ensure_dir(path.parent().unwrap()).unwrap();
     fs::write(
         &path,
         format!(
-            "{}\nnot json\n",
+            "{{\"n\":1}}\n{}\n",
             serde_json::to_string(&sample_record(1, "pass")).unwrap()
         ),
     )
     .unwrap();
 
-    let error = compact_history(&path).unwrap_err();
+    compact_history(&path).unwrap();
 
-    assert!(error.contains("invalid history JSON"));
-    assert!(error.contains("line 2"));
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn compact_history_rejects_non_record_json_objects() {
-    let root = git_project("history-compact-non-record");
-    let path = root.join(".git/canon/cache/example/history.jsonl");
-    ensure_dir(path.parent().unwrap()).unwrap();
-    fs::write(&path, "{\"n\":1}\n").unwrap();
-
-    let error = compact_history(&path).unwrap_err();
-
-    assert!(error.contains("invalid history JSON"));
-    assert!(error.contains("line 1"));
+    let compacted = read_history_records_from_path(&path).unwrap();
+    assert_eq!(compacted.len(), 1);
+    assert_eq!(compacted[0].number, 1);
     let _ = fs::remove_dir_all(root);
 }
 

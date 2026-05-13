@@ -74,7 +74,7 @@ fn evaluator_failure_classification_uses_typed_error() {
         EvaluatorFailureKind::TurnTimeout,
         "app-server turn/run timed out after 300 seconds without progress",
     );
-    assert!(is_turn_timeout_failure(&timeout));
+    assert_eq!(timeout.kind(), Some(EvaluatorFailureKind::TurnTimeout));
     assert!(session_failure_invalidates_thread(&timeout));
     assert_eq!(
         timeout.message_str(),

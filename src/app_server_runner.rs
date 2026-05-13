@@ -18,6 +18,20 @@ impl LazyAppServerRunner {
             inner.drain_token_usage_updates();
         }
     }
+
+    fn retire_inner_after_model_failure(&mut self, err: &EvaluatorError) {
+        if !is_model_technical_failure(err) {
+            return;
+        }
+        if let Some(inner) = self.inner.as_mut() {
+            inner.drain_token_usage_updates();
+            if let Some(usage) = inner.token_usage() {
+                self.retired_token_usage = self.retired_token_usage.add(usage);
+            }
+        }
+        self.sessions.clear();
+        self.inner = None;
+    }
 }
 
 impl EvaluatorRunner for LazyAppServerRunner {
@@ -30,11 +44,19 @@ impl EvaluatorRunner for LazyAppServerRunner {
         thinking: &str,
         scope: &[String],
     ) -> Result<String, EvaluatorError> {
-        let session_id =
-            self.inner()?
-                .start_session(root, instructions, agent, model, thinking, scope)?;
-        self.sessions.insert(session_id.clone());
-        Ok(session_id)
+        let result = self
+            .inner()?
+            .start_session(root, instructions, agent, model, thinking, scope);
+        match result {
+            Ok(session_id) => {
+                self.sessions.insert(session_id.clone());
+                Ok(session_id)
+            }
+            Err(err) => {
+                self.retire_inner_after_model_failure(&err);
+                Err(err)
+            }
+        }
     }
 
     fn ask(
@@ -52,15 +74,8 @@ impl EvaluatorRunner for LazyAppServerRunner {
             .as_mut()
             .ok_or_else(|| EvaluatorError::message("app-server runner is not initialized"))?
             .ask(session_id, prompt, model, thinking);
-        if matches!(result.as_ref(), Err(err) if is_turn_timeout_failure(err)) {
-            if let Some(inner) = self.inner.as_mut() {
-                inner.drain_token_usage_updates();
-                if let Some(usage) = inner.token_usage() {
-                    self.retired_token_usage = self.retired_token_usage.add(usage);
-                }
-            }
-            self.sessions.clear();
-            self.inner = None;
+        if let Err(err) = &result {
+            self.retire_inner_after_model_failure(err);
         }
         result
     }

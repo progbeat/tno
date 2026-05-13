@@ -102,3 +102,33 @@ fn check_command_logs_start_and_finish_for_config_load_failure() {
     assert!(log.contains("failed to parse .canon/check.yml"));
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn check_command_logs_start_and_finish_for_cache_cleanup_failure() {
+    let root = git_project("check-cache-cleanup-log");
+    commit_all(&root, "initial");
+    write_check_config(&root);
+    let output = Command::new("git")
+        .args(["add", CHECK_PATH])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let cache_path = root.join(".git/canon/cache");
+    ensure_dir(cache_path.parent().unwrap()).unwrap();
+    fs::write(&cache_path, "not a directory").unwrap();
+
+    let err = run_check_command(&root, &[]).unwrap_err();
+
+    assert!(!err.to_string().is_empty());
+    let log = fs::read_to_string(root.join(".git/canon/logs/0.jsonl")).unwrap();
+    assert!(log.contains(r#""event":"check.start""#));
+    assert!(log.contains(r#""event":"check.finish""#));
+    assert!(log.contains(r#""errors":1"#));
+    assert!(log.contains("failed to read"));
+    let _ = fs::remove_dir_all(root);
+}
