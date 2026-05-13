@@ -28,6 +28,5 @@ A generator item contains `path`, `q_template`, and `a`:
 
 Expectation items may include other fields not described here.
 
-Each `q_template` must contain exactly one `{content}` placeholder. For every
-matched spec file, `canon check` renders `q_template` by substituting `{content}`
+For every matched spec file, `q_template` is rendered by substituting `{content}`
 with the UTF-8 file contents to produce the generated expectation question.
