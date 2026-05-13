@@ -1,6 +1,6 @@
 # Logs
 
-`LOGS_DIR` is the path returned by `git rev-parse --git-path canon/logs`.
+`LOGS_DIR` is `${CANON_STATE_DIR}/logs`.
 
 `canon check` records runtime log events under `LOGS_DIR`.
 

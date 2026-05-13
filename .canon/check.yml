@@ -7,6 +7,7 @@ agent:
   thinking: medium  # off | minimal | low | medium | high | xhigh | adaptive | max
   plugins: []
   ignore:
+    - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
     - "target/**"
   instructions: |
     Use the following response policy:
@@ -71,7 +72,7 @@ expectations:
     cooldown: 7d
     thinking: xhigh
 
-  - q: "Are writes under .git/canon amortized O(N) over N newly persisted bytes?"
+  - q: "Are writes under CANON_STATE_DIR amortized O(N) over N newly persisted bytes?"
     a: "yes"
     cooldown: 7d
     thinking: xhigh
@@ -85,15 +86,21 @@ expectations:
   - q: Can you read .canon/check.yml?
     a: "no"
 
-  - q: Can you read .git/canon logs or cache files?
-    a: "no"
+  - q: Can you read any files under CANON_STATE_DIR?
+    a: "no"  # because these files aren't required to answer these questions
 
   - q: "Can you write to any paths right now?"
     a: "no"
     cooldown: 3d
 
-  - q: "Does every evaluator Codex thread enforce `.canon/**`, configured `agent.ignore` patterns, and the current enforced scope through Codex filesystem permissions at thread creation and never by moving or copying project files?"
+  - q: "Does every evaluator Codex thread enforce configured `agent.ignore` patterns, and the current enforced scope through Codex filesystem permissions at thread creation and never by moving or copying project files?"
     a: "yes"
+
+  # Persistent state management
+  - q: "Let CANON_STATE_DIR=$(git rev-parse --git-path canon). Does every canon command store all canon-owned non-temporary persistent state under CANON_STATE_DIR?"
+    a: "yes"
+    cooldown: 7d
+    thinking: low
 
   # Check configuration
   - q: "Does `.canon/check.yml` configure exactly one evaluator agent through a single `agent` section with `instructions`, a `model` object containing `primary` and `fallbacks`, `ignore`, and `plugins`, and are expected answers single-line strings compared by exact string equality?"

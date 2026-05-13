@@ -1,6 +1,6 @@
 # Cache
 
-`CACHE_DIR` is the path returned by `git rev-parse --git-path canon/cache`.
+`CACHE_DIR` is `${CANON_STATE_DIR}/cache`.
 
 `canon check` stores cached per-expectation results under `CACHE_DIR`.
 
