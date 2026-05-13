@@ -43,8 +43,7 @@ lines.
 Skipped expectations emit no per-expectation stdout. Failing results are never
 skipped.
 
-After all selected expectations have been processed, stderr contains exactly one
-token usage line:
+Then stderr contains exactly one token usage line:
 
 ```text
 Token usage: total=<n> input=<n> (+ <n> cached) output=<n> (reasoning <n>)
@@ -52,8 +51,7 @@ Token usage: total=<n> input=<n> (+ <n> cached) output=<n> (reasoning <n>)
 
 If token usage data is unavailable, every numeric field is `0`.
 
-After the token usage line is written, stdout contains exactly one summary line.
-This summary line is the last line written by `canon check`:
+Then stdout ends with exactly one summary line:
 
 ```text
 ============================= <outcome-list> in <duration>s =============================
@@ -97,8 +95,7 @@ Scope: ["specs/check-output.md","src/check.rs"]
 ========================= 1 failed, 1 passed in 0.42s =========================
 ```
 
-Example stderr for the same check run, written after the selected expectation
-results and before the stdout summary:
+Example stderr for the same check run:
 
 ```text
 Token usage: total=170,522 input=166,088 (+ 132,352 cached) output=4,434 (reasoning 3,723)
