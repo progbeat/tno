@@ -99,12 +99,40 @@ pub(crate) fn expand_raw_check_config(
 ) -> Result<CheckConfig, String> {
     let mut expectations = Vec::new();
     let mut expanded_paths = BTreeSet::new();
-    for (index, item) in raw.expectations.into_iter().enumerate() {
+    let staged = config_path == Path::new(CHECK_PATH);
+    expand_raw_expectation_items(
+        root,
+        config_path,
+        raw.expectations,
+        &mut cache,
+        staged,
+        &mut Vec::new(),
+        &mut expanded_paths,
+        &mut expectations,
+    )?;
+    Ok(CheckConfig {
+        version: raw.version,
+        agent: raw.agent,
+        expectations,
+    })
+}
+
+fn expand_raw_expectation_items(
+    root: Option<&Path>,
+    config_path: &Path,
+    items: Vec<RawExpectationItem>,
+    cache: &mut Option<&mut RepoInspectionCache>,
+    staged: bool,
+    include_stack: &mut Vec<String>,
+    expanded_paths: &mut BTreeSet<String>,
+    expectations: &mut Vec<Expectation>,
+) -> Result<(), String> {
+    for (index, item) in items.into_iter().enumerate() {
         match raw_expectation_kind(&item) {
             RawExpectationKind::Explicit => {
                 expectations.push(Expectation {
                     q: item.q.unwrap_or_default(),
-                    a: item.a,
+                    a: item.a.unwrap_or_default(),
                     cooldown: item.cooldown,
                     thinking: item.thinking,
                 });
@@ -120,7 +148,6 @@ pub(crate) fn expand_raw_check_config(
                         item_number
                     )
                 })?;
-                let staged = config_path == Path::new(CHECK_PATH);
                 let files = match cache.as_deref_mut() {
                     Some(cache) => cache.generator_paths(root, config_path, path, staged),
                     None => expand_generator_paths(root, config_path, path, staged),
@@ -138,7 +165,7 @@ pub(crate) fn expand_raw_check_config(
                             item_number, file
                         ));
                     }
-                    let content = if config_path == Path::new(CHECK_PATH) {
+                    let content = if staged {
                         match cache.as_deref_mut() {
                             Some(cache) => cache.staged_file_content(root, &file),
                             None => read_staged_file_content(root, &file),
@@ -153,10 +180,62 @@ pub(crate) fn expand_raw_check_config(
                     }?;
                     expectations.push(Expectation {
                         q: template.replace("{content}", &content),
-                        a: item.a.clone(),
+                        a: item.a.clone().unwrap_or_default(),
                         cooldown: item.cooldown.clone(),
                         thinking: item.thinking.clone(),
                     });
+                }
+            }
+            RawExpectationKind::Include => {
+                let item_number = index + 1;
+                let include = item.include.as_deref().unwrap_or_default();
+                let root = root.ok_or_else(|| {
+                    format!(
+                        "expectation {} uses include but config expansion has no project root",
+                        item_number
+                    )
+                })?;
+                let files = match cache.as_deref_mut() {
+                    Some(cache) => cache.generator_paths(root, config_path, include, staged),
+                    None => expand_generator_paths(root, config_path, include, staged),
+                }?;
+                if files.is_empty() {
+                    return Err(format!(
+                        "expectation {} include matched no files: {}",
+                        item_number, include
+                    ));
+                }
+                for file in files {
+                    if include_stack.contains(&file) {
+                        return Err(format!("recursive expectation include: {}", file));
+                    }
+                    let content = if staged {
+                        match cache.as_deref_mut() {
+                            Some(cache) => cache.staged_file_content(root, &file),
+                            None => read_staged_file_content(root, &file),
+                        }
+                    } else {
+                        let absolute = root.join(&file);
+                        match cache.as_deref_mut() {
+                            Some(cache) => cache.read_to_string(&absolute),
+                            None => fs::read_to_string(&absolute)
+                                .map_err(|err| format!("failed to read {}: {}", file, err)),
+                        }
+                    }?;
+                    let included: Vec<RawExpectationItem> = serde_yaml::from_str(&content)
+                        .map_err(|err| format!("failed to parse {}: {}", file, err))?;
+                    include_stack.push(file.clone());
+                    expand_raw_expectation_items(
+                        Some(root),
+                        Path::new(&file),
+                        included,
+                        cache,
+                        staged,
+                        include_stack,
+                        expanded_paths,
+                        expectations,
+                    )?;
+                    include_stack.pop();
                 }
             }
             RawExpectationKind::Invalid(message) => {
@@ -164,9 +243,5 @@ pub(crate) fn expand_raw_check_config(
             }
         }
     }
-    Ok(CheckConfig {
-        version: raw.version,
-        agent: raw.agent,
-        expectations,
-    })
+    Ok(())
 }

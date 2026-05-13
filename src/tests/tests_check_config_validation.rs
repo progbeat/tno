@@ -76,19 +76,21 @@ fn check_config_rejects_missing_required_fields() {
 }
 
 #[test]
-fn check_config_rejects_unsupported_expectation_fields() {
+fn check_config_ignores_extra_expectation_fields() {
     let yaml = r#"
-	version: 1
-	agent:
-	  instructions: x
-	  ignore: []
-	  plugins: []
-	expectations:
-	  - id: bad
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - id: extra
     q: "Question?"
     a: "yes"
 "#;
-    assert!(parse_check_config(yaml).is_err());
+    let config = parse_check_config(yaml).unwrap();
+    assert_eq!(config.expectations.len(), 1);
+    assert_eq!(config.expectations[0].q, "Question?");
 }
 
 #[test]

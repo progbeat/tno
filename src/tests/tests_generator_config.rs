@@ -1,15 +1,13 @@
 use super::*;
 
 #[test]
-fn generator_template_rejects_every_non_content_brace_pair() {
+fn generator_template_requires_exactly_one_content_placeholder() {
     assert!(
-        validate_generator_template("Example JSON: {\"ok\": true}\n{content}\nDone", 1).is_err()
+        validate_generator_template("Example JSON: {\"ok\": true}\n{content}\nDone", 1).is_ok()
     );
-    assert!(validate_generator_template("{content}\n{name}", 1).is_err());
-    assert!(validate_generator_template("{content}\n{}", 1).is_err());
-    assert!(validate_generator_template("{content}\n{ name }", 1).is_err());
-    assert!(validate_generator_template("{content}\n{!}", 1).is_err());
-    assert!(validate_generator_template("{content}\n{foo bar}", 1).is_err());
+    assert!(validate_generator_template("{content}\n{name}", 1).is_ok());
+    assert!(validate_generator_template("no placeholder", 1).is_err());
+    assert!(validate_generator_template("{content}\n{content}", 1).is_err());
 }
 
 #[test]
@@ -44,6 +42,48 @@ fn repo_inspection_cache_reuses_generator_path_expansion() {
 
     assert_eq!(first, vec!["specs/a.md".to_string()]);
     assert_eq!(second, first);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn expectation_include_expands_yaml_list_relative_to_config_file() {
+    let root = temp_home("expectation-include");
+    fs::create_dir_all(root.join("checks/expects")).unwrap();
+    fs::write(
+        root.join("checks/expects/project.yml"),
+        r#"
+- q: "Included?"
+  a: "yes"
+  cooldown: 7d
+  thinking: high
+"#,
+    )
+    .unwrap();
+    let mut cache = RepoInspectionCache::new();
+    let config = parse_check_config_content_with_root(
+        &root,
+        Path::new("checks/check.yml"),
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - include: "expects/*.yml"
+  - q: "Local?"
+    a: "no"
+"#,
+        &mut cache,
+    )
+    .unwrap();
+
+    assert_eq!(config.expectations.len(), 2);
+    assert_eq!(config.expectations[0].q, "Included?");
+    assert_eq!(config.expectations[0].a, "yes");
+    assert_eq!(config.expectations[0].cooldown.as_deref(), Some("7d"));
+    assert_eq!(config.expectations[0].thinking.as_deref(), Some("high"));
+    assert_eq!(config.expectations[1].q, "Local?");
     let _ = fs::remove_dir_all(root);
 }
 

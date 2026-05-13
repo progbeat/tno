@@ -74,15 +74,17 @@ pub(crate) struct Expectation {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct RawExpectationItem {
     #[serde(default)]
     pub(crate) q: Option<String>,
     #[serde(default)]
     pub(crate) q_template: Option<String>,
-    pub(crate) a: String,
+    #[serde(default)]
+    pub(crate) a: Option<String>,
     #[serde(default)]
     pub(crate) path: Option<String>,
+    #[serde(default)]
+    pub(crate) include: Option<String>,
     #[serde(default)]
     pub(crate) cooldown: Option<String>,
     #[serde(default)]
