@@ -109,6 +109,9 @@ expectations:
   - q: "Are expectation ID prefixes limited to human-readable output and CLI selection, with all non-temporary persistent state under CANON_STATE_DIR storing expectation references by full ID rather than minimal or user-provided prefixes?"
     a: "yes"
 
+  - q: "Is every public stdout or stderr byte produced by a `canon` command written and flushed as soon as that byte is known?"
+    a: "yes"
+
   # Scope handling
   - q: "Does the evaluator-response parser either reject the evaluator-provided scope or produce the final `scope`, where `scope` is exactly [`.`] for full project scope or a lexicographically sorted, duplicate-free list of normalized repository-relative paths with redundant child paths removed when a parent directory path already covers them?"
     a: "yes"
