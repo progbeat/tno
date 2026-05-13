@@ -6,13 +6,13 @@ For each passing expectation that is written to stdout, stdout contains exactly
 one line:
 
 ```text
-N. OK
+P. OK
 ```
 
 For each failed expectation, stdout contains exactly six lines:
 
 ```text
-N. FAILED
+P. FAILED
 <escaped question>
 Expected: <escaped expected>
 Observed: <escaped observed>
@@ -23,14 +23,15 @@ Scope: <compact JSON array>
 For each errored expectation, stdout contains exactly five lines:
 
 ```text
-N. ERROR
+P. ERROR
 <escaped question>
 Expected: <escaped expected>
 Observed: <escaped observed>
 Evidence: <escaped evidence>
 ```
 
-`N` is the 1-based expectation number from the active check configuration.
+`P` is the shortest prefix of the expectation's 20-character `ID` that uniquely
+identifies that expectation among all the expectations.
 
 Embedded control characters in question, expected answer, observed answer, and
 evidence are escaped before writing to stdout. Newline is rendered as `\n`.
@@ -86,8 +87,8 @@ Example stdout for a check run with one passing expectation and one failing
 expectation:
 
 ```text
-1. OK
-2. FAILED
+a7F. OK
+K9m. FAILED
 Does `canon check` write stdout in the format specified by [[Check Output]]?
 Expected: yes
 Observed: no

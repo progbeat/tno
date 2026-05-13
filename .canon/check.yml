@@ -91,20 +91,23 @@ expectations:
     cooldown: 7d
 
   # Output and selection
-  - q: "Does `canon check` support `--fail-fast` to stop after the first failure, while continuing remaining expectations after failures by default?"
+  - q: "Can `canon check <PREFIX>...` select one or more expectations by unique ID prefix, including full IDs?"
     a: "yes"
 
-  - q: "For an expectation that defines only `q` and `a`, when `canon check -q <q>` and `canon check <NUMBER> --ignore-cache` use the same check config and the same enforced scope, is the complete first-turn evaluator-model input identical before the evaluator answers?"
+  - q: "For an expectation that defines only `q` and `a`, when `canon check -q <q>` and `canon check <ID> --ignore-cache` select the same expectation using the same check config and enforced scope, is the complete first-turn evaluator-model input identical before the evaluator answers?"
     a: "yes"
 
-  - q: "When no expectation numbers are provided, do `canon` commands end up with the same final selected expectation set?"
+  - q: "When no expectation selectors are provided, do `canon` commands end up with the same final selected expectation set?"
     a: "yes"
 
   - q: "|selected| + |skipped| == |all expectations|?"
     a: "yes"
 
-  - q: "When no expectation numbers are provided, are expectations with cached passing results still selected?"
+  - q: "When no expectation selectors are provided, are expectations with cached passing results still selected?"
     a: "no"
+
+  - q: "Are expectation ID prefixes limited to human-readable output and CLI selection, with all non-temporary persistent state under CANON_STATE_DIR storing expectation references by full ID rather than minimal or user-provided prefixes?"
+    a: "yes"
 
   # Scope handling
   - q: "Does the evaluator-response parser either reject the evaluator-provided scope or produce the final `scope`, where `scope` is exactly [`.`] for full project scope or a lexicographically sorted, duplicate-free list of normalized repository-relative paths with redundant child paths removed when a parent directory path already covers them?"

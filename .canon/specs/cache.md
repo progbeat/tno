@@ -2,16 +2,13 @@
 
 `CACHE_DIR` is `${CANON_STATE_DIR}/cache`.
 
-`canon check` stores cached per-expectation results under `CACHE_DIR`.
-
 Each expectation has an `ID`. The `ID` is a 120-bit base64url string without
 padding, encoded as exactly 20 characters, and derived from the expectation
 question and expected answer.
 
-Each expectation cache directory is `CACHE_DIR/ID`.
+`canon check` stores per-expectation data (e.g. answer history) under `$CACHE_DIR/$ID`.
 
-Each expectation cache directory stores answer history in `history.jsonl`.
-History files use JSON Lines format. Each non-empty line is one complete JSON
+Answer history files use JSON Lines format. Each non-empty line is one complete JSON
 object.
 
 Each history record contains at least these fields in order:
@@ -46,6 +43,6 @@ record's `scope` paths.
 appending a record. Compaction keeps at least the latest five valid JSON object
 records.
 
-When looking up a cached result, `canon check` scans `history.jsonl`
+When looking up a cached result, `canon check` scans the answer history file from
 newest-to-oldest and selects the first record whose `scopeHash` matches the
 current staged Git contents for that record's `scope`.
