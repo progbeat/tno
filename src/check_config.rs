@@ -73,34 +73,72 @@ pub(crate) fn parse_check_config_content(
 ) -> Result<CheckConfig, String> {
     let raw: RawCheckConfig = serde_yaml::from_str(content)
         .map_err(|err| format!("failed to parse {}: {}", config_path.display(), err))?;
-    let config = expand_raw_check_config(None, config_path, raw, None)?;
+    let config =
+        expand_raw_check_config(None, config_path, raw, None, CheckConfigSource::Worktree)?;
     validate_check_config(&config)?;
     Ok(config)
 }
 
+#[cfg(test)]
 pub(crate) fn parse_check_config_content_with_root(
     root: &Path,
     config_path: &Path,
     content: &str,
     cache: &mut RepoInspectionCache,
 ) -> Result<CheckConfig, String> {
+    parse_check_config_content_with_root_and_source(
+        root,
+        config_path,
+        content,
+        cache,
+        if config_path == Path::new(CHECK_PATH) {
+            CheckConfigSource::Staged
+        } else {
+            CheckConfigSource::Worktree
+        },
+    )
+}
+
+pub(crate) fn parse_staged_check_config_content_with_root(
+    root: &Path,
+    config_path: &Path,
+    content: &str,
+    cache: &mut RepoInspectionCache,
+) -> Result<CheckConfig, String> {
+    parse_check_config_content_with_root_and_source(
+        root,
+        config_path,
+        content,
+        cache,
+        CheckConfigSource::Staged,
+    )
+}
+
+fn parse_check_config_content_with_root_and_source(
+    root: &Path,
+    config_path: &Path,
+    content: &str,
+    cache: &mut RepoInspectionCache,
+    source: CheckConfigSource,
+) -> Result<CheckConfig, String> {
     let raw: RawCheckConfig = serde_yaml::from_str(content)
         .map_err(|err| format!("failed to parse {}: {}", config_path.display(), err))?;
-    let config = expand_raw_check_config(Some(root), config_path, raw, Some(cache))?;
+    let config = expand_raw_check_config(Some(root), config_path, raw, Some(cache), source)?;
     validate_check_config(&config)?;
     Ok(config)
 }
 
-pub(crate) fn expand_raw_check_config(
+fn expand_raw_check_config(
     root: Option<&Path>,
     config_path: &Path,
     raw: RawCheckConfig,
     cache: Option<&mut RepoInspectionCache>,
+    source: CheckConfigSource,
 ) -> Result<CheckConfig, String> {
     let mut expansion = RawExpectationExpansion {
         root,
         cache,
-        staged: config_path == Path::new(CHECK_PATH),
+        source,
         include_stack: Vec::new(),
         expanded_paths: BTreeSet::new(),
         expectations: Vec::new(),
@@ -113,10 +151,27 @@ pub(crate) fn expand_raw_check_config(
     })
 }
 
+#[derive(Clone, Copy)]
+enum CheckConfigSource {
+    Staged,
+    #[cfg(test)]
+    Worktree,
+}
+
+impl CheckConfigSource {
+    fn is_staged(self) -> bool {
+        match self {
+            CheckConfigSource::Staged => true,
+            #[cfg(test)]
+            CheckConfigSource::Worktree => false,
+        }
+    }
+}
+
 struct RawExpectationExpansion<'a> {
     root: Option<&'a Path>,
     cache: Option<&'a mut RepoInspectionCache>,
-    staged: bool,
+    source: CheckConfigSource,
     include_stack: Vec<String>,
     expanded_paths: BTreeSet<String>,
     expectations: Vec<Expectation>,
@@ -214,8 +269,8 @@ impl RawExpectationExpansion<'_> {
             )
         })?;
         let files = match self.cache.as_deref_mut() {
-            Some(cache) => cache.generator_paths(root, config_path, path, self.staged),
-            None => expand_generator_paths(root, config_path, path, self.staged),
+            Some(cache) => cache.generator_paths(root, config_path, path, self.source.is_staged()),
+            None => expand_generator_paths(root, config_path, path, self.source.is_staged()),
         }?;
         if files.is_empty() {
             return Err(format!(
@@ -230,17 +285,19 @@ impl RawExpectationExpansion<'_> {
         let root = self
             .root
             .ok_or_else(|| "config expansion has no project root".to_string())?;
-        if self.staged {
-            match self.cache.as_deref_mut() {
+        match self.source {
+            CheckConfigSource::Staged => match self.cache.as_deref_mut() {
                 Some(cache) => cache.staged_file_content(root, file),
                 None => read_staged_file_content(root, file),
-            }
-        } else {
-            let absolute = root.join(file);
-            match self.cache.as_deref_mut() {
-                Some(cache) => cache.read_to_string(&absolute),
-                None => fs::read_to_string(&absolute)
-                    .map_err(|err| format!("failed to read {}: {}", file, err)),
+            },
+            #[cfg(test)]
+            CheckConfigSource::Worktree => {
+                let absolute = root.join(file);
+                match self.cache.as_deref_mut() {
+                    Some(cache) => cache.read_to_string(&absolute),
+                    None => fs::read_to_string(&absolute)
+                        .map_err(|err| format!("failed to read {}: {}", file, err)),
+                }
             }
         }
     }

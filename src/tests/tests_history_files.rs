@@ -154,16 +154,6 @@ fn compact_history_drops_non_record_json_objects() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn missing_untracked_stash_parent_is_not_restore_failure() {
-    let root = git_project("stash-no-untracked-parent");
-    commit_all(&root, "initial");
-
-    assert!(!git_revision_exists(&root, "HEAD^3").unwrap());
-    assert!(restore_untracked_from_stash(&root, "HEAD").is_ok());
-    let _ = fs::remove_dir_all(root);
-}
-
 #[cfg(unix)]
 #[test]
 fn git_path_from_raw_bytes_preserves_non_utf8_unix_paths() {

@@ -22,21 +22,80 @@ pub(crate) fn resolve_git_path(root: &Path, path: &str) -> Result<PathBuf, Strin
 }
 
 pub(crate) fn read_staged_file_content(root: &Path, path: &str) -> Result<String, String> {
+    read_staged_file_content_from_path(root, Path::new(path))
+}
+
+pub(crate) fn read_staged_file_content_from_path(
+    root: &Path,
+    path: &Path,
+) -> Result<String, String> {
+    let output = read_staged_file_bytes_from_raw_path(root, &git_path_bytes(path)?)?;
+    String::from_utf8(output).map_err(|_| format!("staged {} must be valid UTF-8", path.display()))
+}
+
+pub(crate) fn read_staged_file_bytes_from_raw_path(
+    root: &Path,
+    path: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut revision = Vec::with_capacity(path.len() + 1);
+    revision.push(b':');
+    revision.extend_from_slice(path);
+    let revision = git_path_from_raw_bytes(&revision)?;
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
         .arg("show")
-        .arg(format!(":{}", path))
+        .arg(revision)
         .output()
         .map_err(|err| format!("failed to run git show: {}", err))?;
     if !output.status.success() {
+        let path = String::from_utf8_lossy(path);
         return Err(format!(
             "failed to read staged {}: {}",
             path,
             command_output_trimmed(&output.stderr, "git show stderr")?
         ));
     }
-    String::from_utf8(output.stdout).map_err(|_| format!("staged {} must be valid UTF-8", path))
+    Ok(output.stdout)
+}
+
+pub(crate) fn staged_tracked_path_bytes(root: &Path) -> Result<Vec<Vec<u8>>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-z"])
+        .output()
+        .map_err(|err| format!("failed to run git ls-files: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to inspect staged files: {}",
+            command_output_trimmed(&output.stderr, "git ls-files stderr")?
+        ));
+    }
+    let mut paths = Vec::new();
+    for path in output.stdout.split(|byte| *byte == 0) {
+        if path.is_empty() {
+            continue;
+        }
+        paths.push(path.to_vec());
+    }
+    Ok(paths)
+}
+
+#[cfg(unix)]
+fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    use std::os::unix::ffi::OsStrExt;
+
+    Ok(path.as_os_str().as_bytes().to_vec())
+}
+
+#[cfg(not(unix))]
+fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    Ok(path
+        .to_str()
+        .ok_or_else(|| format!("git path must be valid UTF-8: {}", path.display()))?
+        .as_bytes()
+        .to_vec())
 }
 
 #[cfg(unix)]
@@ -51,24 +110,4 @@ pub(crate) fn git_path_from_raw_bytes(path: &[u8]) -> Result<OsString, String> {
     String::from_utf8(path.to_vec())
         .map(OsString::from)
         .map_err(|_| "git path must be valid UTF-8 on this platform".to_string())
-}
-
-pub(crate) fn git_revision_exists(root: &Path, revision: &str) -> Result<bool, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "--verify", "-q", revision])
-        .output()
-        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
-    if output.status.success() {
-        return Ok(true);
-    }
-    if output.status.code() == Some(1) {
-        return Ok(false);
-    }
-    Err(format!(
-        "failed to inspect git revision {}: {}",
-        revision,
-        command_output_trimmed(&output.stderr, "git rev-parse stderr")?
-    ))
 }

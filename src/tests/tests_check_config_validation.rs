@@ -58,6 +58,19 @@ expectations:
 "#
     )
     .is_err());
+    assert!(parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: x
+    a: malformed
+"#
+    )
+    .is_err());
 }
 
 #[test]
@@ -71,6 +84,36 @@ fn check_config_rejects_missing_required_fields() {
     assert!(parse_check_config("version: 1\nagent: {}\nexpectations: []\n").is_err());
     assert!(parse_check_config(
         "version: 1\nagent:\n  instructions: x\n  ignore: []\nexpectations:\n  - q: x\n    a: y\n"
+    )
+    .is_err());
+}
+
+#[test]
+fn check_config_rejects_impossible_expected_answers() {
+    assert!(parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: x
+    a: maybe
+"#
+    )
+    .is_err());
+    assert!(parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: x
+    a: idk
+"#
     )
     .is_err());
 }
@@ -91,6 +134,14 @@ expectations:
     let config = parse_check_config(yaml).unwrap();
     assert_eq!(config.expectations.len(), 1);
     assert_eq!(config.expectations[0].q, "Question?");
+}
+
+#[test]
+fn plugin_keys_must_have_exactly_one_nonempty_separator() {
+    assert!(validate_plugin_config_key("plugin@marketplace").is_ok());
+    assert!(validate_plugin_config_key("@marketplace").is_err());
+    assert!(validate_plugin_config_key("plugin@").is_err());
+    assert!(validate_plugin_config_key("plugin@market@extra").is_err());
 }
 
 #[test]

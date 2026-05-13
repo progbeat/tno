@@ -67,7 +67,10 @@ pub(crate) fn cooldown_history_record(
         if !record.passed() {
             return Ok(HistoryRecordScan::Done(None));
         }
-        if now.saturating_sub(timestamp) >= cooldown.seconds {
+        if timestamp > now {
+            return Ok(HistoryRecordScan::Done(None));
+        }
+        if now - timestamp >= cooldown.seconds {
             return Ok(HistoryRecordScan::Done(None));
         }
         // Cooldown is deliberately independent of scopeHash. It is the

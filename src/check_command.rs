@@ -101,7 +101,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     // before the next expectation starts.
     let records_result = run_check_with_runner(
         root,
-        root,
+        execution.staged_view.root(),
         &config,
         &options,
         &mut execution.runner,
@@ -121,29 +121,45 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         )?;
         return Err(err.into());
     }
-    if let Err(err) =
-        collect_and_print_check_token_usage(&mut execution.runner, &mut diagnostic_log)
-    {
-        write_check_finish_event(
-            &mut diagnostic_log,
-            false,
-            CheckFinishStats {
-                errors: 1,
-                ..CheckFinishStats::default()
-            },
-            Some(&err),
-        )?;
-        return Err(err.into());
-    }
+    let usage =
+        match collect_and_print_check_token_usage(&mut execution.runner, &mut diagnostic_log) {
+            Ok(usage) => usage,
+            Err(err) => {
+                write_check_finish_event(
+                    &mut diagnostic_log,
+                    false,
+                    CheckFinishStats {
+                        errors: 1,
+                        ..CheckFinishStats::default()
+                    },
+                    Some(&err),
+                )?;
+                return Err(err.into());
+            }
+        };
     let report = match records_result {
         Ok(report) => report,
         Err(err) => {
             let report = err.report;
+            apply_lazy_full_scope_reset_or_warn(
+                root,
+                &config,
+                usage,
+                &report.non_selected,
+                &mut diagnostic_log,
+            );
             write_check_finish_report_event(&mut diagnostic_log, false, &report, Some(&err.error))?;
             write_summary_line(&mut result_output, &report, started.elapsed())?;
             return Err(CommandError::CheckFailed);
         }
     };
+    apply_lazy_full_scope_reset_or_warn(
+        root,
+        &config,
+        usage,
+        &report.non_selected,
+        &mut diagnostic_log,
+    );
     write_check_finish_report_event(&mut diagnostic_log, false, &report, None)?;
     write_summary_line(&mut result_output, &report, started.elapsed())?;
     if report.records.iter().all(CheckRecord::passed) {
@@ -154,7 +170,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
 }
 
 pub(crate) struct PreparedCheckExecution {
-    pub(crate) _staged_view: StagedWorktreeView,
+    pub(crate) staged_view: StagedWorktreeView,
     pub(crate) runner: LazyAppServerRunner,
 }
 
@@ -165,17 +181,8 @@ pub(crate) fn prepare_check_execution(
     query: bool,
     errors_on_failure: usize,
 ) -> Result<PreparedCheckExecution, String> {
-    if let Err(err) = staged_changed_paths(root).and_then(|paths| fail_on_mixed_canon_paths(&paths))
-    {
-        write_prepare_check_failure(diagnostic_log, query, errors_on_failure, &err)?;
-        return Err(err);
-    }
-    // Apply the staged Git snapshot as an in-place index view: unstaged and
-    // untracked worktree changes are preserved away, so the evaluator sees the
-    // index contents at the real project root. This creates no copied
-    // repository, copied tree, or copied snapshot directory. File visibility is
-    // enforced by app-server permissions, not by copying the repository to a
-    // filtered view.
+    // Materialize the staged Git snapshot outside the real working tree so
+    // evaluator sessions cannot observe unstaged or untracked project content.
     let staged_view = match StagedWorktreeView::apply(root) {
         Ok(staged_view) => staged_view,
         Err(err) => {
@@ -185,7 +192,7 @@ pub(crate) fn prepare_check_execution(
     };
     let runner = LazyAppServerRunner::new(check_config_loads_plugins(config), &config.agent);
     Ok(PreparedCheckExecution {
-        _staged_view: staged_view,
+        staged_view,
         runner,
     })
 }

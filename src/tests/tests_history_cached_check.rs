@@ -99,6 +99,56 @@ fn check_runner_skips_cached_pass_without_result_output() {
 }
 
 #[test]
+fn check_runner_deselects_cached_pass_when_no_numbers_are_given() {
+    let root = git_project("check-cache-pass-default-selection");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &[], false, false);
+    let expectation = options.selected[0].clone();
+    let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "1970-01-01T00:00:20Z".to_string(),
+            number: 1,
+            result: CheckResult::Pass,
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: "yes".to_string(),
+            evidence: "cached pass".to_string(),
+            scope: full_scope(),
+            scope_hash,
+            cache_key: Some(history_cache_key(&config.agent, &expectation)),
+        },
+    )
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&answer("no", "README.md says no", &["."])]);
+    let mut output = FlushCountingWriter::new();
+
+    let report = run_check_with_runner(
+        &root,
+        &root,
+        &config,
+        &options,
+        &mut runner,
+        None,
+        Some(&mut output),
+    )
+    .unwrap();
+
+    assert_eq!(report.records.len(), 1);
+    assert_eq!(report.records[0].number, 2);
+    assert_eq!(report.selected, 1);
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.silent, 1);
+    assert_eq!(runner.starts, 1);
+    let lines = String::from_utf8(output.bytes).unwrap();
+    assert!(lines.contains("2. OK"));
+    assert!(!lines.contains("1. OK"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_deselects_fresh_cooldown_pass_before_cache_reuse() {
     let root = git_project("check-cooldown-deselect");
     let config = parse_check_config(

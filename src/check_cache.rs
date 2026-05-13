@@ -22,6 +22,19 @@ pub(crate) fn cached_record_for_expectation(
     .map(|record| record.map(|record| CheckCacheHit { record }))
 }
 
+pub(crate) fn cached_failure_for_expectation(
+    root: &Path,
+    agent: &AgentConfig,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+    scope_hash_cache: &mut ScopeHashCache,
+) -> Result<Option<CheckCacheHit>, String> {
+    Ok(
+        cached_record_for_expectation(root, agent, expectation, history_cache, scope_hash_cache)?
+            .filter(|hit| !hit.record.passed()),
+    )
+}
+
 pub(crate) fn write_cache_hit(
     writer: &mut DiagnosticLogWriter,
     hit: &CheckCacheHit,

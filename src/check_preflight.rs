@@ -18,7 +18,15 @@ pub(crate) fn check_interrupted() -> bool {
     CHECK_INTERRUPTED.load(Ordering::SeqCst)
 }
 
+#[cfg(test)]
 pub(crate) fn staged_changed_paths(root: &Path) -> Result<Vec<String>, String> {
+    Ok(staged_changed_path_bytes(root)?
+        .into_iter()
+        .map(|path| String::from_utf8_lossy(&path).into_owned())
+        .collect())
+}
+
+pub(crate) fn staged_changed_path_bytes(root: &Path) -> Result<Vec<Vec<u8>>, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -32,12 +40,22 @@ pub(crate) fn staged_changed_paths(root: &Path) -> Result<Vec<String>, String> {
     if !output.status.success() {
         return Err("failed to inspect staged git changes".to_string());
     }
-    staged_changed_paths_from_name_status_z(&output.stdout)
+    staged_changed_path_bytes_from_name_status_z(&output.stdout)
 }
 
+#[cfg(test)]
 pub(crate) fn staged_changed_paths_from_name_status_z(
     stdout: &[u8],
 ) -> Result<Vec<String>, String> {
+    Ok(staged_changed_path_bytes_from_name_status_z(stdout)?
+        .into_iter()
+        .map(|path| String::from_utf8_lossy(&path).into_owned())
+        .collect())
+}
+
+pub(crate) fn staged_changed_path_bytes_from_name_status_z(
+    stdout: &[u8],
+) -> Result<Vec<Vec<u8>>, String> {
     let mut fields = stdout
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty());
@@ -46,33 +64,21 @@ pub(crate) fn staged_changed_paths_from_name_status_z(
         let Some(path) = fields.next() else {
             return Err("git diff name-status output ended before path".to_string());
         };
-        paths.push(String::from_utf8_lossy(path).into_owned());
+        paths.push(path.to_vec());
         if status.starts_with(b"R") || status.starts_with(b"C") {
             let Some(path) = fields.next() else {
                 return Err("git diff name-status output ended before rename/copy path".to_string());
             };
-            paths.push(String::from_utf8_lossy(path).into_owned());
+            paths.push(path.to_vec());
         }
     }
     Ok(paths)
 }
 
-pub(crate) fn fail_on_mixed_canon_paths(paths: &[String]) -> Result<(), String> {
-    let has_canon = paths.iter().any(|path| is_canon_project_path(path));
-    let has_other = paths.iter().any(|path| !is_canon_project_path(path));
-    if has_canon && has_other {
-        return Err(
-            "canon check failed: .canon/** changes must not be mixed with non-.canon changes"
-                .to_string(),
-        );
-    }
-    Ok(())
+pub(crate) fn is_canon_project_path_bytes(path: &[u8]) -> bool {
+    path == b".canon" || path.starts_with(b".canon/")
 }
 
-pub(crate) fn is_canon_project_path(path: &str) -> bool {
-    path == ".canon" || path.starts_with(".canon/")
-}
-
-pub(crate) fn is_canon_only_staged_change(paths: &[String]) -> bool {
-    !paths.is_empty() && paths.iter().all(|path| is_canon_project_path(path))
+pub(crate) fn is_canon_only_staged_change_bytes(paths: &[Vec<u8>]) -> bool {
+    !paths.is_empty() && paths.iter().all(|path| is_canon_project_path_bytes(path))
 }

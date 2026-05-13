@@ -35,6 +35,12 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 number
             ));
         }
+        if !expected_answer_is_allowed(&expectation.a) {
+            return Err(format!(
+                "expectation {} expected answer must be yes, no, or one lowercase ASCII option letter",
+                number
+            ));
+        }
         if let Some(cooldown) = expectation.cooldown.as_deref() {
             parse_cooldown(cooldown)
                 .map_err(|err| format!("expectation {} cooldown: {}", number, err))?;
@@ -54,13 +60,24 @@ pub(crate) fn validate_plugin_config_key(value: &str) -> Result<(), String> {
     if value.contains('\n') || value.contains('\r') {
         return Err("agent plugin entries must be single-line strings".to_string());
     }
-    if !value.contains('@') {
+    let Some((plugin, marketplace)) = value.split_once('@') else {
+        return Err(format!(
+            "agent plugin entry must use Codex plugin key <plugin>@<marketplace>: {}",
+            value
+        ));
+    };
+    if plugin.is_empty() || marketplace.is_empty() || marketplace.contains('@') {
         return Err(format!(
             "agent plugin entry must use Codex plugin key <plugin>@<marketplace>: {}",
             value
         ));
     }
     Ok(())
+}
+
+fn expected_answer_is_allowed(answer: &str) -> bool {
+    matches!(answer, "yes" | "no")
+        || matches!(answer.as_bytes(), [letter] if letter.is_ascii_lowercase())
 }
 
 pub(crate) fn validate_optional_model(value: Option<&str>, label: &str) -> Result<(), String> {

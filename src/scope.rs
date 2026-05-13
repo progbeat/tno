@@ -93,6 +93,12 @@ pub(crate) fn is_denied_path(agent: &AgentConfig, path: &str) -> bool {
         .any(|pattern| path_matches_pattern(path, pattern))
 }
 
+pub(crate) fn is_denied_path_bytes(agent: &AgentConfig, path: &[u8]) -> bool {
+    effective_ignore_patterns(agent)
+        .iter()
+        .any(|pattern| path_matches_pattern_bytes(path, pattern.as_bytes()))
+}
+
 pub(crate) fn path_matches_pattern(path: &str, pattern: &str) -> bool {
     let path = path.trim_start_matches("./");
     let pattern = pattern.trim_start_matches("./");
@@ -100,6 +106,25 @@ pub(crate) fn path_matches_pattern(path: &str, pattern: &str) -> bool {
         return path == prefix || path.starts_with(&format!("{}/", prefix));
     }
     path == pattern
+}
+
+fn path_matches_pattern_bytes(path: &[u8], pattern: &[u8]) -> bool {
+    let path = trim_dot_slash_bytes(path);
+    let pattern = trim_dot_slash_bytes(pattern);
+    if let Some(prefix) = pattern.strip_suffix(b"/**") {
+        return path == prefix
+            || (path.len() > prefix.len()
+                && path.starts_with(prefix)
+                && path[prefix.len()] == b'/');
+    }
+    path == pattern
+}
+
+fn trim_dot_slash_bytes(mut path: &[u8]) -> &[u8] {
+    while path.starts_with(b"./") {
+        path = &path[2..];
+    }
+    path
 }
 
 pub(crate) fn is_strict_scope_subset(proposed: &[String], current: &[String]) -> bool {

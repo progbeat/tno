@@ -40,6 +40,9 @@ pub(crate) fn parse_log_record_timestamp(value: &str) -> Option<u64> {
         return None;
     }
     let days = days_from_civil(year, month, day)?;
+    if civil_from_days(days) != (year, month, day) {
+        return None;
+    }
     let seconds = days
         .checked_mul(86_400)?
         .checked_add((hour * 3_600 + minute * 60 + second) as i64)?;

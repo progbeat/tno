@@ -1,17 +1,6 @@
 use super::*;
 
 #[test]
-fn mixed_canon_and_non_canon_changes_fail() {
-    assert!(fail_on_mixed_canon_paths(&[".canon/check.yml".to_string()]).is_ok());
-    assert!(fail_on_mixed_canon_paths(&["src/main.rs".to_string()]).is_ok());
-    assert!(fail_on_mixed_canon_paths(&[
-        ".canon/check.yml".to_string(),
-        "src/main.rs".to_string()
-    ])
-    .is_err());
-}
-
-#[test]
 fn staged_changed_paths_include_rename_sources() {
     let root = git_project("rename-into-canon");
     commit_all(&root, "initial");
@@ -32,7 +21,6 @@ fn staged_changed_paths_include_rename_sources() {
 
     assert!(paths.contains(&"src/main.rs".to_string()));
     assert!(paths.contains(&".canon/main.rs".to_string()));
-    assert!(fail_on_mixed_canon_paths(&paths).is_err());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -41,39 +29,6 @@ fn staged_changed_paths_tolerate_non_utf8_paths() {
     let paths = staged_changed_paths_from_name_status_z(b"A\0nonutf8-\xff\0").unwrap();
 
     assert_eq!(paths.len(), 1);
-    assert!(fail_on_mixed_canon_paths(&paths).is_ok());
-}
-
-#[test]
-fn check_command_logs_start_and_finish_for_mixed_canon_preflight_failure() {
-    let root = git_project("check-mixed-preflight-log");
-    write_check_config(&root);
-    fs::write(
-        root.join("src/main.rs"),
-        "fn main() { println!(\"changed\"); }\n",
-    )
-    .unwrap();
-    let output = Command::new("git")
-        .args(["add", ".canon/check.yml", "src/main.rs"])
-        .current_dir(&root)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let err = run_check_command(&root, &[]).unwrap_err();
-
-    assert!(err
-        .to_string()
-        .contains(".canon/** changes must not be mixed"));
-    let log = fs::read_to_string(root.join(".git/canon/logs/0.jsonl")).unwrap();
-    assert!(log.contains(r#""event":"check.start""#));
-    assert!(log.contains(r#""event":"check.finish""#));
-    assert!(log.contains(r#""error":"canon check failed: .canon/** changes must not be mixed"#));
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -100,6 +55,230 @@ fn check_command_logs_start_and_finish_for_config_load_failure() {
     assert!(log.contains(r#""event":"check.finish""#));
     assert!(log.contains(r#""errors":1"#));
     assert!(log.contains("failed to parse .canon/check.yml"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_config_loads_staged_default_config_not_worktree() {
+    let root = git_project("check-config-staged-default");
+    write_check_config(&root);
+    let output = Command::new("git")
+        .args(["add", CHECK_PATH])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::write(root.join(CHECK_PATH), "version: 1\nagent: []\n").unwrap();
+    let mut cache = RepoInspectionCache::new();
+
+    let config = cache
+        .load_check_config(&root, Path::new(CHECK_PATH))
+        .unwrap();
+
+    assert_eq!(config.expectations.len(), 2);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_config_loads_staged_custom_config_not_worktree() {
+    let root = git_project("check-config-staged-custom");
+    let alt = "alt-check.yml";
+    fs::write(root.join(alt), check_config_yaml()).unwrap();
+    let output = Command::new("git")
+        .args(["add", alt])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::write(root.join(alt), "version: 1\nagent: []\n").unwrap();
+    let mut cache = RepoInspectionCache::new();
+
+    let config = cache.load_check_config(&root, Path::new(alt)).unwrap();
+
+    assert_eq!(config.expectations.len(), 2);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_config_rejects_untracked_default_config() {
+    let root = git_project("check-config-untracked-default");
+    write_check_config(&root);
+    let mut cache = RepoInspectionCache::new();
+
+    let err = cache
+        .load_check_config(&root, Path::new(CHECK_PATH))
+        .unwrap_err();
+
+    assert!(err.contains("failed to read staged .canon/check.yml"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_config_rejects_untracked_custom_config() {
+    let root = git_project("check-config-untracked-custom");
+    commit_all(&root, "initial");
+    let alt = "other-check.yml";
+    fs::write(root.join(alt), check_config_yaml()).unwrap();
+    let mut cache = RepoInspectionCache::new();
+
+    let err = cache.load_check_config(&root, Path::new(alt)).unwrap_err();
+
+    assert!(err.contains("failed to read staged other-check.yml"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_custom_config_rejects_untracked_includes() {
+    let root = git_project("check-config-staged-custom-include");
+    commit_all(&root, "initial");
+    fs::create_dir_all(root.join("checks/expects")).unwrap();
+    fs::write(
+        root.join("checks/expects/project.yml"),
+        r#"
+- q: "Included?"
+  a: "yes"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("checks/check.yml"),
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - include: "expects/*.yml"
+"#,
+    )
+    .unwrap();
+    let output = Command::new("git")
+        .args(["add", "checks/check.yml"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut cache = RepoInspectionCache::new();
+
+    let err = cache
+        .load_check_config(&root, Path::new("checks/check.yml"))
+        .unwrap_err();
+
+    assert!(err.contains("include matched no files"), "{err}");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_custom_config_expands_staged_includes() {
+    let root = git_project("check-config-staged-custom-include-success");
+    commit_all(&root, "initial");
+    fs::create_dir_all(root.join("checks/expects")).unwrap();
+    fs::write(
+        root.join("checks/expects/project.yml"),
+        r#"
+- q: "Included?"
+  a: "yes"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("checks/check.yml"),
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - include: "expects/*.yml"
+"#,
+    )
+    .unwrap();
+    let output = Command::new("git")
+        .args(["add", "checks/check.yml", "checks/expects/project.yml"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut cache = RepoInspectionCache::new();
+
+    let config = cache
+        .load_check_config(&root, Path::new("checks/check.yml"))
+        .unwrap();
+
+    assert_eq!(config.expectations.len(), 1);
+    assert_eq!(config.expectations[0].q, "Included?");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_config_staged_delete_does_not_fall_back_to_worktree() {
+    let root = git_project("check-config-staged-delete");
+    write_check_config(&root);
+    Command::new("git")
+        .args(["add", CHECK_PATH])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
+    let output = Command::new("git")
+        .args(["rm", "--cached", CHECK_PATH])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut cache = RepoInspectionCache::new();
+
+    let err = cache
+        .load_check_config(&root, Path::new(CHECK_PATH))
+        .unwrap_err();
+
+    assert!(err.contains("failed to read staged .canon/check.yml"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_config_literal_pathspec_name_loads_staged_content() {
+    let root = git_project("check-config-literal-pathspec");
+    let path = ":(literal)check.yml";
+    fs::write(root.join(path), check_config_yaml()).unwrap();
+    let output = Command::new("git")
+        .args(["--literal-pathspecs", "add", "--", path])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::write(root.join(path), "version: 1\nagent: []\n").unwrap();
+    let mut cache = RepoInspectionCache::new();
+
+    let config = cache.load_check_config(&root, Path::new(path)).unwrap();
+
+    assert_eq!(config.expectations.len(), 2);
     let _ = fs::remove_dir_all(root);
 }
 

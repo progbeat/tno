@@ -143,6 +143,51 @@ expectations:
 }
 
 #[test]
+fn cooldown_reuse_rejects_future_dated_pass() {
+    let root = git_project("history-cooldown-future-pass");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#,
+    )
+    .unwrap();
+    let expectation = check_options(&config, &["1"], false, false).selected[0].clone();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "2099-01-01T00:00:00Z".to_string(),
+            number: 1,
+            result: CheckResult::Pass,
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: "yes".to_string(),
+            evidence: "future pass".to_string(),
+            scope: full_scope(),
+            scope_hash: staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+            cache_key: Some(history_cache_key(&config.agent, &expectation)),
+        },
+    )
+    .unwrap();
+    let mut history_cache = HistoryCache::new();
+
+    assert!(
+        cooldown_history_record(&root, &config.agent, &expectation, &mut history_cache, 30)
+            .unwrap()
+            .is_none()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn cooldown_reuse_uses_fresh_pass_without_cache_key_filter() {
     let root = git_project("history-cooldown-no-cache-key-gate");
     let old_config = parse_check_config(

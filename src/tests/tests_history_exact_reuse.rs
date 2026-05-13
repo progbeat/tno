@@ -222,3 +222,57 @@ fn scope_hash_includes_tracked_canon_paths() {
     assert_ne!(before, after);
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn scope_hash_preserves_legacy_hash_for_normal_paths() {
+    let root = git_project("history-scope-hash-legacy-compatible");
+    let entries = staged_scope_entries(&root, &full_scope()).unwrap();
+
+    assert_eq!(
+        hash_scope_entries(&entries),
+        hash_120(entries.join("\n").as_bytes())
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn scope_hash_handles_newline_paths_without_line_splitting() {
+    let root = git_project("history-scope-hash-newline-path");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let path = "line\nbreak.txt";
+    fs::write(root.join(path), "first").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg(path)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    let entries = staged_scope_entries(&root, &[path.to_string()]).unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].ends_with(path));
+    let before = staged_scope_hash(&root, &config.agent, &[path.to_string()]).unwrap();
+    fs::write(root.join(path), "second").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg(path)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let after = staged_scope_hash(&root, &config.agent, &[path.to_string()]).unwrap();
+    assert_ne!(before, after);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn scope_hash_entry_encodes_non_utf8_path_bytes() {
+    let entry = normalize_index_metadata(
+        "100644 0123456789012345678901234567890123456789 0",
+        b"nonutf8-\xff.txt",
+    )
+    .unwrap();
+
+    assert!(entry.contains("\0raw-path-hex:"));
+    assert_ne!(hash_scope_entries(&[entry]), hash_120(b""));
+}

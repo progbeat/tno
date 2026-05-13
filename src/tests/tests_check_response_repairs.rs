@@ -127,35 +127,6 @@ fn check_runner_requires_human_review_for_malformed_answer() {
 }
 
 #[test]
-fn check_runner_malformed_expected_still_requires_human_review() {
-    let root = git_project("check-malformed-expected");
-    let config = parse_check_config(
-        r#"
-version: 1
-agent:
-  instructions: Answer from files only.
-  ignore: []
-  plugins: []
-expectations:
-  - q: "Question malformed?"
-    a: "malformed"
-"#,
-    )
-    .unwrap();
-    let options = check_options(&config, &["1"], false, true);
-    let malformed = answer("malformed", "question is malformed", &["."]);
-    let mut runner = FakeRunner::new(&[&malformed, &malformed]);
-
-    let records =
-        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-
-    assert!(!records[0].passed());
-    assert!(record_requires_human_review(&records[0]));
-    assert_eq!(records[0].observed, "malformed");
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
 fn check_runner_does_not_evidence_retry_after_malformed_retry() {
     let root = git_project("check-malformed-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();

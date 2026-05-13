@@ -20,7 +20,7 @@ pub(crate) fn run_check_query_command(
     let mut execution = prepare_check_execution(root, config, &mut diagnostic_log, true, 1)?;
     let runtime = CheckRuntime {
         root,
-        snapshot_root: root,
+        snapshot_root: execution.staged_view.root(),
         config,
     };
     let mut interrogation_state = InterrogationState::new();
@@ -46,6 +46,8 @@ pub(crate) fn run_check_query_command(
             return Err(err);
         }
     };
+    let non_selected = initial_non_selected_expectations(config, &[]);
+    apply_lazy_full_scope_reset_or_warn(root, config, usage, &non_selected, &mut diagnostic_log);
     let result = match result {
         Ok(result) => result,
         Err(err) => {

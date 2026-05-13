@@ -14,9 +14,11 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
     }
     let mut repo_cache = RepoInspectionCache::new();
     let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH))?;
-    let changed_paths = staged_changed_paths(root)?;
-    let has_canon_change = changed_paths.iter().any(|path| is_canon_project_path(path));
-    if has_canon_change && !is_canon_only_staged_change(&changed_paths) {
+    let changed_paths = staged_changed_path_bytes(root)?;
+    let has_canon_change = changed_paths
+        .iter()
+        .any(|path| is_canon_project_path_bytes(path));
+    if has_canon_change && !is_canon_only_staged_change_bytes(&changed_paths) {
         eprintln!("canon gate: .canon/** changes must not be mixed with non-.canon changes");
         return Err(CommandError::GateFailed);
     }
@@ -101,6 +103,7 @@ pub(crate) fn select_expectations_for_gate(
     let selected = select_expectations(config, args)?;
     final_selected_expectations(root, &config.agent, selected, history_cache, now)
         .map(|selection| selection.selected)
+        .map_err(|err| err.error)
 }
 
 #[derive(Debug, Clone)]

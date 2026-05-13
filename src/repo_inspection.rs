@@ -2,14 +2,15 @@ use crate::*;
 
 type GitPathCacheKey = (PathBuf, String);
 type GeneratorPathsCacheKey = (PathBuf, PathBuf, String, bool);
-type StagedFileContentCacheKey = (PathBuf, String);
-type CheckConfigCacheKey = (PathBuf, PathBuf, String);
+type StagedFileContentCacheKey = (PathBuf, PathBuf);
+type CheckConfigCacheKey = (PathBuf, PathBuf, bool, String);
 
 #[derive(Default)]
 pub(crate) struct RepoInspectionCache {
     git_paths: BTreeMap<GitPathCacheKey, Result<PathBuf, String>>,
     generator_paths: BTreeMap<GeneratorPathsCacheKey, Result<Vec<String>, String>>,
     staged_file_contents: BTreeMap<StagedFileContentCacheKey, Result<String, String>>,
+    #[cfg(test)]
     filesystem_text: BTreeMap<PathBuf, Result<String, String>>,
     check_configs: BTreeMap<CheckConfigCacheKey, Result<CheckConfig, String>>,
 }
@@ -55,15 +56,24 @@ impl RepoInspectionCache {
         root: &Path,
         path: &str,
     ) -> Result<String, String> {
-        let key = (root.to_path_buf(), path.to_string());
+        self.staged_file_content_path(root, Path::new(path))
+    }
+
+    pub(crate) fn staged_file_content_path(
+        &mut self,
+        root: &Path,
+        path: &Path,
+    ) -> Result<String, String> {
+        let key = (root.to_path_buf(), path.to_path_buf());
         if let Some(cached) = self.staged_file_contents.get(&key) {
             return cached.clone();
         }
-        let content = read_staged_file_content(root, path);
+        let content = read_staged_file_content_from_path(root, path);
         self.staged_file_contents.insert(key, content.clone());
         content
     }
 
+    #[cfg(test)]
     pub(crate) fn read_to_string(&mut self, path: &Path) -> Result<String, String> {
         let key = path.to_path_buf();
         if let Some(cached) = self.filesystem_text.get(&key) {
@@ -80,24 +90,17 @@ impl RepoInspectionCache {
         root: &Path,
         config_path: &Path,
     ) -> Result<CheckConfig, String> {
-        let content = if config_path == Path::new(CHECK_PATH) {
-            self.staged_file_content(root, CHECK_PATH).or_else(|_| {
-                let path = root.join(CHECK_PATH);
-                self.read_to_string(&path)
-            })
-        } else {
-            let path = root.join(config_path);
-            self.read_to_string(&path)
-        }?;
+        let content = self.staged_file_content_path(root, config_path)?;
         let key = (
             root.to_path_buf(),
             config_path.to_path_buf(),
+            true,
             content.clone(),
         );
         if let Some(cached) = self.check_configs.get(&key) {
             return cached.clone();
         }
-        let parsed = parse_check_config_content_with_root(root, config_path, &content, self);
+        let parsed = parse_staged_check_config_content_with_root(root, config_path, &content, self);
         self.check_configs.insert(key, parsed.clone());
         parsed
     }

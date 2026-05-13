@@ -193,6 +193,7 @@ pub(crate) struct NarrowingStats {
 #[derive(Debug, Clone)]
 pub(crate) struct CheckRunReport {
     pub(crate) records: Vec<CheckRecord>,
+    pub(crate) non_selected: Vec<SelectedExpectation>,
     // Final selected count after every deselection rule has run. This excludes
     // command-number misses, cooldown matches, and reusable passing cache hits.
     pub(crate) selected: usize,
@@ -213,6 +214,7 @@ pub(crate) struct CheckRunError {
 
 pub(crate) fn check_run_error(
     records: &[CheckRecord],
+    non_selected: &[SelectedExpectation],
     selected: usize,
     skipped: usize,
     silent: usize,
@@ -223,6 +225,7 @@ pub(crate) fn check_run_error(
         error,
         report: CheckRunReport {
             records: records.to_vec(),
+            non_selected: non_selected.to_vec(),
             selected,
             skipped,
             silent,

@@ -1,5 +1,7 @@
 use crate::*;
 
+const HEX: &[u8; 16] = b"0123456789abcdef";
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ScopeHashSource {
     Index,
@@ -44,7 +46,7 @@ impl ScopeHashCache {
         }
         let hash = self
             .scope_entries_for_key(root, &scope, source, &key)?
-            .map(|entries| hash_120(entries.join("\n").as_bytes()));
+            .map(|entries| hash_scope_entries(&entries));
         self.values.insert(key, hash.clone());
         Ok(hash)
     }
@@ -123,7 +125,25 @@ pub(crate) fn scope_hash_for_canonical_scope(
         ScopeHashSource::Index => staged_scope_entries(root, scope).map(Some)?,
         ScopeHashSource::Head => head_scope_entries(root, scope)?,
     };
-    Ok(entries.map(|entries| hash_120(entries.join("\n").as_bytes())))
+    Ok(entries.map(|entries| hash_scope_entries(&entries)))
+}
+
+pub(crate) fn hash_scope_entries(entries: &[String]) -> String {
+    if entries
+        .iter()
+        .all(|entry| !entry.contains('\n') && !entry.contains('\0'))
+    {
+        return hash_120(entries.join("\n").as_bytes());
+    }
+    let mut input = Vec::new();
+    input.extend_from_slice(b"scope-hash-v2\0");
+    for entry in entries {
+        input.extend_from_slice(entry.len().to_string().as_bytes());
+        input.push(0);
+        input.extend_from_slice(entry.as_bytes());
+        input.push(0);
+    }
+    hash_120(&input)
 }
 
 pub(crate) fn staged_scope_entries(root: &Path, scope: &[String]) -> Result<Vec<String>, String> {
@@ -133,6 +153,7 @@ pub(crate) fn staged_scope_entries(root: &Path, scope: &[String]) -> Result<Vec<
         .arg(root)
         .arg("ls-files")
         .arg("-s")
+        .arg("-z")
         .arg("--");
     if scope != full_scope() {
         for path in scope {
@@ -148,11 +169,12 @@ pub(crate) fn staged_scope_entries(root: &Path, scope: &[String]) -> Result<Vec<
             command_output_trimmed(&output.stderr, "git ls-files stderr")?
         ));
     }
-    let stdout = String::from_utf8(output.stdout)
-        .map_err(|_| "git ls-files output must be valid UTF-8".to_string())?;
     let mut entries = Vec::new();
-    for line in stdout.lines() {
-        if let Some((metadata, path)) = line.split_once('\t') {
+    for record in output.stdout.split(|byte| *byte == 0) {
+        if record.is_empty() {
+            continue;
+        }
+        if let Some((metadata, path)) = split_raw_scope_record(record, "git ls-files")? {
             entries.push(normalize_index_metadata(metadata, path)?);
         }
     }
@@ -181,6 +203,7 @@ pub(crate) fn head_scope_entries_for_existing_head(
         .arg("-C")
         .arg(root)
         .arg("ls-tree")
+        .arg("-z")
         .arg("-r")
         .arg("HEAD")
         .arg("--");
@@ -198,12 +221,13 @@ pub(crate) fn head_scope_entries_for_existing_head(
             command_output_trimmed(&output.stderr, "git ls-tree stderr")?
         ));
     }
-    let stdout = String::from_utf8(output.stdout)
-        .map_err(|_| "git ls-tree output must be valid UTF-8".to_string())?;
     let mut entries = Vec::new();
-    for line in stdout.lines() {
-        if let Some((metadata, path)) = line.split_once('\t') {
-            entries.push(normalize_head_metadata(metadata, path)?);
+    for record in output.stdout.split(|byte| *byte == 0) {
+        if record.is_empty() {
+            continue;
+        }
+        if let Some((metadata, path)) = split_raw_scope_record(record, "git ls-tree")? {
+            entries.push(normalize_head_metadata_bytes(metadata, path)?);
         }
     }
     entries.sort();
@@ -221,7 +245,20 @@ pub(crate) fn git_has_head(root: &Path) -> Result<bool, String> {
     Ok(output.status.success())
 }
 
-pub(crate) fn normalize_index_metadata(metadata: &str, path: &str) -> Result<String, String> {
+fn split_raw_scope_record<'a>(
+    record: &'a [u8],
+    command: &str,
+) -> Result<Option<(&'a str, &'a [u8])>, String> {
+    let Some(tab) = record.iter().position(|byte| *byte == b'\t') else {
+        return Ok(None);
+    };
+    let metadata = std::str::from_utf8(&record[..tab])
+        .map_err(|_| format!("{} metadata must be valid UTF-8", command))?;
+    Ok(Some((metadata, &record[tab + 1..])))
+}
+
+pub(crate) fn normalize_index_metadata(metadata: &str, path: &[u8]) -> Result<String, String> {
+    let path = scope_entry_path(path);
     let mut fields = metadata.split_whitespace();
     let mode = fields
         .next()
@@ -239,7 +276,8 @@ pub(crate) fn normalize_index_metadata(metadata: &str, path: &str) -> Result<Str
     }
 }
 
-pub(crate) fn normalize_head_metadata(metadata: &str, path: &str) -> Result<String, String> {
+pub(crate) fn normalize_head_metadata_bytes(metadata: &str, path: &[u8]) -> Result<String, String> {
+    let path = scope_entry_path(path);
     let mut fields = metadata.split_whitespace();
     let mode = fields
         .next()
@@ -251,4 +289,18 @@ pub(crate) fn normalize_head_metadata(metadata: &str, path: &str) -> Result<Stri
         .next()
         .ok_or_else(|| format!("malformed git tree entry for {}", path))?;
     Ok(format!("{} {}\t{}", mode, object, path))
+}
+
+fn scope_entry_path(path: &[u8]) -> String {
+    match std::str::from_utf8(path) {
+        Ok(path) => path.to_string(),
+        Err(_) => {
+            let mut output = String::from("\0raw-path-hex:");
+            for byte in path {
+                output.push(HEX[(byte >> 4) as usize] as char);
+                output.push(HEX[(byte & 0x0f) as usize] as char);
+            }
+            output
+        }
+    }
 }

@@ -17,6 +17,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     let mut skipped = options.skipped;
     let mut silent = 0usize;
     let mut narrowing = NarrowingStats::default();
+    let mut non_selected = initial_non_selected_expectations(config, &options.selected);
     let runtime = CheckRuntime {
         root,
         snapshot_root,
@@ -31,29 +32,94 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     macro_rules! run_try {
         ($expr:expr) => {
             $expr.map_err(|err| {
-                check_run_error(&records, selected, skipped, silent, narrowing, err)
+                check_run_error(
+                    &records,
+                    &non_selected,
+                    selected,
+                    skipped,
+                    silent,
+                    narrowing,
+                    err,
+                )
             })?
         };
     }
-    let final_selection = run_try!(final_selected_expectations(
+    let final_selection = match final_selected_expectations(
         root,
         &config.agent,
         options.selected.clone(),
         &mut history_cache,
         run_try!(unix_timestamp()),
-    ));
-    skipped += final_selection.skipped;
-    silent += final_selection.skipped;
-    selected = final_selection.selected.len();
-    for expectation in &final_selection.selected {
+    ) {
+        Ok(final_selection) => final_selection,
+        Err(err) => {
+            let skipped_now = err.skipped.len();
+            non_selected.extend(err.skipped);
+            skipped += skipped_now;
+            silent += skipped_now;
+            selected = selected.saturating_sub(skipped_now);
+            return Err(check_run_error(
+                &records,
+                &non_selected,
+                selected,
+                skipped,
+                silent,
+                narrowing,
+                err.error,
+            ));
+        }
+    };
+    let final_selected_numbers = final_selection
+        .selected
+        .iter()
+        .map(|expectation| expectation.number)
+        .collect::<BTreeSet<_>>();
+    for expectation in &options.selected {
+        if !final_selected_numbers.contains(&expectation.number) {
+            non_selected.push(expectation.clone());
+        }
+    }
+    skipped += final_selection.skipped.len();
+    silent += final_selection.skipped.len();
+    let final_selected = if options.ignore_cache {
+        final_selection.selected
+    } else {
+        // Reusable passing exact-cache hits satisfy candidates before the
+        // selected-expectation loop below. They are final-selection
+        // deselections, so they contribute to skipped/silent and are not
+        // selected checks.
+        let mut remaining = Vec::new();
+        for expectation in final_selection.selected {
+            if let Some(hit) = run_try!(cached_record_for_expectation(
+                root,
+                &config.agent,
+                &expectation,
+                &mut history_cache,
+                &mut scope_hash_cache,
+            )) {
+                if hit.record.passed() {
+                    if let Some(writer) = diagnostic_log.as_deref_mut() {
+                        run_try!(write_cache_hit(writer, &hit));
+                    }
+                    non_selected.push(expectation);
+                    skipped += 1;
+                    silent += 1;
+                    continue;
+                }
+            }
+            remaining.push(expectation);
+        }
+        remaining
+    };
+    selected = final_selected.len();
+    for expectation in &final_selected {
         // Each branch that produces a selected CheckRecord writes and flushes
-        // that record before moving to the next expectation. Reused passing
-        // cache hits are final-selection deselections: once a cached pass has
-        // satisfied the candidate, it is no longer a selected expectation and
-        // is counted in the public "skipped" total as a non-selected one.
+        // that record before moving to the next expectation. Passing cache hits
+        // have already been removed from `final_selected`.
         if check_interrupted() {
             return Err(check_run_error(
                 &records,
+                &non_selected,
                 selected,
                 skipped,
                 silent,
@@ -62,7 +128,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
             ));
         }
         if !options.ignore_cache {
-            if let Some(hit) = run_try!(cached_record_for_expectation(
+            if let Some(hit) = run_try!(cached_failure_for_expectation(
                 root,
                 &config.agent,
                 expectation,
@@ -73,26 +139,15 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 if let Some(writer) = diagnostic_log.as_deref_mut() {
                     run_try!(write_cache_hit(writer, &hit));
                 }
-                if hit.record.passed() {
-                    // A reusable passing exact-cache hit satisfies the
-                    // candidate without leaving it in the final selected set.
-                    // This keeps `selected + skipped == all expectations` and
-                    // matches the check-output definition of skipped as the
-                    // final non-selected expectation count.
-                    selected = selected.saturating_sub(1);
-                    skipped += 1;
-                    silent += 1;
-                    continue;
-                } else {
-                    run_try!(write_and_flush_result_output(
-                        &mut result_output,
-                        &hit.record
-                    ));
-                }
+                run_try!(write_and_flush_result_output(
+                    &mut result_output,
+                    &hit.record
+                ));
                 records.push(hit.record);
                 if should_stop {
                     return Ok(CheckRunReport {
                         records,
+                        non_selected,
                         selected,
                         skipped,
                         silent,
@@ -219,6 +274,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         if should_stop {
             return Ok(CheckRunReport {
                 records,
+                non_selected,
                 selected,
                 skipped,
                 silent,
@@ -228,11 +284,38 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     }
     Ok(CheckRunReport {
         records,
+        non_selected,
         selected,
         skipped,
         silent,
         narrowing,
     })
+}
+
+pub(crate) fn initial_non_selected_expectations(
+    config: &CheckConfig,
+    selected: &[SelectedExpectation],
+) -> Vec<SelectedExpectation> {
+    let selected_numbers = selected
+        .iter()
+        .map(|expectation| expectation.number)
+        .collect::<BTreeSet<_>>();
+    config
+        .expectations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, expectation)| {
+            let number = index + 1;
+            (!selected_numbers.contains(&number)).then(|| SelectedExpectation {
+                number,
+                id: expectation_id(&expectation.q, &expectation.a),
+                q: expectation.q.clone(),
+                a: expectation.a.clone(),
+                cooldown: None,
+                thinking: expectation.thinking.clone(),
+            })
+        })
+        .collect()
 }
 
 struct InterrogationCall<'a> {

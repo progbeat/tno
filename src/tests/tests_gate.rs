@@ -3,7 +3,15 @@ use super::*;
 #[test]
 fn gate_passes_with_current_cached_pass() {
     let root = git_project("gate-pass");
+    commit_all(&root, "initial");
     write_check_config(&root);
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
     let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
@@ -23,7 +31,15 @@ fn gate_passes_with_current_cached_pass() {
 #[test]
 fn gate_fails_when_cache_is_missing() {
     let root = git_project("gate-missing");
+    commit_all(&root, "initial");
     write_check_config(&root);
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
 
     let result = run_gate_command(&root, &[OsString::from("1")]);
 
@@ -220,6 +236,13 @@ fn gate_fails_for_new_current_failure_without_head_failure() {
     let root = git_project("gate-new-fail");
     commit_all(&root, "initial");
     write_check_config(&root);
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
     fs::write(root.join("README.md"), "changed\n").unwrap();
     Command::new("git")
         .arg("add")
@@ -248,6 +271,13 @@ fn gate_accepts_failure_already_present_on_head() {
     let root = git_project("gate-head-fail");
     commit_all(&root, "initial");
     write_check_config(&root);
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
     let head_hash =

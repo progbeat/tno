@@ -8,7 +8,14 @@ pub(crate) fn should_retry_full_scope_after_restricted_idk(
 }
 
 pub(crate) fn evaluator_session_key(scope: &[String]) -> String {
-    scope.join("\n")
+    let mut key = String::new();
+    for path in scope {
+        key.push_str(&path.len().to_string());
+        key.push('\0');
+        key.push_str(path);
+        key.push('\0');
+    }
+    key
 }
 
 pub(crate) struct CheckRuntime<'a> {

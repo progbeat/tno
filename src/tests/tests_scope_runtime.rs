@@ -32,6 +32,14 @@ fn strict_scope_subset_canonicalizes_before_comparing() {
 }
 
 #[test]
+fn evaluator_session_key_is_not_newline_ambiguous() {
+    assert_ne!(
+        evaluator_session_key(&["a\nb".to_string(), "c".to_string()]),
+        evaluator_session_key(&["a".to_string(), "b\nc".to_string()])
+    );
+}
+
+#[test]
 fn evaluator_response_scope_rejects_denied_paths() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     assert!(parse_scope_strings(&[".canon/check.yml".to_string()], &config.agent).is_err());
@@ -45,6 +53,21 @@ fn evaluator_response_scope_rejects_denied_paths() {
         &config.agent,
     )
     .is_err());
+}
+
+#[test]
+fn denied_path_matching_handles_non_utf8_bytes() {
+    let config = parse_check_config(check_config_yaml()).unwrap();
+
+    assert!(is_denied_path_bytes(
+        &config.agent,
+        b"target/nonutf8-\xff.o"
+    ));
+    assert!(is_denied_path_bytes(
+        &config.agent,
+        b"./.canon/nonutf8-\xff.yml"
+    ));
+    assert!(!is_denied_path_bytes(&config.agent, b"src/nonutf8-\xff.rs"));
 }
 
 #[test]

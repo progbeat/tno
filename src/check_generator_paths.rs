@@ -14,6 +14,7 @@ pub(crate) fn expand_generator_paths(
             .arg("-C")
             .arg(root)
             .arg("ls-files")
+            .arg("-z")
             .arg("--")
             .arg(&joined)
             .output()
@@ -25,13 +26,16 @@ pub(crate) fn expand_generator_paths(
                 command_output_trimmed(&output.stderr, "git ls-files stderr")?
             ));
         }
-        let stdout = String::from_utf8(output.stdout)
-            .map_err(|_| "git ls-files output must be valid UTF-8".to_string())?;
-        let mut files = stdout
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(str::to_string)
-            .collect::<Vec<_>>();
+        let mut files = Vec::new();
+        for path in output.stdout.split(|byte| *byte == 0) {
+            if path.is_empty() {
+                continue;
+            }
+            files.push(
+                String::from_utf8(path.to_vec())
+                    .map_err(|_| "git ls-files output must be valid UTF-8".to_string())?,
+            );
+        }
         files.sort();
         files.dedup();
         return Ok(files);

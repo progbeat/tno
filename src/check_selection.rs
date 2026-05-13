@@ -86,7 +86,12 @@ pub(crate) fn select_expectations(
 
 pub(crate) struct FinalSelection {
     pub(crate) selected: Vec<SelectedExpectation>,
-    pub(crate) skipped: usize,
+    pub(crate) skipped: Vec<SelectedExpectation>,
+}
+
+pub(crate) struct FinalSelectionError {
+    pub(crate) error: String,
+    pub(crate) skipped: Vec<SelectedExpectation>,
 }
 
 pub(crate) fn final_selected_expectations(
@@ -95,18 +100,18 @@ pub(crate) fn final_selected_expectations(
     selected: Vec<SelectedExpectation>,
     history_cache: &mut HistoryCache,
     now: u64,
-) -> Result<FinalSelection, String> {
+) -> Result<FinalSelection, FinalSelectionError> {
     // CLI number filtering happens before this function. This is the shared
     // final-selection step for `canon check` and `canon gate`: cooldown removes
     // matching expectations from the selected set before cache reuse or gate
     // comparison.
     let mut remaining = Vec::new();
-    let mut skipped = 0usize;
+    let mut skipped = Vec::new();
     for expectation in selected {
-        if cooldown_history_record(root, agent, &expectation, history_cache, now)?.is_none() {
-            remaining.push(expectation);
-        } else {
-            skipped += 1;
+        match cooldown_history_record(root, agent, &expectation, history_cache, now) {
+            Ok(None) => remaining.push(expectation),
+            Ok(Some(_)) => skipped.push(expectation),
+            Err(error) => return Err(FinalSelectionError { error, skipped }),
         }
     }
     Ok(FinalSelection {

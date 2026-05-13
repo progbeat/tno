@@ -74,16 +74,15 @@ prints the observed answer and evidence, so the next fix has a concrete target
 instead of just a red light.
 
 > [!WARNING]
-> `canon check` evaluates the staged Git snapshot. When unstaged or untracked
-> changes are present, it temporarily stashes them and restores them at the end.
-> Editing files touched by that stash while the check is running can create
-> restore conflicts.
+> `canon check` evaluates staged Git-tracked content from a temporary snapshot.
+> Unstaged and untracked working tree files are not part of that evaluator
+> snapshot.
 
 You can also add a generator item to `.canon/check.yml` so `canon check`
 expands Markdown specs under `.canon/specs` into additional expectations.
 
 Keep `.canon/**` policy changes separate from implementation changes.
-`canon check` rejects staged changes that mix them.
+`canon gate` rejects staged changes that mix them.
 
 For commits that clearly cannot affect canon expectations, such as a TODO or
 `.gitignore` change, bypass the hook deliberately:
