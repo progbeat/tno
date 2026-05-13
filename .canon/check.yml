@@ -31,51 +31,7 @@ agent:
     * Failed scope narrowing: -5
 
 expectations:
-  # Project quality
-  - q: "Can you find any unnecessary copy-pasted code outside tests?"
-    a: "no"
-    cooldown: 7d
-    thinking: xhigh
-
-  - q: "With bounded configuration and retained data, is non-temporary project-owned persistent state across the whole project practically size-bounded across repeated normal command runs and configuration changes without manual cleanup?"
-    a: "yes"
-    cooldown: 7d
-    thinking: xhigh
-
-  - q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
-    a: "yes"
-    cooldown: 7d
-    thinking: xhigh
-
-  - q: "Are there any obsolete, unused, stray, dead-end, duplicated, or redundant Git-tracked project files or code paths that are safe to remove or consolidate without changing intended functionality?"
-    a: "no"
-    cooldown: 7d
-    thinking: xhigh
-
-  - q: "Are there any hand-written, non-generated source files that are excessively large or mix unrelated responsibilities enough that they should be split into smaller focused modules?"
-    a: "no"
-    cooldown: 7d
-    thinking: xhigh
-
-  - q: "Are there any dirty hacks that can be avoided?"
-    a: "no"
-    cooldown: 7d
-    thinking: xhigh
-
-  - q: "Does the project avoid unnecessary unsafe code?"
-    a: "yes"
-    cooldown: 7d
-    thinking: xhigh
-
-  - q: "Are there any avoidable, violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
-    a: "no"
-    cooldown: 7d
-    thinking: xhigh
-
-  - q: "Are writes under CANON_STATE_DIR amortized O(N) over N newly persisted bytes?"
-    a: "yes"
-    cooldown: 7d
-    thinking: xhigh
+  - include: expects/*.yml
 
   # Documentation
   - q: Is README.md consistent with the current state of the repository?
@@ -135,6 +91,9 @@ expectations:
     cooldown: 3d
 
   - q: "Does `canon check` evaluate the staged Git snapshot by default, preserve unstaged and untracked working tree changes after success or failure, and fail when the current staged Git change set includes both `.canon/**` changes and non-`.canon` changes?"
+    a: "yes"
+
+  - q: "Do temporary git stash cleanup operations restore and drop only the exact stash created by the matching push, and print recovery steps instead of guessing when that stash cannot be restored safely?"
     a: "yes"
 
   - q: "Do canon commands that spawn child processes ensure those processes are terminated and reaped on both success and failure?"
