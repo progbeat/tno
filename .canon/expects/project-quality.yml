@@ -42,3 +42,8 @@
   a: "yes"
   cooldown: 7d
   thinking: xhigh
+
+- q: "Are there any unobvious bugs?"
+  a: "no"
+  cooldown: 7d
+  thinking: xhigh
