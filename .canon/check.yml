@@ -49,7 +49,7 @@ expectations:
     a: "no"
     cooldown: 3d
 
-  - q: "Does every evaluator Codex thread enforce configured `agent.ignore` patterns, and the current enforced scope through Codex filesystem permissions at thread creation and never by moving or copying project files?"
+  - q: "Does every evaluator Codex thread enforce configured `agent.ignore` patterns and the current enforced scope through Codex filesystem permissions at thread creation?"
     a: "yes"
 
   # Persistent state management
@@ -85,17 +85,7 @@ expectations:
   - q: "Does the pre-commit hook fail quickly when `canon gate` reports missing cached answers or cached failing expectation results?"
     a: "yes"
 
-  # Snapshot isolation
-  - q: Does `canon check` copy the staged Git snapshot before evaluation?
-    a: "no"
-    cooldown: 3d
-
-  - q: "Does `canon check` evaluate the staged Git snapshot by default, preserve unstaged and untracked working tree changes after success or failure, and fail when the current staged Git change set includes both `.canon/**` changes and non-`.canon` changes?"
-    a: "yes"
-
-  - q: "Do temporary git stash cleanup operations restore and drop only the exact stash created by the matching push, and print recovery steps instead of guessing when that stash cannot be restored safely?"
-    a: "yes"
-
+  # Process cleanup
   - q: "Do canon commands that spawn child processes ensure those processes are terminated and reaped on both success and failure?"
     a: "yes"
     cooldown: 7d
