@@ -21,12 +21,12 @@ agent:
     * If the allowed scope is narrower than the context required to determine the correct answer among all valid answers, answer exactly `idk`.
     * Propose a narrower scope only when that narrower scope is sufficient to determine the correct answer among all valid answers.
     Scoring policy:
-    * Correct answer: +$5
-    * Incorrect answer: -$10
-    * `idk`: -$1 + retry on full project scope
+    * Correct answer: +5
+    * Incorrect answer: -10
+    * `idk`: -1 + retry on full project scope
     * `malformed`: N/A, human review required
-    * Successful scope narrowing: +$2
-    * Failed scope narrowing: -$5
+    * Successful scope narrowing: +1
+    * Failed scope narrowing: -5
 
 expectations:
   - include: expects/*.yml
@@ -127,11 +127,19 @@ expectations:
   # Sanity checks
   - q: "What is this project implemented in?"
     a: "Rust"
-    cooldown: 7d
+    cooldown: 20d
 
   - q: "Do your dev instructions include the contents of AGENTS.md?"
     a: "no"
-    cooldown: 7d
+    cooldown: 20d
+
+  - q: "Are you instructed to use project-relative refs in evidence?"
+    a: "no"
+    cooldown: 20d
+
+  - q: "What is the maximum number of times the same expectation can be processed during a `canon check` run?"
+    a: "2"
+    cooldown: 20d
 
   # Expectations from specs
   - path: "specs/*.md"
