@@ -90,7 +90,7 @@ line to stdout:
 ▷ +<n> pass compared to HEAD. Commit staged changes!
 ```
 
-For more than one pass, `pass` is pluralized as `passes`.
+For more than one pass, `pass` is pluralized.
 
 Warnings, model fallback notices, review-required diagnostics, timestamps,
 hashes, and internal diagnostics are recorded in [[Logs]] rather than stdout or
