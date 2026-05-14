@@ -4,6 +4,8 @@ If a request contradicts the `canon check` expectations or those expectations ar
 
 Do not edit files under `.canon/` proactively. Edit them only when a human explicitly insists.
 
+Before making any changes, make sure they do not contradict the canon.
+
 Never commit `.canon/` changes. Before committing, run `git diff --cached --quiet -- .canon/`; if it exits `1`, stop and ask a human to handle them.
 
 Before creating a commit as an agent, run `canon check` with no expectation filters. This is separate from the installed Git pre-commit hook; the hook itself runs `canon gate`.
