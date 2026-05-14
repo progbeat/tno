@@ -23,6 +23,11 @@
   cooldown: 7d
   thinking: xhigh
 
+- q: "Do any source-code boundaries hide dependencies or add indirection without clarifying ownership?"
+  a: "no"
+  cooldown: 7d
+  thinking: xhigh
+
 - q: "Are there any dirty hacks that can be avoided?"
   a: "no"
   cooldown: 7d

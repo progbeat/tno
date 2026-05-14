@@ -28,9 +28,8 @@ strings.
 
 Evaluator Codex threads are ephemeral to one `canon check` invocation.
 
-Within one invocation, evaluator Codex threads are reused for
-interrogations with the same enforced scope. Interrogations with different
-enforced scopes use separate evaluator Codex threads.
+Withing one invocation, the same Codex thread is reused for all interrogations
+with the same enforced scope.
 
 A fresh interrogation starts from the latest answer history scope for that
 expectation, or `["."]` if no answer history exists.

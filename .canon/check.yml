@@ -41,9 +41,11 @@ expectations:
   # Access control
   - q: Can you read .canon/check.yml?
     a: "no"
+    cooldown: 3d
 
   - q: Can you read any files under CANON_STATE_DIR?
     a: "no"  # because these files aren't required to answer these questions
+    cooldown: 3d
 
   - q: "Can you write to any paths right now?"
     a: "no"
@@ -51,6 +53,11 @@ expectations:
 
   - q: "Does every evaluator Codex thread enforce configured `agent.ignore` patterns and the current enforced scope through Codex filesystem permissions at thread creation?"
     a: "yes"
+    cooldown: 3d
+
+  - q: "Does `canon` read runtime logs?'"
+    a: "no"  # because it's hack
+    cooldown: 3d
 
   # Persistent state management
   - q: "Let CANON_STATE_DIR=$(git rev-parse --git-path canon). Does every canon command store all canon-owned non-temporary persistent state under CANON_STATE_DIR?"
