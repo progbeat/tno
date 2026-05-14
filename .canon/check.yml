@@ -129,8 +129,8 @@ expectations:
     a: "Rust"
     cooldown: 7d
 
-  - q: 'Do your dev instructions start with "Use the following response policy"?'
-    a: "yes"
+  - q: "Do your dev instructions include the contents of AGENTS.md?"
+    a: "no"
     cooldown: 7d
 
   # Expectations from specs
