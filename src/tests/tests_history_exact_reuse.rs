@@ -253,6 +253,7 @@ fn scope_hash_preserves_legacy_hash_for_normal_paths() {
 }
 
 #[test]
+#[cfg(unix)]
 fn scope_hash_handles_newline_paths_without_line_splitting() {
     let root = git_project("history-scope-hash-newline-path");
     let config = parse_check_config(check_config_yaml()).unwrap();

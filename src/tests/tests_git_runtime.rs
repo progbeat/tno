@@ -111,6 +111,7 @@ fn staged_worktree_view_leaves_ignored_worktree_files_outside_snapshot() {
 }
 
 #[test]
+#[cfg(unix)]
 fn staged_worktree_view_materializes_literal_pathspec_names_from_index() {
     let root = git_project("staged-snapshot-literal-pathspec");
     commit_all(&root, "initial");

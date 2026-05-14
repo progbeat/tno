@@ -259,6 +259,7 @@ fn check_config_staged_delete_does_not_fall_back_to_worktree() {
 }
 
 #[test]
+#[cfg(unix)]
 fn check_config_literal_pathspec_name_loads_staged_content() {
     let root = git_project("check-config-literal-pathspec");
     let path = ":(literal)check.yml";
