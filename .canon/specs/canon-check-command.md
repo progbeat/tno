@@ -1,6 +1,12 @@
-# `canon check` Output
+# `canon check` Command
+
+Evaluator agent sessions do not have read access to `LOGS_DIR`.
 
 `canon check` writes human-readable check output to stdout.
+
+This section specifies the stdout and stderr format for check runs that process
+expectations. It is not an exhaustive output contract for modes that do not
+process expectations.
 
 For each passing expectation that is written to stdout, stdout contains exactly
 one line:
