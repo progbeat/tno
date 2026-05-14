@@ -48,7 +48,6 @@
   cooldown: 7d
   thinking: xhigh
 
-- q: "Can you find a high-confidence bug with a concrete failing scenario?"
-  a: "no"
-  cooldown: 7d
-  thinking: xhigh
+# - q: "Can you find a critical high-confidence bug with a concrete failing scenario?"
+#   a: "no"
+#   cooldown: 7d
