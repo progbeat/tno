@@ -8,8 +8,8 @@ fn check_runner_requires_human_review_for_unparseable_response() {
     let mut runner = FakeRunner::new(&["not parseable"]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, UNPARSEABLE_OBSERVED);
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
     assert_eq!(runner.prompts.len(), 1);
     assert!(read_history_records(&root, &options.selected[0])
         .unwrap()
@@ -34,9 +34,9 @@ fn check_runner_marks_unparseable_after_response_parse_fails() {
         None,
     )
     .unwrap();
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, UNPARSEABLE_OBSERVED);
-    assert!(records[0].evidence.contains("response: <empty>"));
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
+    assert!(records.records[0].evidence.contains("response: <empty>"));
     assert_eq!(runner.prompts.len(), 1);
     let log = fs::read_to_string(diagnostic_log.path).unwrap();
     assert!(log.contains(r#""event":"review.required""#));
@@ -77,8 +77,8 @@ fn check_runner_does_not_retry_unparseable_response() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, UNPARSEABLE_OBSERVED);
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
@@ -100,10 +100,10 @@ fn check_runner_requires_human_review_when_evidence_stays_empty() {
         None,
     )
     .unwrap();
-    assert!(!records[0].passed());
-    assert!(record_requires_human_review(&records[0]));
-    assert_eq!(records[0].observed, EMPTY_EVIDENCE_OBSERVED);
-    assert!(records[0].evidence.contains("evidence was empty"));
+    assert!(!records.records[0].passed());
+    assert!(record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
+    assert!(records.records[0].evidence.contains("evidence was empty"));
     assert_eq!(runner.prompts.len(), 1);
     let log = fs::read_to_string(diagnostic_log.path).unwrap();
     assert!(log.contains(r#""event":"review.required""#));
@@ -123,8 +123,8 @@ fn check_runner_requires_human_review_for_malformed_answer() {
     let mut runner = FakeRunner::new(&[&malformed]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, "malformed");
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, "malformed");
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
@@ -140,8 +140,8 @@ fn check_runner_does_not_retry_after_malformed_answer() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, "malformed");
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, "malformed");
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
@@ -157,8 +157,8 @@ fn check_runner_does_not_retry_after_empty_evidence() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, EMPTY_EVIDENCE_OBSERVED);
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
@@ -177,8 +177,8 @@ fn check_runner_keeps_semantic_malformed_as_human_review_failure() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, "malformed");
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, "malformed");
     assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }

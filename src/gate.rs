@@ -1,37 +1,54 @@
-use crate::*;
+use crate::check_cache::final_selected_after_current_pass_cache;
+use crate::check_preflight::{
+    is_canon_only_staged_change_bytes, is_canon_project_path_bytes, staged_changed_path_bytes,
+};
+use crate::check_selection::{final_selected_expectations, select_expectations};
+use crate::cli::CommandError;
+use crate::history::HistoryCache;
+use crate::history_reuse::reusable_history_record_for_source;
+use crate::logging::{join_display_ids, render_check_log_record};
+use crate::output::{write_stderr, write_stderr_line};
+use crate::repo_inspection::RepoInspectionCache;
+use crate::scope_hash::{ScopeHashCache, ScopeHashSource};
+use crate::time::unix_timestamp;
+use crate::types::{AgentConfig, CheckConfig, CheckRecord, SelectedExpectation};
+use crate::CHECK_PATH;
+use std::ffi::OsString;
+use std::path::Path;
 
 pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), CommandError> {
     // CLI validation happens before the gate pass/fail decision. These
     // unsupported-option errors are usage errors, not `GateFailed` outcomes.
-    if args.iter().any(|arg| arg.to_str() == Some("--fail-fast")) {
-        return Err("canon gate does not accept --fail-fast".into());
-    }
     if args
         .iter()
         .any(|arg| arg.to_str() == Some("--ignore-cache"))
     {
         return Err("canon gate does not accept --ignore-cache".into());
     }
-    let mut repo_cache = RepoInspectionCache::new();
-    let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH))?;
     let changed_paths = staged_changed_path_bytes(root)?;
     let has_canon_change = changed_paths
         .iter()
         .any(|path| is_canon_project_path_bytes(path));
     if has_canon_change && !is_canon_only_staged_change_bytes(&changed_paths) {
-        eprintln!("canon gate: .canon/** changes must not be mixed with non-.canon changes");
+        write_stderr_line(
+            "canon gate: .canon/** changes must not be mixed with non-.canon changes",
+        )?;
         return Err(CommandError::GateFailed);
     }
     if has_canon_change {
         return Ok(());
     }
 
+    let mut repo_cache = RepoInspectionCache::new();
+    let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH))?;
     let mut scope_hash_cache = ScopeHashCache::new();
-    // From this point on, `canon gate` is a cache-only decision. The only gate
-    // failures after command/config/staged-change preflight are missing cache
-    // records and new cached failures that were not already failing at HEAD.
     let mut history_cache = HistoryCache::new();
     let now = unix_timestamp()?;
+    // The gate spec's `selected_expectations` parameter is not raw CLI selector
+    // expansion. The CLI first builds the same command-final selected set as
+    // `canon check`: selector expansion, cooldown removal, and current
+    // passing-cache deselection. The loop below is only gate's HEAD-vs-index
+    // decision over that already-final set.
     let selected_expectations = select_expectations_for_gate(
         root,
         &config,
@@ -59,12 +76,11 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
             &mut history_cache,
             &mut scope_hash_cache,
         )?;
-
         match current {
-            GateCacheResult::Pass => {}
             GateCacheResult::Fail(_) if previous.is_fail() => {}
             GateCacheResult::Fail(record) => failing.push(*record),
             GateCacheResult::Missing => missing.push(expectation.clone()),
+            GateCacheResult::Pass => {}
         }
     }
 
@@ -72,18 +88,18 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
         return Ok(());
     }
     if !failing.is_empty() {
-        eprintln!("canon gate: expectations regressed to cached fail:");
+        write_stderr_line("canon gate: expectations regressed to cached fail:")?;
         for record in &failing {
-            eprint!("{}", render_check_log_record(record));
+            write_stderr(&render_check_log_record(record))?;
         }
     }
     if !missing.is_empty() {
-        eprintln!(
+        write_stderr_line(&format!(
             "canon gate: missing cached answers for expectations: {}",
             join_display_ids(&missing)
-        );
+        ))?;
         if let Some(advice) = gate_missing_cache_advice(!failing.is_empty()) {
-            eprintln!("{advice}");
+            write_stderr_line(advice)?;
         }
     }
     Err(CommandError::GateFailed)
@@ -108,26 +124,17 @@ pub(crate) fn select_expectations_for_gate(
     now: u64,
 ) -> Result<Vec<SelectedExpectation>, String> {
     let selected = select_expectations(config, args)?;
-    let final_selection =
-        final_selected_expectations(root, &config.agent, selected, history_cache, now)
-            .map(|selection| selection.selected)
-            .map_err(|err| err.error)?;
-    let mut remaining = Vec::new();
-    for expectation in final_selection {
-        if cached_record_for_expectation(
-            root,
-            &config.agent,
-            &expectation,
-            history_cache,
-            scope_hash_cache,
-        )?
-        .is_some_and(|hit| hit.record.passed())
-        {
-            continue;
-        }
-        remaining.push(expectation);
-    }
-    Ok(remaining)
+    let selected = final_selected_expectations(root, &config.agent, selected, history_cache, now)
+        .map(|selection| selection.selected)
+        .map_err(|err| err.error)?;
+    final_selected_after_current_pass_cache(
+        root,
+        &config.agent,
+        selected,
+        history_cache,
+        scope_hash_cache,
+    )
+    .map(|selection| selection.selected)
 }
 
 #[derive(Debug, Clone)]

@@ -1,4 +1,5 @@
-use crate::*;
+use crate::check_output::compact_json_string_array;
+use crate::types::AgentConfig;
 
 pub(crate) fn developer_instructions(agent: &AgentConfig, scope: &[String]) -> String {
     format!(

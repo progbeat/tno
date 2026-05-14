@@ -1,4 +1,16 @@
-use crate::*;
+use crate::evaluator_response_cache::{response_excerpt, EvaluatorResponseParseCache};
+use crate::hash::full_scope;
+use crate::history_cache_key::history_cache_key;
+use crate::history_reuse::is_reusable_history_record;
+use crate::logging::DiagnosticLogWriter;
+use crate::time::{format_log_record_timestamp, unix_timestamp};
+use crate::types::{
+    AgentConfig, CheckRecord, CheckResult, EvaluatorError, EvaluatorRunner, ObservedAnswerState,
+    ParsedAnswer, SelectedExpectation, TokenUsage,
+};
+use crate::{EMPTY_EVIDENCE_OBSERVED, OBSERVED_IDK, OBSERVED_MALFORMED, UNPARSEABLE_OBSERVED};
+use serde::Serialize;
+use serde_json::{json, Value};
 
 pub(crate) fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
     let mut models = vec![agent.model.primary.clone()];
@@ -48,6 +60,7 @@ pub(crate) enum EvaluatorFailureKind {
     ModelUnavailable,
     TurnTimeout,
     ContextWindow,
+    UnknownAppServer,
 }
 
 impl EvaluatorFailureKind {
@@ -59,6 +72,7 @@ impl EvaluatorFailureKind {
                 | EvaluatorFailureKind::ModelUnavailable
                 | EvaluatorFailureKind::TurnTimeout
                 | EvaluatorFailureKind::ContextWindow
+                | EvaluatorFailureKind::UnknownAppServer
         )
     }
 
@@ -74,10 +88,8 @@ pub(crate) fn record_from_response(
     enforced_scope: Vec<String>,
     scope_hash: String,
 ) -> Result<CheckRecord, String> {
-    let requires_human_review = response.answer == OBSERVED_MALFORMED
-        || response.answer == UNPARSEABLE_OBSERVED
-        || response.answer == OBSERVED_IDK
-        || response.answer == EMPTY_EVIDENCE_OBSERVED;
+    let requires_human_review =
+        ObservedAnswerState::from_observed(&response.answer).requires_human_review();
     let result = if !requires_human_review && response.answer == expectation.a {
         CheckResult::Pass
     } else {
@@ -148,6 +160,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
     };
 
     if parsed.evidence.trim().is_empty()
+        && parsed.answer != OBSERVED_IDK
         && parsed.answer != OBSERVED_MALFORMED
         && parsed.answer != UNPARSEABLE_OBSERVED
     {
@@ -171,12 +184,13 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
     reason: &str,
 ) -> Result<String, EvaluatorError> {
     if let Some(writer) = diagnostic_log.as_deref_mut() {
-        let raw_request = json!({
-            "sessionId": turn.session_id,
-            "prompt": prompt,
-            "model": turn.model,
-            "thinking": turn.thinking,
-        });
+        let raw_request = serde_json::to_value(EvaluatorTurnLogRequest {
+            session_id: turn.session_id,
+            prompt,
+            model: turn.model,
+            thinking: turn.thinking,
+        })
+        .map_err(|err| format!("failed to encode evaluator turn request log: {}", err))?;
         writer.write_event(
             "info",
             "agent.request",
@@ -210,4 +224,13 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
         )?;
     }
     Ok(response)
+}
+
+#[derive(Serialize)]
+struct EvaluatorTurnLogRequest<'a> {
+    #[serde(rename = "sessionId")]
+    session_id: &'a str,
+    prompt: &'a str,
+    model: Option<&'a str>,
+    thinking: &'a str,
 }

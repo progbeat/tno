@@ -1,4 +1,36 @@
-use crate::*;
+use crate::check_cache::{
+    cached_failure_for_expectation, final_selected_after_current_pass_cache, write_cache_hit,
+};
+use crate::check_interrogation_policy::{
+    interrogate_or_error_record, interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
+    write_scope_narrowing_event, InterrogationCall, ScopedInterrogation,
+};
+use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
+use crate::check_output::{
+    record_requires_human_review, write_and_flush_result_output,
+    write_and_flush_result_output_after_prefix, write_and_flush_result_prefix,
+};
+use crate::check_preflight::check_interrupted;
+use crate::check_selection::{
+    final_selected_expectations, initial_non_selected_expectations,
+    order_expectations_by_latest_non_pass,
+};
+use crate::evaluator_turn::is_verified_record;
+use crate::hash::full_scope;
+use crate::history::HistoryCache;
+use crate::history_append::append_history_record_with_cache;
+use crate::history_reuse::latest_history_scope_with_cache;
+use crate::logging::DiagnosticLogWriter;
+use crate::scope::{is_strict_scope_subset, scope_is_within};
+use crate::scope_hash::ScopeHashCache;
+use crate::time::unix_timestamp;
+use crate::types::{
+    check_run_error, CheckConfig, CheckOptions, CheckRunError, CheckRunReport, EvaluatorRunner,
+    NarrowingStats,
+};
+use std::collections::BTreeSet;
+use std::io::Write;
+use std::path::Path;
 
 pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     root: &Path,
@@ -17,7 +49,20 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     let mut skipped = options.skipped;
     let mut silent = 0usize;
     let mut narrowing = NarrowingStats::default();
-    let mut non_selected = initial_non_selected_expectations(config, &options.selected);
+    let mut non_selected = match initial_non_selected_expectations(config, &options.selected) {
+        Ok(non_selected) => non_selected,
+        Err(err) => {
+            return Err(check_run_error(
+                &records,
+                &[],
+                selected,
+                skipped,
+                silent,
+                narrowing,
+                err,
+            ));
+        }
+    };
     let runtime = CheckRuntime {
         root,
         snapshot_root,
@@ -84,38 +129,39 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     let final_selected = if options.ignore_cache {
         final_selection.selected
     } else {
-        // Reusable passing exact-cache hits satisfy candidates before the
+        // Passing exact-cache hits satisfy candidates before the
         // selected-expectation loop below. They are final-selection
         // deselections, so they contribute to skipped/silent and are not
-        // selected checks.
-        let mut remaining = Vec::new();
-        for expectation in final_selection.selected {
-            if let Some(hit) = run_try!(cached_record_for_expectation(
-                root,
-                &config.agent,
-                &expectation,
-                &mut history_cache,
-                &mut scope_hash_cache,
-            )) {
-                if hit.record.passed() {
-                    if let Some(writer) = diagnostic_log.as_deref_mut() {
-                        run_try!(write_cache_hit(writer, &hit));
-                    }
-                    non_selected.push(expectation);
-                    skipped += 1;
-                    silent += 1;
-                    continue;
-                }
+        // selected checks. Failed exact-cache hits stay selected and are
+        // reported below.
+        let cache_selection = run_try!(final_selected_after_current_pass_cache(
+            root,
+            &config.agent,
+            final_selection.selected,
+            &mut history_cache,
+            &mut scope_hash_cache,
+        ));
+        for (expectation, hit) in cache_selection.skipped_passes {
+            if let Some(writer) = diagnostic_log.as_deref_mut() {
+                run_try!(write_cache_hit(writer, &hit));
             }
-            remaining.push(expectation);
+            non_selected.push(expectation);
+            skipped += 1;
+            silent += 1;
         }
-        remaining
+        cache_selection.selected
     };
+    let final_selected = run_try!(order_expectations_by_latest_non_pass(
+        root,
+        final_selected,
+        &mut history_cache
+    ));
     selected = final_selected.len();
+    let stop_after_non_pass = !options.check_all;
     for expectation in &final_selected {
         // Each branch that produces a selected CheckRecord writes and flushes
-        // that record before moving to the next expectation. Passing cache hits
-        // have already been removed from `final_selected`.
+        // that record before moving to the next expectation. Silent passing
+        // cache hits have already been removed from `final_selected`.
         if check_interrupted() {
             return Err(check_run_error(
                 &records,
@@ -135,7 +181,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 &mut history_cache,
                 &mut scope_hash_cache,
             )) {
-                let should_stop = options.fail_fast && !hit.record.passed();
+                let should_stop = stop_after_non_pass && !hit.record.passed();
                 if let Some(writer) = diagnostic_log.as_deref_mut() {
                     run_try!(write_cache_hit(writer, &hit));
                 }
@@ -158,9 +204,14 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
             }
         }
 
+        run_try!(write_and_flush_result_prefix(
+            &mut result_output,
+            &expectation.display_id
+        ));
+
         // `--ignore-cache` bypasses reusable answer records in the branch above,
         // but it does not erase the interrogation-policy scope seed: a fresh
-        // evaluator turn still starts from the latest reusable history scope.
+        // evaluator turn still starts from the latest answer-history scope.
         let mut enforced_scope = run_try!(latest_history_scope_with_cache(
             root,
             &config.agent,
@@ -265,8 +316,8 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         if let Some(writer) = diagnostic_log.as_deref_mut() {
             run_try!(writer.write_record(&interrogation.record));
         }
-        let should_stop = options.fail_fast && !interrogation.record.passed();
-        run_try!(write_and_flush_result_output(
+        let should_stop = stop_after_non_pass && !interrogation.record.passed();
+        run_try!(write_and_flush_result_output_after_prefix(
             &mut result_output,
             &interrogation.record
         ));
@@ -290,148 +341,4 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         silent,
         narrowing,
     })
-}
-
-pub(crate) fn initial_non_selected_expectations(
-    config: &CheckConfig,
-    selected: &[SelectedExpectation],
-) -> Vec<SelectedExpectation> {
-    let selected_ids = selected
-        .iter()
-        .map(|expectation| expectation.id.clone())
-        .collect::<BTreeSet<_>>();
-    let identities =
-        expectation_identities(config).expect("validated check config has unique expectation IDs");
-    config
-        .expectations
-        .iter()
-        .enumerate()
-        .filter_map(|(index, expectation)| {
-            let identity = identities.get(index)?;
-            let number = index + 1;
-            (!selected_ids.contains(&identity.id)).then(|| SelectedExpectation {
-                number,
-                id: identity.id.clone(),
-                display_id: identity.display_id.clone(),
-                q: expectation.q.clone(),
-                a: expectation.a.clone(),
-                cooldown: None,
-                thinking: expectation.thinking.clone(),
-            })
-        })
-        .collect()
-}
-
-struct InterrogationCall<'a> {
-    root: &'a Path,
-    runtime: &'a CheckRuntime<'a>,
-    expectation: &'a SelectedExpectation,
-    scope: &'a [String],
-}
-
-struct ScopedInterrogation<'a> {
-    root: &'a Path,
-    runtime: &'a CheckRuntime<'a>,
-    expectation: &'a SelectedExpectation,
-    enforced_scope: &'a mut Vec<String>,
-}
-
-fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
-    call: ScopedInterrogation<'_>,
-    runner: &mut R,
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    interrogation_state: &mut InterrogationState,
-    scope_hash_cache: &mut ScopeHashCache,
-) -> Result<InterrogationResult, String> {
-    let mut interrogation = interrogate_or_error_record(
-        InterrogationCall {
-            root: call.root,
-            runtime: call.runtime,
-            expectation: call.expectation,
-            scope: call.enforced_scope,
-        },
-        runner,
-        diagnostic_log,
-        interrogation_state,
-        scope_hash_cache,
-    )?;
-    if should_retry_full_scope_after_restricted_idk(&interrogation.record, call.enforced_scope) {
-        // `idk` is a non-answer, not a cache-spec "same answer" that can prove
-        // a narrower scope. The interrogation policy requires a separate
-        // full-scope retry, and that final record replaces the restricted
-        // non-answer.
-        *call.enforced_scope = full_scope();
-        interrogation = interrogate_or_error_record(
-            InterrogationCall {
-                root: call.root,
-                runtime: call.runtime,
-                expectation: call.expectation,
-                scope: call.enforced_scope,
-            },
-            runner,
-            diagnostic_log,
-            interrogation_state,
-            scope_hash_cache,
-        )?;
-    }
-    Ok(interrogation)
-}
-
-fn interrogate_or_error_record<R: EvaluatorRunner>(
-    call: InterrogationCall<'_>,
-    runner: &mut R,
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    interrogation_state: &mut InterrogationState,
-    scope_hash_cache: &mut ScopeHashCache,
-) -> Result<InterrogationResult, String> {
-    match interrogate_expectation_with_model_fallbacks(
-        call.runtime,
-        call.expectation,
-        runner,
-        diagnostic_log,
-        interrogation_state,
-        call.scope,
-    ) {
-        Ok(interrogation) => Ok(interrogation),
-        Err(err) => Ok(InterrogationResult {
-            record: error_record_from_interrogation_error(
-                call.root,
-                &call.runtime.config.agent,
-                call.expectation,
-                call.scope,
-                &err,
-                scope_hash_cache,
-            )?,
-        }),
-    }
-}
-
-pub(crate) fn narrowed_scope_is_accepted(wide: &CheckRecord, narrowed: &CheckRecord) -> bool {
-    narrowed.observed == wide.observed || (is_verified_record(narrowed) && !narrowed.passed())
-}
-
-fn write_scope_narrowing_event(
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    id: &str,
-    enforced_scope: &[String],
-    record_scope: &[String],
-    accepted: bool,
-    initial_record: &CheckRecord,
-    narrowed_record: &CheckRecord,
-) -> Result<(), String> {
-    let Some(writer) = diagnostic_log.as_deref_mut() else {
-        return Ok(());
-    };
-    writer.write_event(
-        "info",
-        "scope.narrowing",
-        &scope_narrowing_log_fields(
-            id,
-            enforced_scope,
-            record_scope,
-            accepted,
-            initial_record,
-            narrowed_record,
-        ),
-    )
 }

@@ -1,11 +1,13 @@
-use crate::*;
+use std::fs;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 pub(crate) fn validate_note_key(key: &str) -> Result<(), String> {
     if key.is_empty() {
         return Err("key must not be empty".to_string());
     }
-    if key.contains('\t') || key.contains('\n') || key.contains('\r') {
-        return Err("key must not contain tabs or newlines".to_string());
+    if key.chars().any(char::is_control) {
+        return Err("key must not contain control characters".to_string());
     }
     Ok(())
 }

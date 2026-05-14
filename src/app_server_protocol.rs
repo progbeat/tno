@@ -1,66 +1,78 @@
-use crate::*;
+use crate::evaluator_turn::EvaluatorFailureKind;
+use crate::types::{EvaluatorError, TokenUsage};
+use crate::APP_SERVER_TURN_TIMEOUT_SECS;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::time::{Duration, Instant};
 
 pub(crate) fn turn_idle_timed_out(last_activity: Instant, now: Instant) -> bool {
     now.duration_since(last_activity) >= Duration::from_secs(APP_SERVER_TURN_TIMEOUT_SECS)
 }
 
-pub(crate) fn app_server_failure_kind(error: &Value) -> Option<EvaluatorFailureKind> {
-    let code = error
-        .get("code")
-        .or_else(|| error.get("type"))
-        .and_then(Value::as_str);
-    if let Some(kind) = code.and_then(app_server_failure_kind_from_code) {
-        return Some(kind);
+#[derive(Debug, Deserialize)]
+pub(crate) struct AppServerMessage {
+    pub(crate) id: Option<u64>,
+    pub(crate) method: Option<String>,
+    #[serde(default)]
+    pub(crate) result: Option<Value>,
+    #[serde(default)]
+    pub(crate) error: Option<Value>,
+}
+
+pub(crate) fn app_server_message(value: &Value) -> Result<AppServerMessage, String> {
+    let message = serde_json::from_value::<AppServerMessage>(value.clone())
+        .map_err(|err| format!("failed to parse app-server message envelope: {}", err))?;
+    if message.id.is_none() && message.method.is_none() {
+        return Err("app-server message envelope missing both id and method".to_string());
     }
-    let message = error
-        .get("message")
-        .and_then(Value::as_str)
-        .or_else(|| error.as_str())?;
-    app_server_failure_kind_from_message(message)
+    Ok(message)
+}
+
+pub(crate) fn app_server_failure_kind(error: &Value) -> EvaluatorFailureKind {
+    let code = serde_json::from_value::<AppServerErrorFields>(error.clone())
+        .ok()
+        .and_then(AppServerErrorFields::code);
+    code.as_deref()
+        .map(app_server_failure_kind_from_code)
+        .unwrap_or(EvaluatorFailureKind::UnknownAppServer)
 }
 
 pub(crate) fn app_server_failure_from_value(method: &str, error: &Value) -> EvaluatorError {
     let failure = format!("app-server {} failed: {}", method, error);
-    match app_server_failure_kind(error) {
-        Some(kind) => EvaluatorError::failure(kind, failure),
-        None => EvaluatorError::message(failure),
-    }
+    EvaluatorError::failure(app_server_failure_kind(error), failure)
 }
 
+#[cfg(test)]
 pub(crate) fn app_server_failure_from_message(method: &str, message: &str) -> EvaluatorError {
     let failure = format!("app-server {} failed: {}", method, message);
-    match app_server_failure_kind_from_message(message) {
-        Some(kind) => EvaluatorError::failure(kind, failure),
-        None => EvaluatorError::message(failure),
-    }
+    EvaluatorError::message(failure)
 }
 
-pub(crate) fn app_server_failure_kind_from_code(code: &str) -> Option<EvaluatorFailureKind> {
+pub(crate) fn app_server_failure_kind_from_code(code: &str) -> EvaluatorFailureKind {
     match code {
-        "usageLimitExceeded" | "usage_limit_exceeded" => Some(EvaluatorFailureKind::UsageLimit),
-        "rateLimitExceeded" | "rate_limit_exceeded" => Some(EvaluatorFailureKind::RateLimit),
-        "modelUnavailable" | "model_unavailable" => Some(EvaluatorFailureKind::ModelUnavailable),
+        "usageLimitExceeded" | "usage_limit_exceeded" => EvaluatorFailureKind::UsageLimit,
+        "rateLimitExceeded" | "rate_limit_exceeded" => EvaluatorFailureKind::RateLimit,
+        "modelUnavailable" | "model_unavailable" => EvaluatorFailureKind::ModelUnavailable,
         "contextWindowExceeded" | "context_window_exceeded" | "context_length_exceeded" => {
-            Some(EvaluatorFailureKind::ContextWindow)
+            EvaluatorFailureKind::ContextWindow
         }
-        _ => None,
+        _ => EvaluatorFailureKind::UnknownAppServer,
     }
 }
 
-pub(crate) fn app_server_failure_kind_from_message(message: &str) -> Option<EvaluatorFailureKind> {
-    if message.contains("usageLimitExceeded") || message.contains("usage limit") {
-        return Some(EvaluatorFailureKind::UsageLimit);
+#[derive(Deserialize)]
+struct AppServerErrorFields {
+    code: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    #[serde(rename = "codexErrorInfo")]
+    codex_error_info: Option<String>,
+}
+
+impl AppServerErrorFields {
+    fn code(self) -> Option<String> {
+        self.code.or(self.kind).or(self.codex_error_info)
     }
-    if message.contains("rate limit") {
-        return Some(EvaluatorFailureKind::RateLimit);
-    }
-    if message.contains("model unavailable") || message.contains("model is unavailable") {
-        return Some(EvaluatorFailureKind::ModelUnavailable);
-    }
-    if message.contains("context window") || message.contains("ran out of room") {
-        return Some(EvaluatorFailureKind::ContextWindow);
-    }
-    None
 }
 
 impl TokenUsage {
@@ -136,27 +148,54 @@ pub(crate) fn format_number(value: u64) -> String {
     output.chars().rev().collect()
 }
 
+#[cfg(test)]
 pub(crate) fn app_server_error_message(message: &Value) -> Option<String> {
+    app_server_error_value(message).map(|error| app_server_error_display(&error))
+}
+
+pub(crate) fn app_server_error_value(message: &Value) -> Option<Value> {
     let method = message.get("method").and_then(Value::as_str)?;
     if method != "error" && method != "turn/failed" && method != "turn/error" {
         if method == "turn/completed"
             && string_at_path(message, &["params", "turn", "status"]) == Some("failed")
         {
-            return string_at_path(message, &["params", "turn", "error", "message"])
-                .or_else(|| string_at_path(message, &["params", "turn", "error"]))
-                .map(str::to_string)
-                .or_else(|| Some("turn failed".to_string()));
+            return message
+                .get("params")?
+                .get("turn")?
+                .get("error")
+                .cloned()
+                .or_else(|| Some(json!({ "message": "turn failed" })));
         }
         return None;
     }
-    string_at_path(message, &["params", "error", "message"])
-        .or_else(|| string_at_path(message, &["params", "message"]))
-        .or_else(|| string_at_path(message, &["params", "error", "codexErrorInfo"]))
-        .or_else(|| string_at_path(message, &["error", "message"]))
-        .or_else(|| string_at_path(message, &["message"]))
-        .or_else(|| string_at_path(message, &["params", "error"]))
+    value_at_path(message, &["params", "error"])
+        .or_else(|| value_at_path(message, &["error"]))
+        .cloned()
+        .or_else(|| string_at_path(message, &["params", "message"]).map(message_error_value))
+        .or_else(|| string_at_path(message, &["message"]).map(message_error_value))
+        .or_else(|| Some(message_error_value(method)))
+}
+
+#[cfg(test)]
+pub(crate) fn app_server_error_display(error: &Value) -> String {
+    error
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| error.as_str())
         .map(str::to_string)
-        .or_else(|| Some(method.to_string()))
+        .unwrap_or_else(|| error.to_string())
+}
+
+pub(crate) fn message_error_value(message: &str) -> Value {
+    json!({ "message": message })
+}
+
+pub(crate) fn value_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    Some(current)
 }
 
 pub(crate) fn string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
@@ -181,10 +220,10 @@ pub(crate) fn append_completed_agent_text(message: &Value, output: &mut String) 
     };
     if let Some(item) = params.get("item") {
         if is_assistant_message_item(item) {
-            append_text_fields(item, output);
+            append_assistant_item_text(item, output);
         }
     } else if message.get("method").and_then(Value::as_str) == Some("item/agentMessage/completed") {
-        append_text_fields(params, output);
+        append_agent_message_completed_text(params, output);
     }
 }
 
@@ -197,24 +236,33 @@ pub(crate) fn is_assistant_message_item(item: &Value) -> bool {
             .unwrap_or(false)
 }
 
-pub(crate) fn append_text_fields(value: &Value, output: &mut String) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                append_text_fields(item, output);
+pub(crate) fn append_assistant_item_text(item: &Value, output: &mut String) {
+    if let Some(text) = item.get("text").and_then(Value::as_str) {
+        output.push_str(text);
+    }
+    if let Some(content) = item.get("content").and_then(Value::as_array) {
+        append_content_text_parts(content, output);
+    }
+}
+
+pub(crate) fn append_agent_message_completed_text(params: &Value, output: &mut String) {
+    if let Some(text) = params.get("text").and_then(Value::as_str) {
+        output.push_str(text);
+    }
+    if let Some(content) = params.get("content").and_then(Value::as_array) {
+        append_content_text_parts(content, output);
+    }
+}
+
+pub(crate) fn append_content_text_parts(parts: &[Value], output: &mut String) {
+    for part in parts {
+        let Some(kind) = part.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        if matches!(kind, "output_text" | "text") {
+            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                output.push_str(text);
             }
         }
-        Value::Object(fields) => {
-            for (key, value) in fields {
-                if key == "text" {
-                    if let Some(text) = value.as_str() {
-                        output.push_str(text);
-                    }
-                } else {
-                    append_text_fields(value, output);
-                }
-            }
-        }
-        _ => {}
     }
 }

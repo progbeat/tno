@@ -1,4 +1,11 @@
-use crate::*;
+use crate::evaluator_turn::EvaluatorFailureKind;
+use crate::{
+    EMPTY_EVIDENCE_OBSERVED, OBSERVED_IDK, OBSERVED_MALFORMED, RESULT_FAIL, RESULT_PASS,
+    UNPARSEABLE_OBSERVED,
+};
+use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub(crate) struct Config {
@@ -73,22 +80,111 @@ pub(crate) struct Expectation {
     pub(crate) thinking: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub(crate) struct RawExpectationItem {
-    #[serde(default)]
-    pub(crate) q: Option<String>,
-    #[serde(default)]
-    pub(crate) q_template: Option<String>,
-    #[serde(default)]
-    pub(crate) a: Option<String>,
-    #[serde(default)]
-    pub(crate) path: Option<String>,
-    #[serde(default)]
-    pub(crate) include: Option<String>,
-    #[serde(default)]
+#[derive(Debug, Clone)]
+pub(crate) enum RawExpectationItem {
+    Explicit(RawExplicitExpectation),
+    Generator(RawGeneratorExpectation),
+    Include(RawIncludeExpectation),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RawExplicitExpectation {
+    pub(crate) q: String,
+    pub(crate) a: String,
     pub(crate) cooldown: Option<String>,
-    #[serde(default)]
     pub(crate) thinking: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RawGeneratorExpectation {
+    pub(crate) q_template: String,
+    pub(crate) path: String,
+    pub(crate) a: String,
+    pub(crate) cooldown: Option<String>,
+    pub(crate) thinking: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RawIncludeExpectation {
+    pub(crate) include: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawExpectationFields {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    q_template: Option<String>,
+    #[serde(default)]
+    a: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    include: Option<String>,
+    #[serde(default)]
+    cooldown: Option<String>,
+    #[serde(default)]
+    thinking: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for RawExpectationItem {
+    fn deserialize<D>(deserializer: D) -> Result<RawExpectationItem, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let fields = RawExpectationFields::deserialize(deserializer)?;
+        RawExpectationItem::from_fields(fields).map_err(serde::de::Error::custom)
+    }
+}
+
+impl RawExpectationItem {
+    fn from_fields(fields: RawExpectationFields) -> Result<RawExpectationItem, &'static str> {
+        match (
+            fields.q,
+            fields.q_template,
+            fields.path,
+            fields.include,
+            fields.a,
+        ) {
+            (Some(q), None, None, None, Some(a)) => {
+                Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
+                    q,
+                    a,
+                    cooldown: fields.cooldown,
+                    thinking: fields.thinking,
+                }))
+            }
+            (None, Some(q_template), Some(path), None, Some(a)) => {
+                Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
+                    q_template,
+                    path,
+                    a,
+                    cooldown: fields.cooldown,
+                    thinking: fields.thinking,
+                }))
+            }
+            (None, None, None, Some(include), None) => {
+                Ok(RawExpectationItem::Include(RawIncludeExpectation {
+                    include,
+                }))
+            }
+            (_, _, _, Some(_), Some(_)) => Err("include item must not contain a"),
+            (Some(_), _, _, Some(_), _) => Err("include item must not contain q"),
+            (_, Some(_), _, Some(_), _) => Err("include item must not contain q_template"),
+            (_, _, Some(_), Some(_), _) => Err("include item must not contain path"),
+            (Some(_), Some(_), _, _, _) => Err("must not contain both q and q_template"),
+            (Some(_), None, Some(_), _, _) => {
+                Err("must not contain path on an explicit expectation")
+            }
+            (Some(_), None, None, None, None) => Err("must contain a"),
+            (None, Some(_), None, _, _) => Err("generator must contain path"),
+            (None, Some(_), Some(_), None, None) => Err("must contain a"),
+            (None, None, Some(_), _, _) => Err("generator must contain q_template"),
+            (None, None, None, None, Some(_)) => Err("must contain q or q_template"),
+            (None, None, None, None, None) => Err("must contain q, q_template, or include"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +208,40 @@ pub(crate) struct ParsedAnswer {
     pub(crate) answer: String,
     pub(crate) evidence: String,
     pub(crate) scope: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObservedAnswerState {
+    Answer,
+    Idk,
+    Malformed,
+    Unparseable,
+    EmptyEvidence,
+    Unknown,
+}
+
+impl ObservedAnswerState {
+    pub(crate) fn from_observed(observed: &str) -> ObservedAnswerState {
+        match observed {
+            OBSERVED_IDK => ObservedAnswerState::Idk,
+            OBSERVED_MALFORMED => ObservedAnswerState::Malformed,
+            UNPARSEABLE_OBSERVED => ObservedAnswerState::Unparseable,
+            EMPTY_EVIDENCE_OBSERVED => ObservedAnswerState::EmptyEvidence,
+            "yes" | "no" => ObservedAnswerState::Answer,
+            _ if matches!(observed.as_bytes(), [letter] if letter.is_ascii_lowercase()) => {
+                ObservedAnswerState::Answer
+            }
+            _ => ObservedAnswerState::Unknown,
+        }
+    }
+
+    pub(crate) fn requires_human_review(self) -> bool {
+        !matches!(self, ObservedAnswerState::Answer)
+    }
+
+    pub(crate) fn is_reusable_history(self) -> bool {
+        matches!(self, ObservedAnswerState::Answer)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,6 +274,10 @@ impl std::fmt::Display for CheckResult {
     }
 }
 
+// In-memory check record used by history, runtime logs, gate diagnostics, and
+// check output. Do not infer persisted history field order from this struct:
+// `render_check_log_record` is the authoritative history JSON writer and emits
+// the cache-required fields first, followed by metadata such as the full ID.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CheckRecord {
     pub(crate) timestamp: String,
@@ -167,11 +301,14 @@ pub(crate) struct CheckRecord {
 
 pub(crate) struct CheckOptions {
     // CLI-expanded expectation candidates. This is not the final selected set:
-    // cooldown and reusable passing cache hits can remove candidates before the
-    // check report records its selected/skipped counts.
+    // cooldown and silent exact-cache passes can remove candidates before the
+    // check report records its selected/skipped counts. Exact cache lookup can
+    // still reuse failed records; those stay selected and are reported.
     pub(crate) selected: Vec<SelectedExpectation>,
     pub(crate) skipped: usize,
-    pub(crate) fail_fast: bool,
+    // `canon check` stops after the first final non-pass by default. `--all`
+    // keeps running the full already-selected set.
+    pub(crate) check_all: bool,
     pub(crate) ignore_cache: bool,
 }
 
@@ -201,13 +338,14 @@ pub(crate) struct CheckRunReport {
     pub(crate) records: Vec<CheckRecord>,
     pub(crate) non_selected: Vec<SelectedExpectation>,
     // Final selected count after every selection rule has run. This excludes
-    // command-selector misses, cooldown matches, and reusable passing cache hits.
+    // command-selector misses, cooldown matches, and silent exact-cache passes.
+    // Failed exact-cache hits stay selected because they produce FAILED output.
     pub(crate) selected: usize,
-    // Final non-selected count. Reusable passing cache hits are non-selected
-    // for reporting because they produce no per-expectation stdout.
+    // Final non-selected count. Silent exact-cache passes are non-selected for
+    // reporting because they produce no per-expectation stdout.
     pub(crate) skipped: usize,
     // Non-selected expectations that intentionally produce no per-expectation
-    // stdout, currently cooldown matches and reusable passing cache hits.
+    // stdout, currently cooldown matches and silent exact-cache passes.
     pub(crate) silent: usize,
     pub(crate) narrowing: NarrowingStats,
 }
@@ -237,14 +375,6 @@ pub(crate) fn check_run_error(
             silent,
             narrowing,
         },
-    }
-}
-
-impl std::ops::Deref for CheckRunReport {
-    type Target = [CheckRecord];
-
-    fn deref(&self) -> &Self::Target {
-        &self.records
     }
 }
 

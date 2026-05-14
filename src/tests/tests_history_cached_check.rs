@@ -44,9 +44,9 @@ expectations:
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert_eq!(records.len(), 1);
-    assert!(!records[0].passed());
-    assert_eq!(records[0].evidence, "exact cached failure");
+    assert_eq!(records.records.len(), 1);
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].evidence, "exact cached failure");
     assert_eq!(runner.starts, 0);
     let _ = fs::remove_dir_all(root);
 }
@@ -230,7 +230,7 @@ expectations:
     let report =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert_eq!(report.len(), 0);
+    assert_eq!(report.records.len(), 0);
     assert_eq!(report.selected, 0);
     assert_eq!(report.skipped, 1);
     assert_eq!(report.silent, 1);

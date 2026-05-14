@@ -1,17 +1,33 @@
-use crate::*;
+use crate::{handle_sigint, signal, CHECK_INTERRUPTED};
+use std::path::Path;
+use std::process::Command;
+use std::sync::atomic::Ordering;
 
-pub(crate) fn install_sigint_handler() {
-    SIGNAL_HANDLER_INIT.call_once(|| {
-        #[cfg(unix)]
-        unsafe {
-            const SIGHUP: i32 = 1;
-            const SIGINT: i32 = 2;
-            const SIGTERM: i32 = 15;
-            let _ = signal(SIGHUP, handle_sigint);
-            let _ = signal(SIGINT, handle_sigint);
-            let _ = signal(SIGTERM, handle_sigint);
-        }
-    });
+pub(crate) fn install_sigint_handler() -> Result<(), String> {
+    #[cfg(unix)]
+    unsafe {
+        const SIGHUP: i32 = 1;
+        const SIGINT: i32 = 2;
+        const SIGTERM: i32 = 15;
+        install_signal_handler(SIGHUP)?;
+        install_signal_handler(SIGINT)?;
+        install_signal_handler(SIGTERM)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+unsafe fn install_signal_handler(signal_number: i32) -> Result<(), String> {
+    const SIG_ERR: usize = usize::MAX;
+    let previous = unsafe { signal(signal_number, handle_sigint) };
+    if previous == SIG_ERR {
+        Err(format!(
+            "failed to install signal handler for signal {}",
+            signal_number
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) fn check_interrupted() -> bool {

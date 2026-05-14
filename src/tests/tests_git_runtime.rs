@@ -30,12 +30,13 @@ fn staged_worktree_view_materializes_staged_snapshot_without_touching_worktree()
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
-        snapshot_root = staged_view.root().to_path_buf();
+        snapshot_root = staged_view.snapshot_root().to_path_buf();
         assert_ne!(snapshot_root, root);
         assert_eq!(
             fs::read_to_string(snapshot_root.join("README.md")).unwrap(),
             "staged\n"
         );
+        assert!(!snapshot_root.join(".git").exists());
         assert!(!snapshot_root.join("untracked.txt").exists());
         assert_eq!(
             fs::read_to_string(root.join("README.md")).unwrap(),
@@ -62,6 +63,18 @@ fn staged_worktree_view_materializes_staged_snapshot_without_touching_worktree()
 }
 
 #[test]
+fn staged_snapshot_parent_must_be_outside_project_root() {
+    let root = git_project("staged-snapshot-parent-outside");
+    let root = fs::canonicalize(root).unwrap();
+    let inside = root.join("tmp");
+    fs::create_dir_all(&inside).unwrap();
+    assert!(snapshot_parent_outside_worktree(&root, &root).is_err());
+    assert!(snapshot_parent_outside_worktree(&root, &inside).is_err());
+    assert!(snapshot_parent_outside_worktree(&root, root.parent().unwrap()).is_ok());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn staged_worktree_view_leaves_ignored_worktree_files_outside_snapshot() {
     let root = git_project("staged-snapshot-ignored");
     fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
@@ -84,10 +97,10 @@ fn staged_worktree_view_leaves_ignored_worktree_files_outside_snapshot() {
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         assert_eq!(
-            fs::read_to_string(staged_view.root().join("README.md")).unwrap(),
+            fs::read_to_string(staged_view.snapshot_root().join("README.md")).unwrap(),
             "staged\n"
         );
-        assert!(!staged_view.root().join("ignored.txt").exists());
+        assert!(!staged_view.snapshot_root().join("ignored.txt").exists());
     }
 
     assert_eq!(
@@ -118,7 +131,7 @@ fn staged_worktree_view_materializes_literal_pathspec_names_from_index() {
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         assert_eq!(
-            fs::read_to_string(staged_view.root().join(special)).unwrap(),
+            fs::read_to_string(staged_view.snapshot_root().join(special)).unwrap(),
             "staged\n"
         );
     }
@@ -127,6 +140,43 @@ fn staged_worktree_view_materializes_literal_pathspec_names_from_index() {
         fs::read_to_string(root.join(special)).unwrap(),
         "unstaged\n"
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn staged_worktree_view_materializes_symlinks_as_regular_files() {
+    use std::os::unix::fs::symlink;
+
+    let root = git_project("staged-snapshot-symlink");
+    symlink("/tmp/canon-outside-target", root.join("outside-link")).unwrap();
+    let output = Command::new("git")
+        .args(["add", "outside-link"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    {
+        let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        let snapshot_link = staged_view.snapshot_root().join("outside-link");
+        let metadata = fs::symlink_metadata(&snapshot_link).unwrap();
+        assert!(!metadata.file_type().is_symlink());
+        assert!(metadata.file_type().is_file());
+        assert_eq!(
+            fs::read_to_string(snapshot_link).unwrap(),
+            "/tmp/canon-outside-target"
+        );
+    }
+
+    assert!(fs::symlink_metadata(root.join("outside-link"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
     let _ = fs::remove_dir_all(root);
 }
 

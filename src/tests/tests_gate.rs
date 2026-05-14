@@ -86,6 +86,25 @@ fn gate_passes_canon_only_change_without_checking_cache() {
 }
 
 #[test]
+fn gate_passes_canon_only_change_without_loading_config() {
+    let root = git_project("gate-canon-only-invalid-config");
+    commit_all(&root, "initial");
+    fs::create_dir_all(root.join(".canon")).unwrap();
+    fs::write(root.join(CHECK_PATH), "not: [valid").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    let result = run_gate_command(&root, &[]);
+
+    assert!(result.is_ok());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn gate_fails_mixed_canon_and_non_canon_change() {
     let root = git_project("gate-mixed-canon");
     commit_all(&root, "initial");
@@ -131,7 +150,7 @@ fn gate_does_not_skip_non_canon_change_with_missing_cache() {
 }
 
 #[test]
-fn gate_deselects_fresh_cooldown_pass_when_scope_hash_changed() {
+fn gate_uses_shared_final_selection_for_fresh_cooldown_pass() {
     let root = git_project("gate-cooldown-pass");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -178,7 +197,7 @@ expectations:
 }
 
 #[test]
-fn gate_deselects_fresh_cooldown_pass_over_older_exact_fail() {
+fn gate_shared_final_selection_prefers_fresh_cooldown_pass_over_exact_fail() {
     let root = git_project("gate-cooldown-over-exact-fail");
     commit_all(&root, "initial");
     let yaml = r#"

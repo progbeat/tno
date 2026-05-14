@@ -1,4 +1,12 @@
-use crate::*;
+use crate::check_config::parse_staged_check_config_content_with_root;
+use crate::check_generator_paths::expand_generator_paths;
+use crate::git::{read_staged_file_content_from_path, resolve_git_path};
+use crate::types::CheckConfig;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+use std::fs;
 
 type GitPathCacheKey = (PathBuf, String);
 type GeneratorPathsCacheKey = (PathBuf, PathBuf, String, bool);

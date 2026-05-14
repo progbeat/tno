@@ -52,8 +52,50 @@ fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records[0].passed());
-    assert_eq!(records[0].observed, "yes");
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
+    assert_eq!(
+        runner.start_scopes,
+        vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_retries_full_scope_for_restricted_idk_with_empty_evidence() {
+    let root = git_project("check-restricted-idk-empty-evidence");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, false);
+    let expectation = options.selected[0].clone();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
+            result: CheckResult::Pass,
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: "yes".to_string(),
+            evidence: "src/main.rs was previously enough".to_string(),
+            scope: vec!["src/main.rs".to_string()],
+            scope_hash: "old".to_string(),
+            cache_key: Some(history_cache_key(&config.agent, &expectation)),
+        },
+    )
+    .unwrap();
+    let mut runner = FakeRunner::new(&[
+        &answer("idk", "", &["src/main.rs"]),
+        &answer("yes", "full project answers it", &["."]),
+    ]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
     assert_eq!(
         runner.start_scopes,
         vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
@@ -103,8 +145,8 @@ fn check_runner_rejects_widened_idk_scope_then_retries_full_scope() {
     )
     .unwrap();
 
-    assert!(records[0].passed());
-    assert_eq!(records[0].observed, "yes");
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
     assert_eq!(
         runner.start_scopes,
         vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
@@ -115,7 +157,7 @@ fn check_runner_rejects_widened_idk_scope_then_retries_full_scope() {
 }
 
 #[test]
-fn check_runner_starts_from_latest_reusable_history_scope_even_when_failed() {
+fn check_runner_starts_from_latest_answer_history_scope_even_when_failed() {
     let root = git_project("check-failed-history-scope");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -148,7 +190,46 @@ fn check_runner_starts_from_latest_reusable_history_scope_even_when_failed() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records[0].passed());
+    assert!(records.records[0].passed());
+    assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_scope_seed_does_not_require_reusable_history_answer() {
+    let root = git_project("check-history-scope-non-reusable");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let expectation = options.selected[0].clone();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
+            result: CheckResult::Fail,
+            prompt: expectation.q.clone(),
+            expected: expectation.a.clone(),
+            observed: UNPARSEABLE_OBSERVED.to_string(),
+            evidence: "legacy review record kept a useful scope".to_string(),
+            scope: vec!["src/main.rs".to_string()],
+            scope_hash: "old".to_string(),
+            cache_key: Some(history_cache_key(&config.agent, &expectation)),
+        },
+    )
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&answer(
+        "yes",
+        "src/main.rs still answers it",
+        &["src/main.rs"],
+    )]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(records.records[0].passed());
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }
@@ -187,7 +268,7 @@ fn check_runner_ignore_cache_uses_latest_history_scope() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records[0].passed());
+    assert!(records.records[0].passed());
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }
@@ -245,9 +326,9 @@ fn check_runner_verifies_narrowed_scope_after_restricted_idk_widens() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records[0].passed());
-    assert_eq!(records[0].observed, "yes");
-    assert_eq!(records[0].scope, vec!["src".to_string()]);
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
+    assert_eq!(records.records[0].scope, vec!["src".to_string()]);
     assert_eq!(
         runner.start_scopes,
         vec![
@@ -292,8 +373,8 @@ fn check_runner_does_not_widen_restricted_answer_mismatch() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, "no");
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, "no");
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }
@@ -331,10 +412,12 @@ fn check_runner_rejects_restricted_scope_widening_without_full_scope_retry() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, UNPARSEABLE_OBSERVED);
-    assert!(records[0].evidence.contains("widens enforced scope"));
-    assert_eq!(records[0].scope, vec!["src/main.rs"]);
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
+    assert!(records.records[0]
+        .evidence
+        .contains("widens enforced scope"));
+    assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }
@@ -388,8 +471,8 @@ fn check_runner_does_not_widen_restricted_unparseable_response() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, UNPARSEABLE_OBSERVED);
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     assert_eq!(read_history_records(&root, &expectation).unwrap().len(), 2);
     let _ = fs::remove_dir_all(root);

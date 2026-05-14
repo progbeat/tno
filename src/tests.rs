@@ -1,8 +1,189 @@
-use crate::*;
-use serde_json::json;
-use std::collections::VecDeque;
+#![allow(unused_imports)]
+
+use crate::app_server::{AppServerRunner, LazyAppServerRunner};
+use crate::app_server_protocol::{app_server_error_message, app_server_failure_from_message};
+use crate::app_server_protocol::{
+    app_server_error_value, app_server_failure_from_value, app_server_message,
+    append_completed_agent_text, render_token_usage_summary, token_usage_update,
+    turn_idle_timed_out, turn_started_id, turn_text,
+};
+use crate::check::run_check_with_runner;
+use crate::check_cache::{
+    cached_failure_for_expectation, final_selected_after_current_pass_cache, write_cache_hit,
+};
+use crate::check_command::prepare_check_execution;
+use crate::check_command::run_check_command;
+use crate::check_command_args::parse_check_command_args;
+use crate::check_config::{
+    parse_check_config_content, parse_check_config_content_with_root,
+    parse_staged_check_config_content_with_root,
+};
+use crate::check_errors::error_record_from_interrogation_error;
+use crate::check_generator_paths::expand_filesystem_generator_paths;
+use crate::check_generator_paths::expand_generator_paths;
+use crate::check_generator_templates::validate_generator_template;
+use crate::check_interrogation::{
+    ask_with_reused_thread, interrogate_expectation_with_model, ThreadTurnRequest,
+};
+use crate::check_interrogation_records::{
+    finalize_interrogation_response, finalize_query_response,
+};
+use crate::check_interrogation_state::{
+    evaluator_session_key, should_retry_full_scope_after_restricted_idk, CheckRuntime,
+    InterrogationState,
+};
+use crate::check_lazy_reset::apply_lazy_full_scope_reset_or_warn;
+use crate::check_lazy_reset::{
+    estimate_staged_project_size_tokens, lazy_full_scope_reset_count,
+    reset_non_selected_expectation_histories,
+};
+use crate::check_model_fallback::{
+    interrogate_expectation_with_model_fallbacks, run_with_model_fallbacks,
+    write_model_fallback_events,
+};
+use crate::check_narrowing::scope_narrowing_log_fields;
+use crate::check_output::{
+    compact_json_string_array, record_requires_human_review, write_and_flush_result_output,
+    write_query_output, write_summary_line,
+};
+use crate::check_output::{
+    escape_check_output_text, pad_summary_line, render_check_output_record, render_query_output,
+};
+use crate::check_preflight::{
+    check_interrupted, install_sigint_handler, is_canon_only_staged_change_bytes,
+    is_canon_project_path_bytes, staged_changed_path_bytes,
+};
+use crate::check_preflight::{staged_changed_paths, staged_changed_paths_from_name_status_z};
+use crate::check_query::run_query_with_runner;
+use crate::check_query_command::run_check_query_command;
+use crate::check_reporting::{
+    collect_and_print_check_token_usage, collect_check_token_usage, print_token_usage_summary,
+    write_check_finish_event, write_check_finish_report_event, CheckFinishStats,
+};
+use crate::check_result::{
+    report_error_count, report_failed_count, report_output_skipped_count, report_passed_count,
+};
+use crate::check_selection::{
+    expectation_identities, final_selected_expectations, initial_non_selected_expectations,
+    order_expectations_by_latest_non_pass, parse_check_options, parse_cooldown,
+    select_expectations,
+};
+use crate::check_validation::{
+    check_config_loads_plugins, codex_reasoning_effort, normalize_agent_ignore_pattern_for_config,
+    validate_check_config, validate_relative_config_path,
+};
+use crate::check_validation::{validate_optional_model, validate_plugin_config_key};
+use crate::cli::CommandError;
+use crate::cli::{command_error_needs_main_print, run};
+use crate::evaluator::{
+    evaluator_response_output_schema, evaluator_turn_input, render_evaluator_turn_input,
+};
+use crate::evaluator_config::{app_server_args, app_server_model_key, evaluator_thread_config};
+use crate::evaluator_config::{
+    app_server_startup_filesystem_arg, evaluator_thread_root_permissions,
+};
+use crate::evaluator_json::validate_evaluator_response_key_order;
+use crate::evaluator_prompt::developer_instructions;
+use crate::evaluator_response::parse_evaluator_response;
+use crate::evaluator_response_cache::{response_excerpt, EvaluatorResponseParseCache};
+use crate::evaluator_scope::parse_scope_json;
+use crate::evaluator_scope::parse_scope_strings;
+use crate::evaluator_turn::{
+    ask_once, effective_thinking, evaluator_models, is_context_window_failure,
+    is_model_technical_failure, is_verified_record, model_label, record_from_response,
+    session_failure_invalidates_thread, token_usage_log_fields, EvaluatorFailureKind,
+    EvaluatorTurnContext,
+};
+use crate::fs_util::{ensure_dir, for_each_nonempty_line, replace_file_with_temp};
+use crate::gate::*;
+use crate::git::git_path_from_raw_bytes;
+use crate::git::{
+    read_staged_file_bytes_from_raw_path, read_staged_file_content,
+    read_staged_file_content_from_path, resolve_git_path, staged_tracked_path_bytes,
+};
+use crate::hash::{expectation_id, fnv64_with_seed, full_scope, hash_120, hash_key};
+use crate::history::{history_file_name, read_history_records};
+use crate::history::{
+    history_path, parse_history_record_line, read_history_records_from_path, HistoryCache,
+};
+use crate::history_append::append_history_record;
+use crate::history_append::append_history_record_with_cache;
+use crate::history_cache_key::history_cache_key;
+use crate::history_cleanup::maybe_cleanup_stale_cache_dirs;
+use crate::history_cleanup::{active_expectation_ids, cleanup_stale_cache_dirs};
+use crate::history_compaction::compact_history_temp_path;
+use crate::history_compaction::{compact_history, should_compact_history};
+use crate::history_reuse::reusable_history_record;
+use crate::history_reuse::{
+    cooldown_history_record, is_reusable_history_record, latest_history_scope_with_cache,
+    reusable_history_record_for_source,
+};
+use crate::hooks::*;
+use crate::logging::{
+    append_json_string_array, append_runtime_log_event, join_display_ids, push_json_control_escape,
+    render_check_log_record, DiagnosticLogWriter,
+};
+use crate::logging::{diagnostic_log_config, render_runtime_log_event, write_diagnostic_log};
+use crate::notes::*;
+use crate::notes_cli::collect_text;
+use crate::notes_cli::{arg_to_string, INDEX_LOCK_STALE_AFTER_SECS};
+use crate::notes_header::parse_key_from_header;
+use crate::notes_header::{
+    header, initial_content, normalize_body, validate_note_key, verify_note_key,
+    verify_note_key_from_first_line,
+};
+use crate::notes_index::{lock_index, read_index, stale_index_lock_age, validate_index_entry};
+use crate::notes_index::{remove_index, upsert_index, write_file_atomically};
+use crate::notes_restore::{
+    error_with_restore_context, restore_deleted_note_after_index_failure,
+    restore_note_after_index_failure,
+};
+use crate::output::{
+    write_stderr, write_stderr_bytes, write_stderr_line, write_stdout, write_stdout_bytes,
+    write_stdout_line,
+};
+use crate::project::command_output_trimmed;
+use crate::project::{git_project_root, path_from_git_stdout};
+use crate::repo_inspection::RepoInspectionCache;
+use crate::scope::{
+    effective_ignore_patterns, is_denied_path, is_denied_path_bytes, is_strict_scope_subset,
+    normalize_repo_path, sanitize_scope, sanitize_scope_for_hash, scope_is_within,
+};
+use crate::scope_hash::{
+    hash_scope_entries, normalize_index_metadata, scope_hash_for_source, staged_scope_entries,
+    staged_scope_hash,
+};
+use crate::scope_hash::{ScopeHashCache, ScopeHashSource};
+use crate::staged_worktree::snapshot_parent_outside_worktree;
+use crate::staged_worktree::StagedWorktreeView;
+use crate::time::{format_log_record_timestamp, parse_log_record_timestamp, unix_timestamp};
+use crate::types::ModelConfig;
+use crate::types::{
+    check_run_error, AgentConfig, CheckCommandArgs, CheckConfig, CheckOptions, CheckRecord,
+    CheckResult, CheckRunError, CheckRunReport, Config, Cooldown, EvaluatorError,
+    EvaluatorResponseJson, EvaluatorRunner, Expectation, InterrogationResult, NarrowingStats, Note,
+    ObservedAnswerState, ParsedAnswer, QueryInterrogationResult, RawCheckConfig,
+    RawExpectationItem, SelectedExpectation, TokenUsage,
+};
+use crate::{
+    AGENTS_PATH, APP_SERVER_TURN_TIMEOUT_SECS, CHECK_PATH, DEFAULT_AGENTS_TEMPLATE,
+    DEFAULT_CHECK_TEMPLATE, DEFAULT_PRE_COMMIT_HOOK, EMPTY_EVIDENCE_OBSERVED, GIT_CANON_CACHE_DIR,
+    GIT_CANON_LOG_DIR, GIT_HOOKS_PATH, HISTORY_COMPACT_KEEP_RECORDS, MALFORMED_REVIEW_WARNING,
+    OBSERVED_IDK, OBSERVED_MALFORMED, PRE_COMMIT_HOOK_PATH, RESULT_FAIL, RESULT_PASS,
+    UNPARSEABLE_OBSERVED,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::env;
+use std::ffi::OsString;
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{self, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 mod test_check_support;
 mod test_env;

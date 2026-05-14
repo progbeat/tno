@@ -1,4 +1,10 @@
-use crate::*;
+use crate::check_validation::codex_reasoning_effort;
+use crate::hash::full_scope;
+use crate::scope::{effective_ignore_patterns, normalize_repo_path};
+use crate::types::AgentConfig;
+use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
+use std::env;
 
 pub(crate) fn evaluator_thread_config(
     agent: &AgentConfig,
@@ -133,10 +139,6 @@ pub(crate) fn evaluator_runtime_permissions() -> Vec<(String, String)> {
         "/System/**",
         "/Library/**",
         "/opt/homebrew/**",
-        "/private/tmp/**",
-        "~/.codex/tmp/**",
-        ":tmpdir",
-        ":slash_tmp",
     ]
     .into_iter()
     .map(|path| (path.to_string(), "read".to_string()))
@@ -231,17 +233,15 @@ pub(crate) fn toml_assignment(key: &str, value: &str) -> String {
 }
 
 pub(crate) fn toml_string(value: &str) -> String {
-    let mut output = String::from("\"");
-    for ch in value.chars() {
-        match ch {
-            '\\' => output.push_str("\\\\"),
-            '"' => output.push_str("\\\""),
-            '\n' => output.push_str("\\n"),
-            '\r' => output.push_str("\\r"),
-            '\t' => output.push_str("\\t"),
-            _ => output.push(ch),
-        }
+    // TOML basic strings use the same delimiters and escape forms needed for
+    // the values canon emits here, so the JSON string serializer gives us a
+    // battle-tested quoted string. JSON may leave DEL/C1 controls literal, so
+    // patch only those TOML-forbidden characters after JSON has handled the
+    // common string grammar.
+    let mut encoded =
+        serde_json::to_string(value).expect("serializing a TOML basic string cannot fail");
+    for ch in value.chars().filter(|ch| ch.is_control() && *ch > '\u{1f}') {
+        encoded = encoded.replace(ch, &format!("\\u{:04X}", ch as u32));
     }
-    output.push('"');
-    output
+    encoded
 }

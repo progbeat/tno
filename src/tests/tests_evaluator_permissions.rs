@@ -27,10 +27,18 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
         "read"
     );
     assert_eq!(config["model_reasoning_effort"], "low");
-    assert_eq!(
-        config["permissions"]["canon_check"]["filesystem"]["~/.codex/tmp/**"],
-        "read"
-    );
+    assert!(config["permissions"]["canon_check"]["filesystem"]
+        .get("~/.codex/tmp/**")
+        .is_none());
+    assert!(config["permissions"]["canon_check"]["filesystem"]
+        .get(":tmpdir")
+        .is_none());
+    assert!(config["permissions"]["canon_check"]["filesystem"]
+        .get(":slash_tmp")
+        .is_none());
+    assert!(config["permissions"]["canon_check"]["filesystem"]
+        .get("/private/tmp/**")
+        .is_none());
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"]["~/.codex/sessions"],
         "none"
@@ -143,6 +151,10 @@ fn app_server_starts_with_plugins_disabled_by_default() {
     assert!(filesystem_arg.contains(r#""target"="none""#));
     assert!(filesystem_arg.contains(r#""target/**"="none""#));
     assert!(filesystem_arg.contains(r#"":root"="read""#));
+    assert!(!filesystem_arg.contains(r#"":tmpdir""#));
+    assert!(!filesystem_arg.contains(r#"":slash_tmp""#));
+    assert!(!filesystem_arg.contains(r#""/private/tmp/**""#));
+    assert!(!filesystem_arg.contains(r#""~/.codex/tmp/**""#));
     assert!(filesystem_arg.contains(r#""glob_scan_max_depth"=32"#));
     assert!(filesystem_arg.contains(r#""~/.codex/sessions"="none""#));
     assert!(filesystem_arg.contains(r#""~/.codex/sessions/**"="none""#));
@@ -155,4 +167,27 @@ fn app_server_starts_with_plugins_disabled_by_default() {
     assert_eq!(enabled.first().map(String::as_str), Some("app-server"));
     assert!(!enabled.iter().any(|arg| arg == "--disable"));
     assert_eq!(&enabled[enabled.len() - 2..], ["--listen", "stdio://"]);
+}
+
+#[test]
+fn app_server_startup_config_escapes_toml_control_characters() {
+    let agent = AgentConfig {
+        model: ModelConfig::default(),
+        thinking: "low".to_string(),
+        instructions: "Answer from files only.".to_string(),
+        ignore: vec![
+            "quoted\"path/**".to_string(),
+            "control\u{0007}path/**".to_string(),
+            "delete\u{007f}path/**".to_string(),
+        ],
+        plugins: Vec::new(),
+    };
+
+    let filesystem_arg = app_server_startup_filesystem_arg(&agent);
+
+    assert!(filesystem_arg.contains(r#""quoted\"path"="none""#));
+    assert!(filesystem_arg.contains(r#""control\u0007path"="none""#));
+    assert!(filesystem_arg.contains(r#""delete\u007Fpath"="none""#));
+    assert!(!filesystem_arg.contains('\u{0007}'));
+    assert!(!filesystem_arg.contains('\u{007f}'));
 }

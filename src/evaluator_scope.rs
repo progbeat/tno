@@ -1,4 +1,8 @@
-use crate::*;
+use crate::scope::{is_denied_path, normalize_repo_path, sanitize_scope};
+use crate::types::AgentConfig;
+
+#[cfg(test)]
+use serde_json::Value;
 
 #[cfg(test)]
 pub(crate) fn parse_scope_json(text: &str, agent: &AgentConfig) -> Result<Vec<String>, String> {
@@ -24,7 +28,7 @@ pub(crate) fn parse_scope_strings(
     let mut parsed = Vec::new();
     for raw in scope {
         let normalized = normalize_repo_path(raw)?;
-        if normalized != raw.trim() {
+        if normalized != *raw {
             return Err(format!("scope entry must be normalized: {}", raw));
         }
         if normalized != "." && is_denied_path(agent, &normalized) {

@@ -116,7 +116,10 @@ expectations:
     record.timestamp = format_log_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
 
-    assert!(reset_non_selected_expectation_histories(&root, &[expectation.clone()]).is_empty());
+    assert!(
+        reset_non_selected_expectation_histories(&root, std::slice::from_ref(&expectation))
+            .is_empty()
+    );
 
     assert!(read_history_records(&root, &expectation)
         .unwrap()

@@ -1,4 +1,16 @@
-use crate::*;
+use crate::fs_util::ensure_dir;
+use crate::notes_cli::arg_to_string;
+use crate::output::write_stdout_line;
+use crate::project::command_output_trimmed;
+use crate::{
+    AGENTS_PATH, CHECK_PATH, DEFAULT_AGENTS_TEMPLATE, DEFAULT_CHECK_TEMPLATE,
+    DEFAULT_PRE_COMMIT_HOOK, GIT_HOOKS_PATH, PRE_COMMIT_HOOK_PATH,
+};
+use std::ffi::OsString;
+use std::fs;
+use std::io;
+use std::path::Path;
+use std::process::Command;
 
 pub(crate) fn run_init(root: &Path) -> Result<(), String> {
     let check_path = root.join(CHECK_PATH);
@@ -13,7 +25,7 @@ pub(crate) fn run_init(root: &Path) -> Result<(), String> {
     }
     fs::write(&check_path, DEFAULT_CHECK_TEMPLATE)
         .map_err(|err| format!("failed to write {}: {}", check_path.display(), err))?;
-    println!("Created {}", CHECK_PATH);
+    write_stdout_line(&format!("Created {}", CHECK_PATH))?;
     ensure_agents_file(root)?;
     Ok(())
 }
@@ -21,18 +33,17 @@ pub(crate) fn run_init(root: &Path) -> Result<(), String> {
 pub(crate) fn ensure_agents_file(root: &Path) -> Result<(), String> {
     let agents_path = root.join(AGENTS_PATH);
     if agents_path.exists() {
-        println!(
+        write_stdout_line(&format!(
             "{} already exists; merge canon's AGENTS.md rules into it if they are missing:\n{}",
             AGENTS_PATH,
             DEFAULT_AGENTS_TEMPLATE.trim_end()
-        );
+        ))?;
         return Ok(());
     }
 
     fs::write(&agents_path, DEFAULT_AGENTS_TEMPLATE)
         .map_err(|err| format!("failed to write {}: {}", agents_path.display(), err))?;
-    println!("Created {}", AGENTS_PATH);
-    Ok(())
+    write_stdout_line(&format!("Created {}", AGENTS_PATH))
 }
 
 pub(crate) fn run_hook_command(root: &Path, args: &[OsString]) -> Result<(), String> {
@@ -99,7 +110,7 @@ pub(crate) fn install_pre_commit_hook_with_state(
     if state.pre_commit_hook.as_deref() != Some(DEFAULT_PRE_COMMIT_HOOK) {
         fs::write(&hook_path, DEFAULT_PRE_COMMIT_HOOK)
             .map_err(|err| format!("failed to write {}: {}", hook_path.display(), err))?;
-        println!("Installed {}", PRE_COMMIT_HOOK_PATH);
+        write_stdout_line(&format!("Installed {}", PRE_COMMIT_HOOK_PATH))?;
     }
     make_executable(&hook_path)?;
     configure_git_hooks_path_with_state(root, state)?;
@@ -128,21 +139,23 @@ pub(crate) fn configure_git_hooks_path_with_state(
     state: &HookInstallState,
 ) -> Result<(), String> {
     if !state.is_git_worktree {
-        println!(
+        write_stdout_line(&format!(
             "Git worktree not detected; {} was created but core.hooksPath was not set.",
             PRE_COMMIT_HOOK_PATH
-        );
+        ))?;
         return Ok(());
     }
 
     if state.current_git_hooks_path.as_deref() == Some(GIT_HOOKS_PATH) {
-        println!("Git core.hooksPath already = {}", GIT_HOOKS_PATH);
+        write_stdout_line(&format!("Git core.hooksPath already = {}", GIT_HOOKS_PATH))?;
         return Ok(());
     }
 
     set_git_hooks_path(root)?;
-    println!("Configured git core.hooksPath = {}", GIT_HOOKS_PATH);
-    Ok(())
+    write_stdout_line(&format!(
+        "Configured git core.hooksPath = {}",
+        GIT_HOOKS_PATH
+    ))
 }
 
 pub(crate) fn current_git_hooks_path_for_worktree(root: &Path) -> Result<Option<String>, String> {

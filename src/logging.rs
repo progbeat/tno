@@ -1,4 +1,15 @@
-use crate::*;
+use crate::fs_util::ensure_dir;
+use crate::git::resolve_git_path;
+use crate::repo_inspection::RepoInspectionCache;
+use crate::time::{format_log_record_timestamp, unix_timestamp};
+use crate::types::{CheckRecord, CheckResult, SelectedExpectation};
+use crate::{DiagnosticLogConfig, DEFAULT_DIAGNOSTIC_LOG_CONFIG, GIT_CANON_LOG_DIR};
+use serde::ser::SerializeMap;
+use serde::Serialize;
+use serde_json::{json, Value};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 pub(crate) fn write_diagnostic_log(
@@ -155,80 +166,77 @@ pub(crate) fn render_runtime_log_event(
     event: &str,
     fields: &[(&str, Value)],
 ) -> Result<String, String> {
-    let mut output = String::new();
-    output.push('{');
-    let mut first = true;
-    append_json_string_field(
-        &mut output,
-        &mut first,
-        "timestamp",
-        &format_log_record_timestamp(unix_timestamp()?),
-    );
-    append_json_string_field(&mut output, &mut first, "level", level);
-    append_json_string_field(&mut output, &mut first, "event", event);
-    for (key, value) in fields {
-        append_json_separator(&mut output, &mut first);
-        push_json_string(&mut output, key);
-        output.push(':');
-        output.push_str(
-            &serde_json::to_string(value)
-                .map_err(|err| format!("failed to serialize runtime log field: {}", err))?,
-        );
-    }
-    output.push_str("}\n");
+    let event = RuntimeLogEvent {
+        timestamp: format_log_record_timestamp(unix_timestamp()?),
+        level,
+        event,
+        extra: fields,
+    };
+    let mut output = serde_json::to_string(&event)
+        .map_err(|err| format!("failed to serialize runtime log event: {}", err))?;
+    output.push('\n');
     Ok(output)
 }
 
 pub(crate) fn render_check_log_record(record: &CheckRecord) -> String {
-    let mut output = String::new();
-    output.push('{');
-    let mut first = true;
-    append_json_string_field(&mut output, &mut first, "timestamp", &record.timestamp);
-    append_json_string_field(&mut output, &mut first, "result", record.result.as_str());
-    append_json_string_field(&mut output, &mut first, "observed", &record.observed);
-    append_json_string_field(&mut output, &mut first, "evidence", &record.evidence);
-    append_json_string_array_field(&mut output, &mut first, "scope", &record.scope);
-    append_json_string_field(&mut output, &mut first, "scopeHash", &record.scope_hash);
-    append_json_string_field(&mut output, &mut first, "id", &record.id);
-    append_json_string_field(&mut output, &mut first, "prompt", &record.prompt);
-    append_json_string_field(&mut output, &mut first, "expected", &record.expected);
-    if let Some(cache_key) = &record.cache_key {
-        append_json_string_field(&mut output, &mut first, "cacheKey", cache_key);
-    }
-    output.push_str("}\n");
+    // History records intentionally start with the cache.md required field
+    // prefix. Extra persisted metadata follows it; expectation references use
+    // the resolved full ID, never the display/selector prefix.
+    let history = HistoryLogRecord {
+        timestamp: &record.timestamp,
+        result: record.result,
+        observed: &record.observed,
+        evidence: &record.evidence,
+        scope: &record.scope,
+        scope_hash: &record.scope_hash,
+        id: &record.id,
+        prompt: &record.prompt,
+        expected: &record.expected,
+        cache_key: record.cache_key.as_deref(),
+    };
+    let mut output =
+        serde_json::to_string(&history).expect("serializing a history log record cannot fail");
+    output.push('\n');
     output
 }
 
-pub(crate) fn append_json_separator(output: &mut String, first: &mut bool) {
-    if *first {
-        *first = false;
-    } else {
-        output.push(',');
+struct RuntimeLogEvent<'a> {
+    timestamp: String,
+    level: &'a str,
+    event: &'a str,
+    extra: &'a [(&'a str, Value)],
+}
+
+impl Serialize for RuntimeLogEvent<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(3 + self.extra.len()))?;
+        map.serialize_entry("timestamp", &self.timestamp)?;
+        map.serialize_entry("level", self.level)?;
+        map.serialize_entry("event", self.event)?;
+        for (key, value) in self.extra {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
     }
 }
 
-pub(crate) fn append_json_string_field(
-    output: &mut String,
-    first: &mut bool,
-    key: &str,
-    value: &str,
-) {
-    append_json_separator(output, first);
-    push_json_string(output, key);
-    output.push(':');
-    push_json_string(output, value);
-}
-
-pub(crate) fn append_json_string_array_field(
-    output: &mut String,
-    first: &mut bool,
-    key: &str,
-    values: &[String],
-) {
-    append_json_separator(output, first);
-    push_json_string(output, key);
-    output.push(':');
-    append_json_string_array(output, values);
+#[derive(Serialize)]
+struct HistoryLogRecord<'a> {
+    timestamp: &'a str,
+    result: CheckResult,
+    observed: &'a str,
+    evidence: &'a str,
+    scope: &'a [String],
+    #[serde(rename = "scopeHash")]
+    scope_hash: &'a str,
+    id: &'a str,
+    prompt: &'a str,
+    expected: &'a str,
+    #[serde(rename = "cacheKey", skip_serializing_if = "Option::is_none")]
+    cache_key: Option<&'a str>,
 }
 
 pub(crate) fn append_json_string_array(output: &mut String, values: &[String]) {
@@ -243,21 +251,7 @@ pub(crate) fn append_json_string_array(output: &mut String, values: &[String]) {
 }
 
 pub(crate) fn push_json_string(output: &mut String, value: &str) {
-    output.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => output.push_str("\\\""),
-            '\\' => output.push_str("\\\\"),
-            '\n' => output.push_str("\\n"),
-            '\r' => output.push_str("\\r"),
-            '\t' => output.push_str("\\t"),
-            '\u{08}' => output.push_str("\\b"),
-            '\u{0c}' => output.push_str("\\f"),
-            ch if ch <= '\u{1f}' => push_json_control_escape(output, ch),
-            ch => output.push(ch),
-        }
-    }
-    output.push('"');
+    output.push_str(&serde_json::to_string(value).expect("serializing a JSON string cannot fail"));
 }
 
 pub(crate) fn push_json_control_escape(output: &mut String, ch: char) {

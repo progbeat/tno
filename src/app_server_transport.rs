@@ -1,4 +1,17 @@
-use crate::*;
+use crate::app_server::AppServerRunner;
+use crate::app_server_protocol::{
+    app_server_error_value, app_server_failure_from_value, app_server_message,
+    append_completed_agent_text, token_usage_update, turn_idle_timed_out, turn_started_id,
+    turn_text,
+};
+use crate::check_preflight::check_interrupted;
+use crate::evaluator_turn::EvaluatorFailureKind;
+use crate::types::{EvaluatorError, TokenUsage};
+use crate::APP_SERVER_TURN_TIMEOUT_SECS;
+use serde_json::{json, Value};
+use std::io::Write;
+use std::sync::mpsc::RecvTimeoutError;
+use std::time::{Duration, Instant};
 
 impl AppServerRunner {
     pub(crate) fn send_request(
@@ -13,11 +26,12 @@ impl AppServerRunner {
             }
             let message = self.read_message()?;
             self.record_token_usage(&message);
-            if message.get("id").and_then(Value::as_u64) == Some(id) {
-                if let Some(error) = message.get("error") {
+            let envelope = app_server_message(&message).map_err(app_server_protocol_error)?;
+            if envelope.id == Some(id) {
+                if let Some(error) = envelope.error.as_ref() {
                     return Err(app_server_failure_from_value(method, error));
                 }
-                return message.get("result").cloned().ok_or_else(|| {
+                return envelope.result.ok_or_else(|| {
                     EvaluatorError::message(format!(
                         "app-server {} response missing result",
                         method
@@ -44,7 +58,7 @@ impl AppServerRunner {
             .map(str::to_string);
         let mut last_activity = Instant::now();
         let mut turn_id: Option<String> = None;
-        let mut pending_error: Option<String> = None;
+        let mut pending_error: Option<Value> = None;
         let mut interrupted = false;
         let mut interrupt_sent = false;
         loop {
@@ -68,6 +82,7 @@ impl AppServerRunner {
             };
             last_activity = Instant::now();
             self.record_token_usage(&message);
+            let envelope = app_server_message(&message).map_err(app_server_protocol_error)?;
             if let Some(started_turn_id) = turn_started_id(&message) {
                 turn_id = Some(started_turn_id);
                 self.maybe_interrupt_turn(
@@ -77,8 +92,8 @@ impl AppServerRunner {
                     turn_id.as_deref(),
                 )?;
             }
-            if message.get("id").and_then(Value::as_u64) == Some(id) {
-                if let Some(error) = message.get("error") {
+            if envelope.id == Some(id) {
+                if let Some(error) = envelope.error.as_ref() {
                     return Err(app_server_failure_from_value(method, error));
                 }
                 saw_response = true;
@@ -87,7 +102,7 @@ impl AppServerRunner {
                 }
                 continue;
             }
-            match message.get("method").and_then(Value::as_str) {
+            match envelope.method.as_deref() {
                 Some("item/agentMessage/delta") => {
                     if let Some(delta) = message
                         .get("params")
@@ -105,9 +120,9 @@ impl AppServerRunner {
                         return Err("interrupted".into());
                     }
                     if let Some(error) =
-                        app_server_error_message(&message).or_else(|| pending_error.take())
+                        app_server_error_value(&message).or_else(|| pending_error.take())
                     {
-                        return Err(app_server_failure_from_message(method, &error));
+                        return Err(app_server_failure_from_value(method, &error));
                     }
                     saw_completed = true;
                     if saw_response {
@@ -115,13 +130,13 @@ impl AppServerRunner {
                     }
                 }
                 Some("error") => {
-                    if let Some(error) = app_server_error_message(&message) {
+                    if let Some(error) = app_server_error_value(&message) {
                         pending_error = Some(error);
                     }
                 }
                 Some(_) => {
-                    if let Some(error) = app_server_error_message(&message) {
-                        return Err(app_server_failure_from_message(method, &error));
+                    if let Some(error) = app_server_error_value(&message) {
+                        return Err(app_server_failure_from_value(method, &error));
                     }
                 }
                 _ => {}
@@ -241,4 +256,8 @@ impl AppServerRunner {
             }
         }
     }
+}
+
+fn app_server_protocol_error(error: String) -> EvaluatorError {
+    EvaluatorError::failure(EvaluatorFailureKind::UnknownAppServer, error)
 }

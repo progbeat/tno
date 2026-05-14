@@ -1,4 +1,8 @@
-use crate::*;
+use crate::hash::expectation_id;
+use crate::types::CheckConfig;
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
 
 pub(crate) fn active_expectation_ids(config: &CheckConfig) -> BTreeSet<String> {
     config
@@ -16,19 +20,18 @@ pub(crate) struct CacheCleanupStats {
 }
 
 pub(crate) fn maybe_cleanup_stale_cache_dirs(
-    root: &Path,
+    cache_dir: &Path,
     config: &CheckConfig,
 ) -> Result<CacheCleanupStats, String> {
-    let mut stats = cleanup_stale_cache_dirs(root, &active_expectation_ids(config))?;
+    let mut stats = cleanup_stale_cache_dirs(cache_dir, &active_expectation_ids(config))?;
     stats.sampled = true;
     Ok(stats)
 }
 
 pub(crate) fn cleanup_stale_cache_dirs(
-    root: &Path,
+    cache_dir: &Path,
     active_ids: &BTreeSet<String>,
 ) -> Result<CacheCleanupStats, String> {
-    let cache_dir = resolve_git_path(root, GIT_CANON_CACHE_DIR)?;
     if !cache_dir.exists() {
         return Ok(CacheCleanupStats {
             sampled: true,
@@ -41,7 +44,7 @@ pub(crate) fn cleanup_stale_cache_dirs(
         removed: 0,
         kept: 0,
     };
-    for entry in fs::read_dir(&cache_dir)
+    for entry in fs::read_dir(cache_dir)
         .map_err(|err| format!("failed to read {}: {}", cache_dir.display(), err))?
     {
         let entry =

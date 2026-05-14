@@ -1,4 +1,4 @@
-use crate::*;
+use crate::{B64_URL, FNV_OFFSET, FNV_PRIME};
 
 pub(crate) fn full_scope() -> Vec<String> {
     vec![".".to_string()]

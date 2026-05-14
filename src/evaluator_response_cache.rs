@@ -1,4 +1,7 @@
-use crate::*;
+use crate::evaluator_response::parse_evaluator_response;
+use crate::scope::effective_ignore_patterns;
+use crate::types::{AgentConfig, ParsedAnswer};
+use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub(crate) struct EvaluatorResponseParseCache {

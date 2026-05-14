@@ -10,6 +10,7 @@ use crate::gate::run_gate_command;
 use crate::hooks::{run_hook_command, run_init};
 use crate::notes::{append_note, delete_note, ensure_note, read_note, write_note};
 use crate::notes_cli::{arg_to_string, collect_text_or_stdin, require_key, run_rg};
+use crate::output::{write_stderr_line, write_stdout_line};
 use crate::project::{git_project_root, print_root, project_root_or_current};
 use crate::types::Config;
 
@@ -86,7 +87,7 @@ impl std::fmt::Display for CommandError {
 pub(crate) fn main() {
     if let Err(err) = run(env::args_os().skip(1).collect()) {
         if command_error_needs_main_print(&err) {
-            eprintln!("canon: {}", err);
+            let _ = write_stderr_line(&format!("canon: {}", err));
         }
         process::exit(1);
     }
@@ -127,7 +128,7 @@ pub(crate) fn run(args: Vec<OsString>) -> Result<(), CommandError> {
             return run_gate_command(&root, &args[1..]);
         }
         "-h" | "--help" | "help" => {
-            print_help();
+            print_help()?;
             return Ok(());
         }
         value => {
@@ -152,7 +153,7 @@ pub(crate) fn run(args: Vec<OsString>) -> Result<(), CommandError> {
         NoteCommand::Path => {
             let key = require_key(&args, 1)?;
             let note = ensure_note(&config, key)?;
-            println!("{}", note.path.display());
+            write_stdout_line(&note.path.display().to_string())?;
         }
         NoteCommand::Read => {
             let key = require_key(&args, 1)?;
@@ -161,15 +162,21 @@ pub(crate) fn run(args: Vec<OsString>) -> Result<(), CommandError> {
         NoteCommand::Write => {
             let key = require_key(&args, 1)?;
             let text = collect_text_or_stdin(&args, 2)?;
+            // Silent success: this command has no stdout/stderr segment to
+            // flush after the write is complete.
             write_note(&config, key, &text)?;
         }
         NoteCommand::Append => {
             let key = require_key(&args, 1)?;
             let text = collect_text_or_stdin(&args, 2)?;
+            // Silent success: this command has no stdout/stderr segment to
+            // flush after the append is complete.
             append_note(&config, key, &text)?;
         }
         NoteCommand::Delete => {
             let key = require_key(&args, 1)?;
+            // Silent success: this command has no stdout/stderr segment to
+            // flush after the delete is complete.
             delete_note(&config, key)?;
         }
         NoteCommand::Search => {

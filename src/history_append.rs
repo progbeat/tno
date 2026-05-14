@@ -1,4 +1,11 @@
-use crate::*;
+use crate::fs_util::ensure_dir;
+use crate::history::{read_history_records_from_path, HistoryCache};
+use crate::history_compaction::{compact_history, should_compact_history};
+use crate::logging::render_check_log_record;
+use crate::types::{CheckRecord, SelectedExpectation};
+use std::fs;
+use std::io::Write;
+use std::path::Path;
 
 #[cfg(test)]
 pub(crate) fn append_history_record(

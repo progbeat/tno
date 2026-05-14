@@ -1,4 +1,9 @@
-use crate::*;
+use crate::history::HistoryCache;
+use crate::scope::sanitize_scope_for_hash;
+use crate::scope_hash::{ScopeHashCache, ScopeHashSource};
+use crate::time::parse_log_record_timestamp;
+use crate::types::{AgentConfig, CheckRecord, ObservedAnswerState, SelectedExpectation};
+use std::path::Path;
 
 #[cfg(test)]
 pub(crate) fn reusable_history_record(
@@ -90,7 +95,7 @@ pub(crate) fn latest_history_scope_with_cache(
     // This returns only an enforced-scope seed for a fresh interrogation. It is
     // not a cached check result and does not let callers skip evaluator work.
     scan_latest_history_records(root, expectation, history_cache, |record| {
-        Ok(match sanitized_reusable_history_scope(&record) {
+        Ok(match sanitize_scope_for_hash(&record.scope).ok() {
             Some(scope) => HistoryRecordScan::Done(Some(scope)),
             None => HistoryRecordScan::Continue,
         })
@@ -126,8 +131,5 @@ fn sanitized_reusable_history_scope(record: &CheckRecord) -> Option<Vec<String>>
 }
 
 pub(crate) fn is_reusable_history_record(record: &CheckRecord) -> bool {
-    record.observed != OBSERVED_IDK
-        && record.observed != OBSERVED_MALFORMED
-        && record.observed != UNPARSEABLE_OBSERVED
-        && record.observed != EMPTY_EVIDENCE_OBSERVED
+    ObservedAnswerState::from_observed(&record.observed).is_reusable_history()
 }

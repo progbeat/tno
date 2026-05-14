@@ -17,6 +17,34 @@ fn history_path_uses_expectation_id_directory() {
 }
 
 #[test]
+fn history_record_required_fields_are_written_first() {
+    let record = sample_record(1, "pass");
+    let line = render_check_log_record(&record);
+    let json: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(json["id"], expectation_id("Question?", "yes"));
+    assert_eq!(json["prompt"], "Question?");
+    assert_eq!(json["expected"], "yes");
+
+    let expected_order = [
+        "\"timestamp\"",
+        "\"result\"",
+        "\"observed\"",
+        "\"evidence\"",
+        "\"scope\"",
+        "\"scopeHash\"",
+        "\"id\"",
+        "\"prompt\"",
+        "\"expected\"",
+    ];
+    let mut previous = 0;
+    for key in expected_order {
+        let index = line.find(key).unwrap();
+        assert!(index >= previous);
+        previous = index;
+    }
+}
+
+#[test]
 fn stale_cache_cleanup_removes_inactive_expectation_entries() {
     let root = git_project("history-cleanup-stale-cache");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -29,7 +57,7 @@ fn stale_cache_cleanup_removes_inactive_expectation_entries() {
     fs::write(cache_dir.join("stale-id").join(history_file_name()), "").unwrap();
     fs::write(cache_dir.join("stale-file"), "old").unwrap();
 
-    let stats = cleanup_stale_cache_dirs(&root, &active_ids).unwrap();
+    let stats = cleanup_stale_cache_dirs(&cache_dir, &active_ids).unwrap();
 
     assert_eq!(stats.removed, 2);
     assert_eq!(stats.kept, 1);

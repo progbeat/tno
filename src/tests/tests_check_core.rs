@@ -20,7 +20,7 @@ fn check_runner_hides_expected_answers_and_reuses_session() {
         None,
     )
     .unwrap();
-    assert!(records.iter().all(CheckRecord::passed));
+    assert!(records.records.iter().all(CheckRecord::passed));
     let log = fs::read_to_string(diagnostic_log.path).unwrap();
     assert!(log
         .lines()
@@ -94,7 +94,7 @@ expectations:
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records.iter().all(CheckRecord::passed));
+    assert!(records.records.iter().all(CheckRecord::passed));
     assert_eq!(runner.starts, 1);
     assert_eq!(runner.start_thinking, vec!["low".to_string()]);
     assert_eq!(
@@ -115,8 +115,8 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
     ]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(records[0].passed());
-    assert_eq!(records[0].scope, vec!["src/main.rs".to_string()]);
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].scope, vec!["src/main.rs".to_string()]);
     assert_eq!(
         runner.start_scopes,
         vec![vec![".".to_string()], vec!["src/main.rs".to_string()]]
@@ -138,9 +138,9 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
     ]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, "no");
-    assert_eq!(records[0].scope, vec!["src/main.rs".to_string()]);
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, "no");
+    assert_eq!(records.records[0].scope, vec!["src/main.rs".to_string()]);
     assert_eq!(
         read_history_records(&root, &options.selected[0])
             .unwrap()
@@ -162,9 +162,9 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
     ]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(!records[0].passed());
-    assert_eq!(records[0].observed, "no");
-    assert_eq!(records[0].scope, vec!["."]);
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, "no");
+    assert_eq!(records.records[0].scope, vec!["."]);
     let history = read_history_records(&root, &options.selected[0]).unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].observed, "no");
@@ -183,8 +183,8 @@ fn check_runner_fails_mismatch_and_treats_idk_as_exact_string() {
     ]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(!records[0].passed());
-    assert!(!records[1].passed());
+    assert!(!records.records[0].passed());
+    assert!(!records.records[1].passed());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -211,30 +211,120 @@ expectations:
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records[0].passed());
-    assert!(record_requires_human_review(&records[0]));
-    assert_eq!(records[0].observed, "idk");
+    assert!(!records.records[0].passed());
+    assert!(record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, "idk");
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_fail_fast_stops_after_first_failure() {
-    let root = git_project("check-fail-fast");
+fn check_runner_stops_after_first_failure_by_default() {
+    let root = git_project("check-default-stop");
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let options = check_options(&config, &["1", "2"], true, true);
+    let options = parse_check_options(
+        &config,
+        &[
+            test_selector(&config, "1").into(),
+            test_selector(&config, "2").into(),
+        ],
+    )
+    .unwrap();
     let mut runner = FakeRunner::new(&[&answer("no", "wrong", &["."])]);
+
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records.selected, 2);
-    assert_eq!(records.skipped, 0);
-    assert_eq!(
-        records.selected + records.skipped,
-        config.expectations.len()
-    );
-    assert_eq!(report_output_skipped_count(&records), 0);
-    assert!(!records[0].passed());
+
+    assert_eq!(records.records.len(), 1);
+    assert!(!records.records[0].passed());
     assert_eq!(runner.prompts.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_all_checks_full_selected_set_after_failure() {
+    let root = git_project("check-all-after-failure");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = parse_check_options(
+        &config,
+        &[
+            "--all".into(),
+            test_selector(&config, "1").into(),
+            test_selector(&config, "2").into(),
+        ],
+    )
+    .unwrap();
+    let mut runner = FakeRunner::new(&[
+        &answer("no", "wrong", &["."]),
+        &answer("no", "second answer", &["."]),
+    ]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(records.records.len(), 2);
+    assert_eq!(runner.prompts.len(), 2);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn selected_expectations_run_latest_non_pass_first() {
+    let root = git_project("check-order-latest-non-pass");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1", "2"], false, true);
+    let first = options.selected[0].clone();
+    let second = options.selected[1].clone();
+    let mut record = expectation_record(
+        &config.agent,
+        &second,
+        "fail",
+        "no",
+        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+    );
+    record.timestamp = "2026-01-01T00:00:00Z".to_string();
+    append_history_record(&root, &second, &record).unwrap();
+    let mut history_cache = HistoryCache::new();
+
+    let ordered = order_expectations_by_latest_non_pass(
+        &root,
+        vec![first, second.clone()],
+        &mut history_cache,
+    )
+    .unwrap();
+
+    assert_eq!(ordered[0].id, second.id);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn selected_expectations_use_runtime_log_errors_for_order() {
+    let root = git_project("check-order-runtime-errors");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1", "2"], false, true);
+    let first = options.selected[0].clone();
+    let second = options.selected[1].clone();
+    let log_dir = root.join(".git/canon/logs");
+    ensure_dir(&log_dir).unwrap();
+    let line = render_runtime_log_event(
+        "info",
+        "expectation.result",
+        &[
+            ("id", json!(second.id.clone())),
+            ("result", json!(RESULT_FAIL)),
+            ("observed", json!(UNPARSEABLE_OBSERVED)),
+        ],
+    )
+    .unwrap();
+    fs::write(log_dir.join("0.jsonl"), line).unwrap();
+    let mut history_cache = HistoryCache::new();
+
+    let ordered = order_expectations_by_latest_non_pass(
+        &root,
+        vec![first, second.clone()],
+        &mut history_cache,
+    )
+    .unwrap();
+
+    assert_eq!(ordered[0].id, second.id);
     let _ = fs::remove_dir_all(root);
 }

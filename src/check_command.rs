@@ -1,11 +1,40 @@
-use crate::*;
+use crate::app_server::LazyAppServerRunner;
+use crate::check::run_check_with_runner;
+use crate::check_command_args::parse_check_command_args;
+use crate::check_lazy_reset::apply_lazy_full_scope_reset_or_warn;
+use crate::check_output::write_summary_line;
+use crate::check_preflight::install_sigint_handler;
+use crate::check_query_command::run_check_query_command;
+use crate::check_reporting::{
+    collect_and_print_check_token_usage, write_check_finish_event, write_check_finish_report_event,
+    CheckFinishStats,
+};
+use crate::check_selection::parse_check_options;
+use crate::check_validation::check_config_loads_plugins;
+use crate::cli::CommandError;
+use crate::git::resolve_git_path;
+use crate::history_cleanup::maybe_cleanup_stale_cache_dirs;
+use crate::logging::DiagnosticLogWriter;
+use crate::repo_inspection::RepoInspectionCache;
+use crate::staged_worktree::StagedWorktreeView;
+use crate::types::{CheckConfig, CheckRecord};
+use crate::{CHECK_INTERRUPTED, GIT_CANON_CACHE_DIR};
+use serde_json::json;
+use std::ffi::OsString;
+use std::io::{self, Write};
+use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), CommandError> {
     let started = Instant::now();
-    install_sigint_handler();
+    install_sigint_handler().map_err(CommandError::from)?;
     CHECK_INTERRUPTED.store(false, Ordering::SeqCst);
     let command = parse_check_command_args(args)?;
     let mut repo_cache = RepoInspectionCache::new();
+    // Runtime logs are canon-owned state under `.git/canon/logs`, not project
+    // working-tree content. They are created before snapshot evaluation and are
+    // denied to evaluator sessions by the mandatory ignore policy.
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let config = match repo_cache.load_check_config(root, &command.config_path) {
         Ok(config) => config,
@@ -34,8 +63,8 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         return run_check_query_command(root, &config, question, diagnostic_log)
             .map_err(CommandError::from);
     }
-    // `canon check` accepts `--fail-fast` through `parse_check_options`; the
-    // `canon gate` rejection below is gate-specific and does not apply here.
+    // Check-specific options are parsed with the active config so selectors can
+    // be resolved against expectation IDs.
     let options = match parse_check_options(&config, &command.option_args) {
         Ok(options) => options,
         Err(err) => {
@@ -67,7 +96,8 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     )?;
     let mut execution = prepare_check_execution(root, &config, &mut diagnostic_log, false, 0)
         .map_err(CommandError::from)?;
-    let cleanup = match maybe_cleanup_stale_cache_dirs(root, &config) {
+    let cache_dir = resolve_git_path(root, GIT_CANON_CACHE_DIR).map_err(CommandError::from)?;
+    let cleanup = match maybe_cleanup_stale_cache_dirs(&cache_dir, &config) {
         Ok(cleanup) => cleanup,
         Err(err) => {
             write_check_finish_event(
@@ -101,7 +131,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     // before the next expectation starts.
     let records_result = run_check_with_runner(
         root,
-        execution.staged_view.root(),
+        execution.staged_view.snapshot_root(),
         &config,
         &options,
         &mut execution.runner,

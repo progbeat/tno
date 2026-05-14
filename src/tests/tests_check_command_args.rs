@@ -5,14 +5,14 @@ fn check_command_accepts_custom_config_option() {
     let parsed = parse_check_command_args(&[
         "--config".into(),
         "alt.yml".into(),
-        "--fail-fast".into(),
+        "--all".into(),
         "2".into(),
     ])
     .unwrap();
     assert_eq!(parsed.config_path, PathBuf::from("alt.yml"));
     assert_eq!(
         parsed.option_args,
-        vec![OsString::from("--fail-fast"), OsString::from("2")]
+        vec![OsString::from("--all"), OsString::from("2")]
     );
 
     let parsed = parse_check_command_args(&["-c".into(), "old.yml".into()]).unwrap();
@@ -56,10 +56,8 @@ fn check_command_accepts_query_mode() {
     .is_err());
     assert!(parse_check_command_args(&["-q".into(), "Question?".into(), "1".into()]).is_err());
     assert!(
-        parse_check_command_args(&["-q".into(), "Question?".into(), "--fail-fast".into()]).is_err()
-    );
-    assert!(
         parse_check_command_args(&["-q".into(), "Question?".into(), "--ignore-cache".into()])
             .is_err()
     );
+    assert!(parse_check_command_args(&["-q".into(), "Question?".into(), "--all".into()]).is_err());
 }

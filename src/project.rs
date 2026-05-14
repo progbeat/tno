@@ -1,9 +1,14 @@
-use crate::*;
+use crate::fs_util::ensure_dir;
+use crate::git::resolve_git_path;
+use crate::output::write_stdout_line;
+use crate::types::Config;
+use std::env;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub(crate) fn print_root(config: &Config) -> Result<(), String> {
     ensure_dir(&config.root)?;
-    println!("{}", config.root.display());
-    Ok(())
+    write_stdout_line(&config.root.display().to_string())
 }
 
 impl Config {

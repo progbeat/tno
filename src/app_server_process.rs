@@ -1,4 +1,15 @@
-use crate::*;
+use crate::app_server::AppServerRunner;
+use crate::evaluator_config::app_server_args;
+use crate::output::write_stderr_line;
+use crate::types::{AgentConfig, EvaluatorError};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::env;
+use std::io::{self, BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -46,14 +57,24 @@ impl AppServerRunner {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|err| format!("failed to start codex app-server: {}", err))?;
-        let stdin = child.stdin.take().ok_or_else(|| {
-            terminate_app_server_child(&mut child);
-            EvaluatorError::message("failed to open app-server stdin")
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            terminate_app_server_child(&mut child);
-            EvaluatorError::message("failed to open app-server stdout")
-        })?;
+        let stdin = match child.stdin.take() {
+            Some(stdin) => stdin,
+            None => {
+                return Err(cleanup_error_after_missing_pipe(
+                    &mut child,
+                    "failed to open app-server stdin",
+                ));
+            }
+        };
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                return Err(cleanup_error_after_missing_pipe(
+                    &mut child,
+                    "failed to open app-server stdout",
+                ));
+            }
+        };
         let (messages, reader) = spawn_app_server_reader(stdout);
         let mut runner = AppServerRunner {
             child,
@@ -81,50 +102,98 @@ impl AppServerRunner {
 
 impl Drop for AppServerRunner {
     fn drop(&mut self) {
-        terminate_app_server_child(&mut self.child);
+        if let Err(err) = terminate_app_server_child(&mut self.child) {
+            let _ = write_stderr_line(&format!("warning: {}", err));
+        }
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
     }
 }
 
+fn cleanup_error_after_missing_pipe(child: &mut Child, message: &str) -> EvaluatorError {
+    match terminate_app_server_child(child) {
+        Ok(()) => EvaluatorError::message(message),
+        Err(err) => EvaluatorError::message(format!("{}; cleanup failed: {}", message, err)),
+    }
+}
+
 #[cfg(unix)]
-pub(crate) fn terminate_app_server_child(child: &mut Child) {
-    if child.try_wait().ok().flatten().is_some() {
-        return;
+pub(crate) fn terminate_app_server_child(child: &mut Child) -> Result<(), String> {
+    match child.try_wait() {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => {}
+        Err(err) => return Err(format!("failed to poll app-server child: {}", err)),
     }
     let process_group = child.id() as i32;
-    signal_process_group(process_group, 15);
-    if wait_for_child_exit(child, Duration::from_secs(2)) {
-        return;
+    let mut errors = Vec::new();
+    if let Err(err) = signal_process_group(process_group, 15) {
+        errors.push(err);
+        if let Err(err) = child.kill() {
+            errors.push(format!("failed to kill app-server child: {}", err));
+        }
     }
-    signal_process_group(process_group, 9);
-    let _ = child.wait();
+    if wait_for_child_exit(child, Duration::from_secs(2))? {
+        return finish_app_server_cleanup(errors);
+    }
+    if let Err(err) = signal_process_group(process_group, 9) {
+        errors.push(err);
+        if let Err(err) = child.kill() {
+            errors.push(format!("failed to kill app-server child: {}", err));
+        }
+    }
+    child
+        .wait()
+        .map_err(|err| format!("failed to wait for app-server child: {}", err))?;
+    finish_app_server_cleanup(errors)
 }
 
 #[cfg(unix)]
-pub(crate) fn signal_process_group(process_group: i32, signal_number: i32) {
-    unsafe {
-        let _ = crate::kill(-process_group, signal_number);
+pub(crate) fn signal_process_group(process_group: i32, signal_number: i32) -> Result<(), String> {
+    let result = unsafe { crate::kill(-process_group, signal_number) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to send signal {} to app-server process group {}: {}",
+            signal_number,
+            process_group,
+            io::Error::last_os_error()
+        ))
     }
 }
 
 #[cfg(unix)]
-pub(crate) fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> bool {
+pub(crate) fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Result<bool, String> {
     let deadline = Instant::now() + timeout;
     loop {
-        if child.try_wait().ok().flatten().is_some() {
-            return true;
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(true),
+            Ok(None) => {}
+            Err(err) => return Err(format!("failed to poll app-server child: {}", err)),
         }
         if Instant::now() >= deadline {
-            return false;
+            return Ok(false);
         }
         thread::sleep(Duration::from_millis(20));
     }
 }
 
+fn finish_app_server_cleanup(errors: Vec<String>) -> Result<(), String> {
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
 #[cfg(not(unix))]
-pub(crate) fn terminate_app_server_child(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+pub(crate) fn terminate_app_server_child(child: &mut Child) -> Result<(), String> {
+    child
+        .kill()
+        .map_err(|err| format!("failed to kill app-server child: {}", err))?;
+    child
+        .wait()
+        .map_err(|err| format!("failed to wait for app-server child: {}", err))?;
+    Ok(())
 }

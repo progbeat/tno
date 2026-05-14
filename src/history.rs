@@ -1,4 +1,9 @@
-use crate::*;
+use crate::fs_util::for_each_nonempty_line;
+use crate::git::resolve_git_path;
+use crate::types::{CheckRecord, SelectedExpectation};
+use crate::GIT_CANON_CACHE_DIR;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn history_path(
     root: &Path,

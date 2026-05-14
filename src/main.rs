@@ -1,17 +1,4 @@
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, BTreeSet};
-use std::env;
-use std::ffi::OsString;
-use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{self, Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::Once;
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
 
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
@@ -45,7 +32,6 @@ const UNPARSEABLE_OBSERVED: &str = "unparseable";
 const EMPTY_EVIDENCE_OBSERVED: &str = "empty-evidence";
 static CHECK_INTERRUPTED: AtomicBool = AtomicBool::new(false);
 static COMPACTION_SAMPLE_COUNTER: AtomicU64 = AtomicU64::new(0);
-static SIGNAL_HANDLER_INIT: Once = Once::new();
 
 pub(crate) struct DiagnosticLogConfig {
     pub(crate) max_bytes: u64,
@@ -71,12 +57,14 @@ mod app_server_transport;
 mod check;
 mod check_cache;
 mod check_command;
+mod check_command_args;
 mod check_config;
+mod check_config_expansion;
 mod check_errors;
 mod check_generator_paths;
 mod check_generator_templates;
-mod check_generators;
 mod check_interrogation;
+mod check_interrogation_policy;
 mod check_interrogation_records;
 mod check_interrogation_state;
 mod check_lazy_reset;
@@ -116,6 +104,7 @@ mod notes_cli;
 mod notes_header;
 mod notes_index;
 mod notes_restore;
+mod output;
 mod project;
 mod repo_inspection;
 mod scope;
@@ -123,67 +112,6 @@ mod scope_hash;
 mod staged_worktree;
 mod time;
 mod types;
-
-pub(crate) use app_server::*;
-pub(crate) use app_server_protocol::*;
-pub(crate) use check::*;
-pub(crate) use check_cache::*;
-pub(crate) use check_command::*;
-pub(crate) use check_config::*;
-pub(crate) use check_errors::*;
-pub(crate) use check_generator_paths::*;
-pub(crate) use check_generator_templates::*;
-pub(crate) use check_generators::*;
-pub(crate) use check_interrogation::*;
-pub(crate) use check_interrogation_records::*;
-pub(crate) use check_interrogation_state::*;
-pub(crate) use check_lazy_reset::*;
-pub(crate) use check_model_fallback::*;
-pub(crate) use check_narrowing::*;
-pub(crate) use check_output::*;
-pub(crate) use check_preflight::*;
-pub(crate) use check_query::*;
-pub(crate) use check_query_command::*;
-pub(crate) use check_reporting::*;
-pub(crate) use check_result::*;
-pub(crate) use check_selection::*;
-pub(crate) use check_validation::*;
-pub(crate) use cli::*;
-pub(crate) use evaluator::*;
-pub(crate) use evaluator_config::*;
-pub(crate) use evaluator_json::*;
-pub(crate) use evaluator_prompt::*;
-pub(crate) use evaluator_response::*;
-pub(crate) use evaluator_response_cache::*;
-pub(crate) use evaluator_scope::*;
-pub(crate) use evaluator_turn::*;
-pub(crate) use fs_util::*;
-#[cfg(test)]
-pub(crate) use gate::*;
-pub(crate) use git::*;
-pub(crate) use hash::*;
-pub(crate) use history::*;
-pub(crate) use history_append::*;
-pub(crate) use history_cache_key::*;
-pub(crate) use history_cleanup::*;
-pub(crate) use history_compaction::*;
-pub(crate) use history_reuse::*;
-#[cfg(test)]
-pub(crate) use hooks::*;
-pub(crate) use logging::*;
-#[cfg(test)]
-pub(crate) use notes::*;
-pub(crate) use notes_cli::*;
-pub(crate) use notes_header::*;
-pub(crate) use notes_index::*;
-pub(crate) use notes_restore::*;
-pub(crate) use project::*;
-pub(crate) use repo_inspection::*;
-pub(crate) use scope::*;
-pub(crate) use scope_hash::*;
-pub(crate) use staged_worktree::*;
-pub(crate) use time::*;
-pub(crate) use types::*;
 
 fn main() {
     cli::main();

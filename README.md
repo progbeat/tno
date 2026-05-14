@@ -13,6 +13,7 @@ That is how this project was built: no human-written implementation code,
 just Codex working against `canon` until the repo satisfied its own canon.
 
 See the canon for canon in [`.canon/check.yml`](.canon/check.yml).
+For terminology used by the CLI and docs, see the [Glossary](GLOSSARY.md).
 
 ## Install
 
@@ -133,12 +134,13 @@ Ask one uncached ad-hoc question.
 
 ```sh
 canon check --ignore-cache
-canon check --fail-fast
+canon check --all
 canon check --config other-check.yml
 canon check -c other-check.yml
 ```
 
-Force fresh evaluation, stop after the first failure, or use another config.
+Force fresh evaluation, continue after a failed expectation, or use another config.
+By default, `canon check` stops after the first final non-pass result.
 
 ```sh
 canon gate

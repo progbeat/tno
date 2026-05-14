@@ -1,4 +1,18 @@
-use crate::*;
+use crate::check_command::prepare_check_execution;
+use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
+use crate::check_lazy_reset::apply_lazy_full_scope_reset_or_warn;
+use crate::check_output::write_query_output;
+use crate::check_query::run_query_with_runner;
+use crate::check_reporting::{
+    collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
+    CheckFinishStats,
+};
+use crate::check_selection::initial_non_selected_expectations;
+use crate::logging::DiagnosticLogWriter;
+use crate::types::CheckConfig;
+use serde_json::json;
+use std::io;
+use std::path::Path;
 
 pub(crate) fn run_check_query_command(
     root: &Path,
@@ -20,7 +34,7 @@ pub(crate) fn run_check_query_command(
     let mut execution = prepare_check_execution(root, config, &mut diagnostic_log, true, 1)?;
     let runtime = CheckRuntime {
         root,
-        snapshot_root: execution.staged_view.root(),
+        snapshot_root: execution.staged_view.snapshot_root(),
         config,
     };
     let mut interrogation_state = InterrogationState::new();
@@ -46,12 +60,12 @@ pub(crate) fn run_check_query_command(
             return Err(err);
         }
     };
-    let non_selected = initial_non_selected_expectations(config, &[]);
+    let non_selected = initial_non_selected_expectations(config, &[])?;
     apply_lazy_full_scope_reset_or_warn(root, config, usage, &non_selected, &mut diagnostic_log);
     let result = match result {
         Ok(result) => result,
         Err(err) => {
-            print_token_usage_summary(Some(usage));
+            print_token_usage_summary(Some(usage))?;
             write_check_finish_event(
                 &mut diagnostic_log,
                 true,
@@ -78,6 +92,6 @@ pub(crate) fn run_check_query_command(
         )?;
         return Err(err);
     }
-    print_token_usage_summary(Some(usage));
+    print_token_usage_summary(Some(usage))?;
     write_check_finish_event(&mut diagnostic_log, true, CheckFinishStats::default(), None)
 }

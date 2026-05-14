@@ -16,6 +16,32 @@ fn scope_is_canonicalized() {
 }
 
 #[test]
+fn repo_paths_preserve_leading_and_trailing_spaces() {
+    let config = parse_check_config(check_config_yaml()).unwrap();
+
+    assert_eq!(normalize_repo_path(" leading.txt").unwrap(), " leading.txt");
+    assert_eq!(
+        normalize_repo_path("trailing.txt ").unwrap(),
+        "trailing.txt "
+    );
+    assert_eq!(
+        parse_scope_strings(&[" spaced.txt ".to_string()], &config.agent).unwrap(),
+        vec![" spaced.txt ".to_string()]
+    );
+}
+
+#[test]
+fn repo_paths_reject_nul_before_process_boundaries() {
+    let config = parse_check_config(check_config_yaml()).unwrap();
+
+    let scope_err = parse_scope_strings(&["src/\0main.rs".to_string()], &config.agent).unwrap_err();
+    assert!(scope_err.contains("NUL"));
+
+    let hash_err = sanitize_scope_for_hash(&["src/\0main.rs".to_string()]).unwrap_err();
+    assert!(hash_err.contains("NUL"));
+}
+
+#[test]
 fn strict_scope_subset_canonicalizes_before_comparing() {
     assert!(!is_strict_scope_subset(
         &[".".to_string(), "src".to_string()],
@@ -53,6 +79,50 @@ fn evaluator_response_scope_rejects_denied_paths() {
         &config.agent,
     )
     .is_err());
+}
+
+#[test]
+fn agent_ignore_patterns_are_normalized_before_runtime_matching() {
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore:
+    - " foo/./bar/** "
+  plugins: []
+expectations:
+  - q: "Does this behavior work?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.agent.ignore, vec!["foo/bar/**"]);
+    assert!(parse_scope_strings(&["foo/bar/baz.rs".to_string()], &config.agent).is_err());
+}
+
+#[test]
+fn agent_ignore_patterns_match_single_segment_wildcards() {
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore:
+    - "logs/*"
+    - "src/a*b.txt"
+  plugins: []
+expectations:
+  - q: "Does this behavior work?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+
+    assert!(is_denied_path(&config.agent, "logs/app.log"));
+    assert!(!is_denied_path(&config.agent, "logs/nested/app.log"));
+    assert!(is_denied_path(&config.agent, "src/a*b.txt"));
 }
 
 #[test]

@@ -1,4 +1,13 @@
-use crate::*;
+use crate::git::{read_staged_file_bytes_from_raw_path, staged_tracked_path_bytes};
+use crate::history::{history_path, read_history_records_from_path};
+use crate::history_reuse::is_reusable_history_record;
+use crate::logging::{render_check_log_record, DiagnosticLogWriter};
+use crate::scope::is_denied_path_bytes;
+use crate::types::{AgentConfig, CheckConfig, SelectedExpectation, TokenUsage};
+use serde_json::json;
+use std::fs;
+use std::io;
+use std::path::Path;
 
 pub(crate) fn apply_lazy_full_scope_reset(
     root: &Path,
@@ -197,8 +206,7 @@ fn reset_scope_and_invalidate_cache(path: &Path) -> io::Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    let records = read_history_records_from_path(path)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    let records = read_history_records_from_path(path).map_err(io::Error::other)?;
     let mut output = String::new();
     for record in records {
         if is_reusable_history_record(&record) {

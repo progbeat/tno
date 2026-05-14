@@ -20,8 +20,8 @@ fn check_runner_streams_result_output() {
         Some(&mut output),
     )
     .unwrap();
-    assert_eq!(records.len(), 2);
-    assert_eq!(output.flushes, 2);
+    assert_eq!(records.records.len(), 2);
+    assert_eq!(output.flushes, 4);
     let lines = String::from_utf8(output.bytes).unwrap();
     assert_eq!(lines.lines().count(), 2);
     assert!(lines.contains(&format!("{}. OK", options.selected[0].display_id)));

@@ -1,4 +1,13 @@
-use crate::*;
+use crate::app_server::LazyAppServerRunner;
+use crate::app_server_protocol::render_token_usage_summary;
+use crate::check_result::{
+    report_error_count, report_failed_count, report_output_skipped_count, report_passed_count,
+};
+use crate::evaluator_turn::token_usage_log_fields;
+use crate::logging::DiagnosticLogWriter;
+use crate::output::write_stderr_line;
+use crate::types::{CheckRunReport, NarrowingStats, TokenUsage};
+use serde_json::json;
 
 pub(crate) fn collect_check_token_usage(
     runner: &mut LazyAppServerRunner,
@@ -15,7 +24,7 @@ pub(crate) fn collect_and_print_check_token_usage(
     diagnostic_log: &mut DiagnosticLogWriter,
 ) -> Result<TokenUsage, String> {
     let usage = collect_check_token_usage(runner, diagnostic_log)?;
-    print_token_usage_summary(Some(usage));
+    print_token_usage_summary(Some(usage))?;
     Ok(usage)
 }
 
@@ -73,8 +82,8 @@ pub(crate) fn write_check_finish_event(
     diagnostic_log.write_event("info", "check.finish", &fields)
 }
 
-pub(crate) fn print_token_usage_summary(usage: Option<TokenUsage>) {
+pub(crate) fn print_token_usage_summary(usage: Option<TokenUsage>) -> Result<(), String> {
     // This stderr line is part of the public check-output contract; the same
     // usage data is written as structured runtime-log data before this prints.
-    eprintln!("{}", render_token_usage_summary(usage.unwrap_or_default()));
+    write_stderr_line(&render_token_usage_summary(usage.unwrap_or_default()))
 }

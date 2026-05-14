@@ -1,4 +1,15 @@
-use crate::*;
+use crate::fs_util::{ensure_dir, replace_file_with_temp};
+use crate::notes_cli::INDEX_LOCK_STALE_AFTER_SECS;
+use crate::notes_header::validate_note_key;
+use crate::types::Config;
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::process;
+use std::time::Duration;
+
+#[cfg(test)]
+use crate::fs_util::for_each_nonempty_line;
 
 pub(crate) fn upsert_index(config: &Config, hash: &str, key: &str) -> Result<(), String> {
     validate_index_entry(hash, key)?;
@@ -129,8 +140,8 @@ pub(crate) fn validate_index_entry(hash: &str, key: &str) -> Result<(), String> 
     if hash.is_empty() {
         return Err("hash must not be empty".to_string());
     }
-    if hash.contains('\t') || hash.contains('\n') || hash.contains('\r') {
-        return Err("hash must not contain tabs or newlines".to_string());
+    if hash.chars().any(char::is_control) {
+        return Err("hash must not contain control characters".to_string());
     }
     validate_note_key(key)
 }

@@ -1,4 +1,17 @@
-use crate::*;
+use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
+use crate::evaluator_turn::record_from_response;
+use crate::hash::full_scope;
+use crate::logging::DiagnosticLogWriter;
+use crate::scope::scope_is_within;
+use crate::types::{
+    CheckRecord, EvaluatorError, InterrogationResult, ObservedAnswerState, ParsedAnswer,
+    QueryInterrogationResult, SelectedExpectation,
+};
+use crate::{
+    EMPTY_EVIDENCE_OBSERVED, MALFORMED_REVIEW_WARNING, OBSERVED_IDK, OBSERVED_MALFORMED,
+    UNPARSEABLE_OBSERVED,
+};
+use serde_json::json;
 
 pub(crate) fn finalize_interrogation_response(
     runtime: &CheckRuntime<'_>,
@@ -9,6 +22,7 @@ pub(crate) fn finalize_interrogation_response(
     response: ParsedAnswer,
 ) -> Result<InterrogationResult, EvaluatorError> {
     let mut response = enforce_response_scope(response, enforced_scope);
+    response = normalize_empty_evidence_response(response, enforced_scope);
     if response.answer == UNPARSEABLE_OBSERVED {
         response.scope = enforced_scope.to_vec();
     }
@@ -46,6 +60,7 @@ pub(crate) fn finalize_query_response(
 ) -> Result<QueryInterrogationResult, EvaluatorError> {
     let enforced_scope = full_scope();
     let mut response = enforce_response_scope(response, &enforced_scope);
+    response = normalize_empty_evidence_response(response, &enforced_scope);
     if response.answer == UNPARSEABLE_OBSERVED {
         response.scope = enforced_scope;
     }
@@ -119,6 +134,24 @@ fn rejected_widened_scope_message(response_scope: &[String], enforced_scope: &[S
     )
 }
 
+fn normalize_empty_evidence_response(
+    response: ParsedAnswer,
+    enforced_scope: &[String],
+) -> ParsedAnswer {
+    if response.evidence.trim().is_empty()
+        && response.answer != OBSERVED_MALFORMED
+        && response.answer != UNPARSEABLE_OBSERVED
+        && !(response.answer == OBSERVED_IDK && enforced_scope != full_scope())
+    {
+        return ParsedAnswer {
+            answer: EMPTY_EVIDENCE_OBSERVED.to_string(),
+            evidence: "evaluator response evidence was empty".to_string(),
+            scope: response.scope,
+        };
+    }
+    response
+}
+
 fn write_review_events(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_id: Option<&str>,
@@ -141,21 +174,31 @@ pub(crate) fn write_parsed_answer_review_events(
     observed: &str,
     evidence: &str,
 ) -> Result<(), EvaluatorError> {
-    if observed == OBSERVED_MALFORMED {
-        write_review_required(diagnostic_log, expectation_id, MALFORMED_REVIEW_WARNING)?;
-    }
-    if observed == UNPARSEABLE_OBSERVED {
-        write_review_required(
-            diagnostic_log,
-            expectation_id,
-            "unparseable evaluator response",
-        )?;
-    }
-    if observed == EMPTY_EVIDENCE_OBSERVED {
-        write_review_required(diagnostic_log, expectation_id, "empty evaluator evidence")?;
-    }
-    if observed == OBSERVED_IDK && enforced_scope == full_scope() {
-        write_review_required(diagnostic_log, expectation_id, "full-scope idk")?;
+    match ObservedAnswerState::from_observed(observed) {
+        ObservedAnswerState::Malformed => {
+            write_review_required(diagnostic_log, expectation_id, MALFORMED_REVIEW_WARNING)?;
+        }
+        ObservedAnswerState::Unparseable => {
+            write_review_required(
+                diagnostic_log,
+                expectation_id,
+                "unparseable evaluator response",
+            )?;
+        }
+        ObservedAnswerState::EmptyEvidence => {
+            write_review_required(diagnostic_log, expectation_id, "empty evaluator evidence")?;
+        }
+        ObservedAnswerState::Idk if enforced_scope == full_scope() => {
+            write_review_required(diagnostic_log, expectation_id, "full-scope idk")?;
+        }
+        ObservedAnswerState::Unknown => {
+            write_review_required(
+                diagnostic_log,
+                expectation_id,
+                "unknown observed answer state",
+            )?;
+        }
+        ObservedAnswerState::Idk | ObservedAnswerState::Answer => {}
     }
     if evidence.trim().is_empty() {
         if let Some(writer) = diagnostic_log.as_deref_mut() {

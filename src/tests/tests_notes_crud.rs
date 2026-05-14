@@ -51,6 +51,23 @@ fn write_replaces_visible_note_content_without_rewriting_log() {
 }
 
 #[test]
+fn materialize_note_content_ignores_marker_like_body_text() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let raw = format!(
+        "{}body\n<!-- canon log v1 -->\nordinary text\n",
+        initial_content(&note.key, &note.hash)
+    );
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+
+    assert_eq!(content, raw);
+}
+
+#[test]
 fn delete_removes_only_target() {
     with_env("delete", |_| {
         let config = Config::from_env().unwrap();

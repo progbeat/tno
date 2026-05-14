@@ -1,4 +1,21 @@
-use crate::*;
+use crate::fs_util::ensure_dir;
+use crate::hash::hash_key;
+use crate::notes_header::{
+    header, initial_content, normalize_body, validate_note_key, verify_note_key,
+    verify_note_key_from_first_line,
+};
+use crate::notes_index::{remove_index, upsert_index, write_file_atomically};
+use crate::notes_restore::{
+    error_with_restore_context, restore_deleted_note_after_index_failure,
+    restore_note_after_index_failure,
+};
+use crate::output::write_stdout;
+use crate::time::unix_timestamp;
+use crate::types::{Config, Note};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::Write;
+use std::path::Path;
 
 const NOTE_LOG_MARKER: &str = "<!-- canon log v1 -->";
 
@@ -49,8 +66,7 @@ pub(crate) fn read_note(config: &Config, key: &str) -> Result<(), String> {
     let content = fs::read_to_string(&note.path)
         .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
     verify_note_key_from_first_line(&note.path, content.lines().next().unwrap_or(""), key)?;
-    print!("{}", materialize_note_content(&note, &content)?);
-    Ok(())
+    write_stdout(&materialize_note_content(&note, &content)?)
 }
 
 pub(crate) fn write_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
@@ -104,22 +120,12 @@ fn encode_note_record(record: &NoteRecord) -> Result<String, String> {
 }
 
 pub(crate) fn materialize_note_content(note: &Note, content: &str) -> Result<String, String> {
-    let Some(log_start) = content.find(NOTE_LOG_MARKER) else {
+    let Some((log_start, records)) = find_note_log(note, content)? else {
         return Ok(content.to_string());
     };
 
     let mut output = content[..log_start].to_string();
-    for line in content[log_start..].lines() {
-        if line == NOTE_LOG_MARKER || line.trim().is_empty() {
-            continue;
-        }
-        let record: NoteRecord = serde_json::from_str(line).map_err(|err| {
-            format!(
-                "malformed note log record in {}: {}",
-                note.path.display(),
-                err
-            )
-        })?;
+    for record in records {
         match record {
             NoteRecord::Write { text } => {
                 output = format!(
@@ -144,6 +150,41 @@ pub(crate) fn materialize_note_content(note: &Note, content: &str) -> Result<Str
         }
     }
     Ok(output)
+}
+
+fn find_note_log(note: &Note, content: &str) -> Result<Option<(usize, Vec<NoteRecord>)>, String> {
+    let separator = format!("\n{}\n", NOTE_LOG_MARKER);
+    let mut offset = 0;
+    while let Some(relative_start) = content[offset..].find(&separator) {
+        let separator_start = offset + relative_start;
+        let log_start = separator_start + separator.len();
+        if let Some(records) = parse_note_log_records(note, &content[log_start..])? {
+            return Ok(Some((separator_start, records)));
+        }
+        offset = log_start;
+    }
+    Ok(None)
+}
+
+fn parse_note_log_records(note: &Note, text: &str) -> Result<Option<Vec<NoteRecord>>, String> {
+    let mut records = Vec::new();
+    for line in text.lines() {
+        if line == NOTE_LOG_MARKER || line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str(line) {
+            Ok(record) => records.push(record),
+            Err(_) if records.is_empty() => return Ok(None),
+            Err(err) => {
+                return Err(format!(
+                    "malformed note log record in {}: {}",
+                    note.path.display(),
+                    err
+                ));
+            }
+        }
+    }
+    Ok((!records.is_empty()).then_some(records))
 }
 
 fn append_to_file(path: &Path, content: &[u8]) -> Result<(), String> {

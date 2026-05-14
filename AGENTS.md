@@ -6,7 +6,7 @@ Do not edit files under `.canon/` proactively. Edit them only when a human expli
 
 Never commit `.canon/` changes. Before committing, run `git diff --cached --quiet -- .canon/`; if it exits `1`, stop and ask a human to handle them.
 
-Before every commit, run the full `canon check` command with no expectation-number filters and without `--fail-fast`.
+Before creating a commit as an agent, run `canon check` with no expectation filters. This is separate from the installed Git pre-commit hook; the hook itself runs `canon gate`.
 
 If `canon check` gives a wrong answer or evidence while the project satisfies the `canon check` expectations, treat that as a readability issue: improve readability, using comments where helpful, before retrying.
 

@@ -9,6 +9,7 @@ fn completed_agent_message_text_is_turn_text_fallback() {
                 "role": "assistant",
                 "content": [
                     { "type": "output_text", "text": "ANSWER: yes\n" },
+                    { "type": "tool_result", "metadata": { "text": "ignored" } },
                     { "type": "output_text", "text": "EVIDENCE:\nok\nSCOPE: [\".\"]" }
                 ]
             }
@@ -47,6 +48,7 @@ fn app_server_error_message_is_extracted() {
             "turn": {
                 "status": "failed",
                 "error": {
+                    "code": "modelUnavailable",
                     "message": "model unavailable"
                 }
             }
@@ -55,6 +57,14 @@ fn app_server_error_message_is_extracted() {
     assert_eq!(
         app_server_error_message(&turn_completed).unwrap(),
         "model unavailable"
+    );
+    assert_eq!(
+        app_server_failure_from_value(
+            "turn/run",
+            &app_server_error_value(&turn_completed).unwrap()
+        )
+        .kind(),
+        Some(EvaluatorFailureKind::ModelUnavailable)
     );
 }
 
@@ -80,14 +90,46 @@ fn evaluator_failure_classification_uses_typed_error() {
         timeout.message_str(),
         "app-server turn/run timed out after 300 seconds without progress"
     );
-    let app_server_usage_limit = app_server_failure_from_message(
+    let app_server_usage_limit = app_server_failure_from_value(
         "turn/run",
-        "You've hit your usage limit for GPT-5.3-Codex-Spark.",
+        &json!({
+            "codexErrorInfo": "usageLimitExceeded",
+            "message": "You've hit your usage limit for GPT-5.3-Codex-Spark."
+        }),
     );
     assert_eq!(
         app_server_usage_limit.kind(),
         Some(EvaluatorFailureKind::UsageLimit)
     );
+    let unknown_app_server_error = app_server_failure_from_value(
+        "turn/run",
+        &json!({
+            "codexErrorInfo": "newTransientServerCode",
+            "message": "new server-side failure"
+        }),
+    );
+    assert_eq!(
+        unknown_app_server_error.kind(),
+        Some(EvaluatorFailureKind::UnknownAppServer)
+    );
+    assert!(is_model_technical_failure(&unknown_app_server_error));
+    assert!(session_failure_invalidates_thread(
+        &unknown_app_server_error
+    ));
+    let untyped_message = app_server_failure_from_message(
+        "turn/run",
+        "You've hit your usage limit for GPT-5.3-Codex-Spark.",
+    );
+    assert_eq!(untyped_message.kind(), None);
+}
+
+#[test]
+fn app_server_message_rejects_malformed_envelopes() {
+    assert!(app_server_message(&json!({"id": 1, "result": {}})).is_ok());
+    assert!(app_server_message(&json!({"method": "turn/started", "params": {}})).is_ok());
+
+    let err = app_server_message(&json!({"params": {}})).unwrap_err();
+    assert!(err.contains("missing both id and method"));
 }
 
 #[test]

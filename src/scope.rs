@@ -1,4 +1,6 @@
-use crate::*;
+use crate::hash::full_scope;
+use crate::types::AgentConfig;
+use std::path::Path;
 
 pub(crate) fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, String> {
     sanitize_scope_paths(scope, Some(agent))
@@ -56,9 +58,15 @@ pub(crate) fn canonicalize_scope_paths(mut paths: Vec<String>) -> Vec<String> {
 }
 
 pub(crate) fn normalize_repo_path(value: &str) -> Result<String, String> {
-    let value = value.trim();
     if value.is_empty() {
         return Err("path must not be empty".to_string());
+    }
+    // Git paths may contain newlines and other control bytes, and scope
+    // hashing has a length-prefixed path for those entries. NUL is different:
+    // Git paths and process arguments cannot represent it, so reject it at the
+    // normalized repo-path boundary instead of failing later in Command::arg.
+    if value.contains('\0') {
+        return Err("path must not contain NUL bytes".to_string());
     }
     let path = Path::new(value);
     if path.is_absolute() {
@@ -100,24 +108,57 @@ pub(crate) fn is_denied_path_bytes(agent: &AgentConfig, path: &[u8]) -> bool {
 }
 
 pub(crate) fn path_matches_pattern(path: &str, pattern: &str) -> bool {
-    let path = path.trim_start_matches("./");
-    let pattern = pattern.trim_start_matches("./");
-    if let Some(prefix) = pattern.strip_suffix("/**") {
-        return path == prefix || path.starts_with(&format!("{}/", prefix));
-    }
-    path == pattern
+    path_matches_pattern_bytes(path.as_bytes(), pattern.as_bytes())
 }
 
 fn path_matches_pattern_bytes(path: &[u8], pattern: &[u8]) -> bool {
     let path = trim_dot_slash_bytes(path);
     let pattern = trim_dot_slash_bytes(pattern);
-    if let Some(prefix) = pattern.strip_suffix(b"/**") {
-        return path == prefix
-            || (path.len() > prefix.len()
-                && path.starts_with(prefix)
-                && path[prefix.len()] == b'/');
+    if path == pattern {
+        return true;
     }
-    path == pattern
+    if let Some(prefix) = pattern.strip_suffix(b"/**") {
+        return glob_path_matches_bytes(path, prefix) || glob_prefix_matches_path(path, prefix);
+    }
+    glob_path_matches_bytes(path, pattern)
+}
+
+fn glob_prefix_matches_path(path: &[u8], prefix: &[u8]) -> bool {
+    path.iter()
+        .enumerate()
+        .any(|(index, byte)| *byte == b'/' && glob_path_matches_bytes(&path[..index], prefix))
+}
+
+fn glob_path_matches_bytes(path: &[u8], pattern: &[u8]) -> bool {
+    let mut matches = vec![false; path.len() + 1];
+    matches[0] = true;
+    for pattern_byte in pattern {
+        let mut next = vec![false; path.len() + 1];
+        for index in 0..=path.len() {
+            if !matches[index] {
+                continue;
+            }
+            match *pattern_byte {
+                b'*' => {
+                    next[index] = true;
+                    let mut end = index;
+                    while end < path.len() && path[end] != b'/' {
+                        end += 1;
+                        next[end] = true;
+                    }
+                }
+                b'?' if index < path.len() && path[index] != b'/' => {
+                    next[index + 1] = true;
+                }
+                literal if index < path.len() && path[index] == literal => {
+                    next[index + 1] = true;
+                }
+                _ => {}
+            }
+        }
+        matches = next;
+    }
+    matches[path.len()]
 }
 
 fn trim_dot_slash_bytes(mut path: &[u8]) -> &[u8] {
@@ -154,12 +195,19 @@ pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
         .map(|pattern| (*pattern).to_string())
         .collect::<Vec<_>>();
     for pattern in &agent.ignore {
-        if !patterns.iter().any(|existing| existing == pattern) {
-            patterns.push(pattern.clone());
+        let pattern = normalized_ignore_pattern(pattern);
+        if !patterns.iter().any(|existing| existing == &pattern) {
+            patterns.push(pattern);
         }
     }
     patterns
 }
+
+pub(crate) fn normalized_ignore_pattern(pattern: &str) -> String {
+    normalize_repo_path(pattern)
+        .unwrap_or_else(|_| pattern.trim().trim_start_matches("./").to_string())
+}
+
 pub(crate) const MANDATORY_EVALUATOR_DENY_PATTERNS: &[&str] = &[
     ".canon",
     ".canon/**",

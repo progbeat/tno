@@ -85,6 +85,13 @@ fn read_index_rejects_malformed_lines() {
 }
 
 #[test]
+fn note_index_rejects_control_characters() {
+    assert!(validate_note_key("bad\u{7}key").is_err());
+    assert!(validate_index_entry("bad\u{7}hash", "key").is_err());
+    assert!(validate_index_entry("hash", "bad\u{7}key").is_err());
+}
+
+#[test]
 fn collision_metadata_mismatch_fails() {
     with_env("collision", |_| {
         let config = Config::from_env().unwrap();

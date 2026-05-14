@@ -150,7 +150,7 @@ impl std::io::Write for FlushCountingWriter {
 pub(crate) fn check_options(
     config: &CheckConfig,
     selectors: &[&str],
-    fail_fast: bool,
+    stop_after_non_pass: bool,
     ignore_cache: bool,
 ) -> CheckOptions {
     let selectors = selectors
@@ -166,7 +166,7 @@ pub(crate) fn check_options(
     CheckOptions {
         selected,
         skipped,
-        fail_fast,
+        check_all: !stop_after_non_pass,
         ignore_cache,
     }
 }

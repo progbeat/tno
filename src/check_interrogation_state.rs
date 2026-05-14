@@ -1,10 +1,18 @@
-use crate::*;
+use crate::evaluator_config::app_server_model_key;
+use crate::evaluator_response_cache::EvaluatorResponseParseCache;
+use crate::evaluator_turn::evaluator_models;
+use crate::hash::full_scope;
+use crate::scope_hash::ScopeHashCache;
+use crate::types::{AgentConfig, CheckConfig, CheckRecord, ObservedAnswerState};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 pub(crate) fn should_retry_full_scope_after_restricted_idk(
     record: &CheckRecord,
     scope: &[String],
 ) -> bool {
-    scope != full_scope() && record.observed == OBSERVED_IDK
+    scope != full_scope()
+        && ObservedAnswerState::from_observed(&record.observed) == ObservedAnswerState::Idk
 }
 
 pub(crate) fn evaluator_session_key(scope: &[String]) -> String {

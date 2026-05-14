@@ -1,4 +1,7 @@
-use crate::*;
+use crate::notes_index::write_file_atomically;
+use std::fs;
+use std::io;
+use std::path::Path;
 
 pub(crate) fn restore_note_after_index_failure(
     path: &Path,

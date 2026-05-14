@@ -15,7 +15,7 @@ fn check_runner_uses_model_fallback_after_usage_limit() {
     ]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(records[0].passed());
+    assert!(records.records[0].passed());
     assert_eq!(runner.starts, 2);
     assert_eq!(
         runner.start_models,
@@ -59,7 +59,7 @@ fn check_runner_keeps_using_fallback_after_model_failure() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records.iter().all(CheckRecord::passed));
+    assert!(records.records.iter().all(CheckRecord::passed));
     assert_eq!(runner.starts, 2);
     assert_eq!(
         runner.start_models,
@@ -113,7 +113,7 @@ fn check_runner_restarts_reused_thread_after_context_window_error() {
     )
     .unwrap();
 
-    assert!(records.iter().all(CheckRecord::passed));
+    assert!(records.records.iter().all(CheckRecord::passed));
     let log = fs::read_to_string(diagnostic_log.path).unwrap();
     assert!(log.contains(r#""event":"model.failure""#));
     assert!(log.contains(r#""event":"thread.restart""#));

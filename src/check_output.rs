@@ -1,4 +1,8 @@
-use crate::*;
+use crate::check_result::report_output_skipped_count;
+use crate::logging::{append_json_string_array, push_json_control_escape};
+use crate::types::{CheckRecord, CheckRunReport, ObservedAnswerState, ParsedAnswer};
+use std::io::Write;
+use std::time::Duration;
 
 pub(crate) fn write_and_flush_result_output(
     result_output: &mut Option<&mut dyn Write>,
@@ -8,6 +12,38 @@ pub(crate) fn write_and_flush_result_output(
         let line = render_check_output_record(record);
         writer
             .write_all(line.as_bytes())
+            .map_err(|err| format!("failed to write check result to stdout: {}", err))?;
+        writer
+            .flush()
+            .map_err(|err| format!("failed to flush check result to stdout: {}", err))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn write_and_flush_result_prefix(
+    result_output: &mut Option<&mut dyn Write>,
+    display_id: &str,
+) -> Result<(), String> {
+    if let Some(writer) = result_output.as_mut() {
+        let prefix = format!("{}. ", display_id);
+        writer
+            .write_all(prefix.as_bytes())
+            .map_err(|err| format!("failed to write check result prefix to stdout: {}", err))?;
+        writer
+            .flush()
+            .map_err(|err| format!("failed to flush check result prefix to stdout: {}", err))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn write_and_flush_result_output_after_prefix(
+    result_output: &mut Option<&mut dyn Write>,
+    record: &CheckRecord,
+) -> Result<(), String> {
+    if let Some(writer) = result_output.as_mut() {
+        let suffix = render_check_output_record_after_prefix(record);
+        writer
+            .write_all(suffix.as_bytes())
             .map_err(|err| format!("failed to write check result to stdout: {}", err))?;
         writer
             .flush()
@@ -96,12 +132,19 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
     output
 }
 
+fn render_check_output_record_after_prefix(record: &CheckRecord) -> String {
+    let full = render_check_output_record(record);
+    let prefix = format!("{}. ", record.display_id);
+    full.strip_prefix(&prefix).unwrap_or(&full).to_string()
+}
+
 pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
     // Summary order is fixed to match the spec and pytest-style labels:
     // failed, error/errors, passed, skipped.
-    // `report.skipped` is the final non-selected count. Reusable passing cache
-    // hits are not selected at final reporting time: they produce no
-    // per-expectation stdout and count only in the public skipped total.
+    // `report.skipped` is the final non-selected count. Silent exact-cache
+    // passes are not selected at final reporting time: they produce no
+    // per-expectation stdout and count only in the public skipped total. Failed
+    // exact-cache hits remain selected and count as failures.
     let mut passed = 0usize;
     let mut failed = 0usize;
     let mut errors = 0usize;
@@ -141,10 +184,8 @@ pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -
 
 pub(crate) fn pad_summary_line(inner: &str) -> String {
     const WIDTH: usize = 80;
-    if inner.len() >= WIDTH {
-        return format!("={inner}=");
-    }
-    let padding = WIDTH - inner.len();
+    let width = WIDTH.max(inner.len() + 2);
+    let padding = width - inner.len();
     let left = padding / 2;
     let right = padding - left;
     format!("{}{}{}", "=".repeat(left), inner, "=".repeat(right))
@@ -154,10 +195,7 @@ pub(crate) fn record_requires_human_review(record: &CheckRecord) -> bool {
     // Restricted-scope `idk` records are retried at full scope before output.
     // Any `idk` that reaches final check rendering is therefore the
     // human-review state described by the check-output contract.
-    record.observed == OBSERVED_MALFORMED
-        || record.observed == UNPARSEABLE_OBSERVED
-        || record.observed == EMPTY_EVIDENCE_OBSERVED
-        || record.observed == OBSERVED_IDK
+    ObservedAnswerState::from_observed(&record.observed).requires_human_review()
 }
 
 pub(crate) fn compact_json_string_array(values: &[String]) -> String {

@@ -1,18 +1,30 @@
-use crate::*;
+use crate::fs_util::for_each_nonempty_line;
+use crate::git::resolve_git_path;
+use crate::hash::expectation_id;
+use crate::history::HistoryCache;
+use crate::history_reuse::cooldown_history_record;
+use crate::time::parse_log_record_timestamp;
+use crate::types::{AgentConfig, CheckConfig, CheckOptions, Cooldown, SelectedExpectation};
+use crate::{GIT_CANON_LOG_DIR, RESULT_PASS};
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
+use std::fs;
+use std::path::Path;
 
 pub(crate) fn parse_check_options(
     config: &CheckConfig,
     args: &[OsString],
 ) -> Result<CheckOptions, String> {
-    let mut fail_fast = false;
+    let mut check_all = false;
     let mut ignore_cache = false;
     let mut selectors = Vec::new();
     for arg in args {
-        if arg.to_str() == Some("--fail-fast") {
-            if fail_fast {
-                return Err("duplicate --fail-fast".to_string());
+        if arg.to_str() == Some("--all") {
+            if check_all {
+                return Err("duplicate --all".to_string());
             }
-            fail_fast = true;
+            check_all = true;
         } else if arg.to_str() == Some("--ignore-cache") {
             if ignore_cache {
                 return Err("duplicate --ignore-cache".to_string());
@@ -27,7 +39,7 @@ pub(crate) fn parse_check_options(
     Ok(CheckOptions {
         selected,
         skipped,
-        fail_fast,
+        check_all,
         ignore_cache,
     })
 }
@@ -85,6 +97,35 @@ pub(crate) fn select_expectations(
             })
         })
         .collect::<Result<Vec<_>, _>>()
+}
+
+pub(crate) fn initial_non_selected_expectations(
+    config: &CheckConfig,
+    selected: &[SelectedExpectation],
+) -> Result<Vec<SelectedExpectation>, String> {
+    let selected_ids = selected
+        .iter()
+        .map(|expectation| expectation.id.clone())
+        .collect::<BTreeSet<_>>();
+    let identities = expectation_identities(config)?;
+    Ok(config
+        .expectations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, expectation)| {
+            let identity = identities.get(index)?;
+            let number = index + 1;
+            (!selected_ids.contains(&identity.id)).then(|| SelectedExpectation {
+                number,
+                id: identity.id.clone(),
+                display_id: identity.display_id.clone(),
+                q: expectation.q.clone(),
+                a: expectation.a.clone(),
+                cooldown: None,
+                thinking: expectation.thinking.clone(),
+            })
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone)]
@@ -155,10 +196,10 @@ pub(crate) fn final_selected_expectations(
     history_cache: &mut HistoryCache,
     now: u64,
 ) -> Result<FinalSelection, FinalSelectionError> {
-    // CLI selector filtering happens before this function. This is the shared
-    // final-selection step for `canon check` and `canon gate`: cooldown removes
-    // matching expectations from the selected set before cache reuse or gate
-    // comparison.
+    // CLI selector filtering happens before this shared final-selection step.
+    // After cooldown removes a matching expectation here, both `canon check`
+    // and `canon gate` treat it as non-selected; gate's pseudocode loop receives
+    // the resulting `selected_expectations` set as its input parameter.
     let mut remaining = Vec::new();
     let mut skipped = Vec::new();
     for expectation in selected {
@@ -171,6 +212,119 @@ pub(crate) fn final_selected_expectations(
     Ok(FinalSelection {
         selected: remaining,
         skipped,
+    })
+}
+
+pub(crate) fn order_expectations_by_latest_non_pass(
+    root: &Path,
+    selected: Vec<SelectedExpectation>,
+    history_cache: &mut HistoryCache,
+) -> Result<Vec<SelectedExpectation>, String> {
+    let runtime_non_pass = latest_runtime_non_pass_timestamps(root)?;
+    let mut ordered = selected
+        .into_iter()
+        .enumerate()
+        .map(|(index, expectation)| {
+            let latest = latest_history_non_pass_timestamp(root, &expectation, history_cache)?
+                .into_iter()
+                .chain(runtime_non_pass.get(&expectation.id).copied())
+                .max();
+            Ok(OrderedExpectation {
+                expectation,
+                latest,
+                index,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    ordered.sort_by(|left, right| match (left.latest, right.latest) {
+        (Some(left_time), Some(right_time)) => right_time
+            .cmp(&left_time)
+            .then_with(|| left.index.cmp(&right.index)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => left.index.cmp(&right.index),
+    });
+    Ok(ordered
+        .into_iter()
+        .map(|ordered| ordered.expectation)
+        .collect())
+}
+
+struct OrderedExpectation {
+    expectation: SelectedExpectation,
+    latest: Option<u64>,
+    index: usize,
+}
+
+fn latest_history_non_pass_timestamp(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+) -> Result<Option<u64>, String> {
+    Ok(history_cache
+        .read_records(root, expectation)?
+        .into_iter()
+        .filter(|record| !record.passed())
+        .filter_map(|record| parse_log_record_timestamp(&record.timestamp))
+        .max())
+}
+
+fn latest_runtime_non_pass_timestamps(root: &Path) -> Result<BTreeMap<String, u64>, String> {
+    let log_dir = resolve_git_path(root, GIT_CANON_LOG_DIR)?;
+    let mut latest = BTreeMap::new();
+    if !log_dir.exists() {
+        return Ok(latest);
+    }
+    for entry in fs::read_dir(&log_dir)
+        .map_err(|err| format!("failed to read {}: {}", log_dir.display(), err))?
+    {
+        let entry =
+            entry.map_err(|err| format!("failed to read {}: {}", log_dir.display(), err))?;
+        let path = entry.path();
+        if !path.is_file()
+            || path.extension().and_then(|extension| extension.to_str()) != Some("jsonl")
+        {
+            continue;
+        }
+        collect_runtime_non_pass_timestamps(&path, &mut latest)?;
+    }
+    Ok(latest)
+}
+
+fn collect_runtime_non_pass_timestamps(
+    path: &Path,
+    latest: &mut BTreeMap<String, u64>,
+) -> Result<(), String> {
+    for_each_nonempty_line(path, |line_number, line| {
+        let value = serde_json::from_str::<Value>(&line).map_err(|err| {
+            format!(
+                "invalid runtime log JSON in {} line {}: {}",
+                path.display(),
+                line_number,
+                err
+            )
+        })?;
+        if value.get("event").and_then(Value::as_str) != Some("expectation.result") {
+            return Ok(());
+        }
+        if value.get("result").and_then(Value::as_str) == Some(RESULT_PASS) {
+            return Ok(());
+        }
+        let Some(id) = value.get("id").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        let Some(timestamp) = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(parse_log_record_timestamp)
+        else {
+            return Ok(());
+        };
+        latest
+            .entry(id.to_string())
+            .and_modify(|current| *current = (*current).max(timestamp))
+            .or_insert(timestamp);
+        Ok(())
     })
 }
 

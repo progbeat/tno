@@ -1,4 +1,5 @@
-use crate::*;
+use crate::check_output::record_requires_human_review;
+use crate::types::{CheckRecord, CheckResult, CheckRunReport};
 
 pub(crate) fn report_passed_count(report: &CheckRunReport) -> usize {
     report
@@ -29,7 +30,7 @@ pub(crate) fn report_output_skipped_count(report: &CheckRunReport) -> usize {
     debug_assert!(report.silent <= report.skipped);
     // The check-output contract reports final non-selected expectations. That
     // includes CLI-selector exclusions plus expectations deselected later by
-    // cooldown or reusable passing cache hits.
+    // cooldown or silent exact-cache passes.
     report.skipped
 }
 

@@ -1,4 +1,15 @@
-use crate::*;
+use crate::fs_util::{for_each_nonempty_line, replace_file_with_temp};
+use crate::hash::fnv64_with_seed;
+use crate::history::parse_history_record_line;
+use crate::{
+    COMPACTION_SAMPLE_COUNTER, FNV_OFFSET, HISTORY_COMPACT_KEEP_RECORDS,
+    HISTORY_COMPACT_SAMPLE_INTERVAL,
+};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process;
+use std::sync::atomic::Ordering;
 
 pub(crate) fn should_compact_history(path: &Path) -> Result<bool, String> {
     sample_approximately_one_in(HISTORY_COMPACT_SAMPLE_INTERVAL, "history-compact", path)

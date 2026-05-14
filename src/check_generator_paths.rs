@@ -1,4 +1,9 @@
-use crate::*;
+use crate::check_validation::validate_relative_config_path;
+use crate::project::command_output_trimmed;
+use crate::scope::normalize_repo_path;
+use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 pub(crate) fn expand_generator_paths(
     root: &Path,

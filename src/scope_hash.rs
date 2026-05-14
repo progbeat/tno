@@ -1,4 +1,10 @@
-use crate::*;
+use crate::hash::{full_scope, hash_120};
+use crate::project::command_output_trimmed;
+use crate::scope::sanitize_scope_for_hash;
+use crate::types::AgentConfig;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
 

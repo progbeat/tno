@@ -33,6 +33,7 @@ if ! "$canon_bin" help 2>/dev/null | grep -q "canon gate"; then
 fi
 
 echo "canon pre-commit: running canon gate"
+# This pre-commit hook runs `canon gate`, not `canon check`.
 # `canon gate` is intentionally cache-only: missing cached answers and cached
 # failing answers make the hook exit here without invoking `canon check`.
 # Do not add a separate `.canon/**` preflight here; `canon gate` owns the

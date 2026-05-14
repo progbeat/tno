@@ -1,4 +1,7 @@
-use crate::*;
+use crate::project::{command_output_trimmed, path_from_git_stdout};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub(crate) fn resolve_git_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     let output = Command::new("git")
@@ -16,9 +19,7 @@ pub(crate) fn resolve_git_path(root: &Path, path: &str) -> Result<PathBuf, Strin
             command_output_trimmed(&output.stderr, "git rev-parse stderr")?
         ));
     }
-    let resolved = String::from_utf8(output.stdout)
-        .map_err(|_| "git rev-parse output must be valid UTF-8".to_string())?;
-    Ok(root.join(resolved.trim()))
+    Ok(root.join(path_from_git_stdout(output.stdout)))
 }
 
 pub(crate) fn read_staged_file_content(root: &Path, path: &str) -> Result<String, String> {

@@ -60,6 +60,19 @@ fn reusable_history_record_allows_missing_cache_key() {
 }
 
 #[test]
+fn unknown_observed_history_states_are_not_reusable_answers() {
+    let mut record = sample_record(1, RESULT_FAIL);
+    record.observed = "maybe".to_string();
+
+    assert!(record_requires_human_review(&record));
+    assert!(!is_reusable_history_record(&record));
+
+    record.observed = "z".to_string();
+    assert!(!record_requires_human_review(&record));
+    assert!(is_reusable_history_record(&record));
+}
+
+#[test]
 fn reusable_history_record_uses_scope_hash_not_cache_key_for_changed_evaluator_config() {
     let root = git_project("history-cache-key-not-reuse-gate");
     let old_config = parse_check_config(check_config_yaml()).unwrap();
