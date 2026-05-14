@@ -57,7 +57,7 @@ Token usage: total=<n> input=<n> (+ <n> cached) output=<n> (reasoning <n>)
 
 If token usage data is unavailable, every numeric field is `0`.
 
-Then stdout ends with exactly one summary line:
+Then stdout contains exactly one summary line:
 
 ```text
 ============================= <outcome-list> in <duration>s =============================
@@ -80,6 +80,17 @@ not match the expected answer.
 `errors` is the number of selected expectations whose final result requires
 human review.
 `skipped` is the number of non-selected expectations.
+
+At the end of a `canon check` run, if `canon gate` checks would pass, and at
+least one selected expectation has `pass` in the staged tree while the same
+expectation's result at `HEAD` is not `pass`, then `canon check` writes this
+line to stdout:
+
+```text
+▷ +<n> pass compared to HEAD. Commit staged changes!
+```
+
+For more than one pass, `pass` is pluralized as `passes`.
 
 Warnings, model fallback notices, review-required diagnostics, timestamps,
 hashes, and internal diagnostics are recorded in [[Logs]] rather than stdout or
