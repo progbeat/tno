@@ -74,10 +74,7 @@ pub(crate) fn cooldown_history_record(
         if !record.passed() {
             return Ok(HistoryRecordScan::Done(None));
         }
-        if timestamp > now {
-            return Ok(HistoryRecordScan::Done(None));
-        }
-        if now - timestamp >= cooldown.seconds {
+        if now.saturating_sub(timestamp) >= cooldown.seconds {
             return Ok(HistoryRecordScan::Done(None));
         }
         // Cooldown is deliberately independent of scopeHash. It is the
@@ -94,8 +91,10 @@ pub(crate) fn latest_history_scope_with_cache(
 ) -> Result<Option<Vec<String>>, String> {
     // This returns only an enforced-scope seed for a fresh interrogation. It is
     // not a cached check result and does not let callers skip evaluator work.
+    // The seed still has to come from answer history; legacy human-review
+    // records are not answer records and must not narrow fresh interrogation.
     scan_latest_history_records(root, expectation, history_cache, |record| {
-        Ok(match sanitize_scope_for_hash(&record.scope).ok() {
+        Ok(match sanitized_reusable_history_scope(&record) {
             Some(scope) => HistoryRecordScan::Done(Some(scope)),
             None => HistoryRecordScan::Continue,
         })

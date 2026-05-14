@@ -9,7 +9,7 @@ use crate::check_reporting::{
 };
 use crate::check_selection::initial_non_selected_expectations;
 use crate::logging::DiagnosticLogWriter;
-use crate::types::CheckConfig;
+use crate::types::{CheckConfig, TokenUsage};
 use serde_json::json;
 use std::io;
 use std::path::Path;
@@ -45,6 +45,41 @@ pub(crate) fn run_check_query_command(
         Some(&mut diagnostic_log),
         &mut interrogation_state,
     );
+    let result = match result {
+        Ok(result) => result,
+        Err(err) => {
+            let usage = collect_check_token_usage(&mut execution.runner, &mut diagnostic_log)?;
+            print_token_usage_summary(Some(usage))?;
+            apply_query_lazy_full_scope_reset(root, config, usage, &mut diagnostic_log)?;
+            write_check_finish_event(
+                &mut diagnostic_log,
+                true,
+                CheckFinishStats {
+                    errors: 1,
+                    ..CheckFinishStats::default()
+                },
+                Some(&err),
+            )?;
+            return Err(err);
+        }
+    };
+    // The query answer is the first public stdout piece produced by query mode.
+    // Write and flush it immediately at the command boundary, before token-usage
+    // collection, lazy reset, or finish logging can do later work.
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    if let Err(err) = write_query_output(&mut stdout, &result.answer) {
+        write_check_finish_event(
+            &mut diagnostic_log,
+            true,
+            CheckFinishStats {
+                errors: 1,
+                ..CheckFinishStats::default()
+            },
+            Some(&err),
+        )?;
+        return Err(err);
+    }
     let usage = match collect_check_token_usage(&mut execution.runner, &mut diagnostic_log) {
         Ok(usage) => usage,
         Err(err) => {
@@ -60,38 +95,18 @@ pub(crate) fn run_check_query_command(
             return Err(err);
         }
     };
-    let non_selected = initial_non_selected_expectations(config, &[])?;
-    apply_lazy_full_scope_reset_or_warn(root, config, usage, &non_selected, &mut diagnostic_log);
-    let result = match result {
-        Ok(result) => result,
-        Err(err) => {
-            print_token_usage_summary(Some(usage))?;
-            write_check_finish_event(
-                &mut diagnostic_log,
-                true,
-                CheckFinishStats {
-                    errors: 1,
-                    ..CheckFinishStats::default()
-                },
-                Some(&err),
-            )?;
-            return Err(err);
-        }
-    };
-    let stdout = io::stdout();
-    let mut stdout = stdout.lock();
-    if let Err(err) = write_query_output(&mut stdout, &result.answer) {
-        write_check_finish_event(
-            &mut diagnostic_log,
-            true,
-            CheckFinishStats {
-                errors: 1,
-                ..CheckFinishStats::default()
-            },
-            Some(&err),
-        )?;
-        return Err(err);
-    }
     print_token_usage_summary(Some(usage))?;
+    apply_query_lazy_full_scope_reset(root, config, usage, &mut diagnostic_log)?;
     write_check_finish_event(&mut diagnostic_log, true, CheckFinishStats::default(), None)
+}
+
+fn apply_query_lazy_full_scope_reset(
+    root: &Path,
+    config: &CheckConfig,
+    usage: TokenUsage,
+    diagnostic_log: &mut DiagnosticLogWriter,
+) -> Result<(), String> {
+    let non_selected = initial_non_selected_expectations(config, &[])?;
+    apply_lazy_full_scope_reset_or_warn(root, config, usage, &non_selected, diagnostic_log);
+    Ok(())
 }

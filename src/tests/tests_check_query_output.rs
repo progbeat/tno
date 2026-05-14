@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn check_runner_streams_result_output() {
+fn check_runner_flushes_each_result_output_record() {
     let root = git_project("check-output");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1", "2"], false, true);
@@ -21,7 +21,7 @@ fn check_runner_streams_result_output() {
     )
     .unwrap();
     assert_eq!(records.records.len(), 2);
-    assert_eq!(output.flushes, 4);
+    assert_eq!(output.flushes, 2);
     let lines = String::from_utf8(output.bytes).unwrap();
     assert_eq!(lines.lines().count(), 2);
     assert!(lines.contains(&format!("{}. OK", options.selected[0].display_id)));

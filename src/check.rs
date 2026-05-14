@@ -6,10 +6,7 @@ use crate::check_interrogation_policy::{
     write_scope_narrowing_event, InterrogationCall, ScopedInterrogation,
 };
 use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
-use crate::check_output::{
-    record_requires_human_review, write_and_flush_result_output,
-    write_and_flush_result_output_after_prefix, write_and_flush_result_prefix,
-};
+use crate::check_output::{record_requires_human_review, write_and_flush_result_output};
 use crate::check_preflight::check_interrupted;
 use crate::check_selection::{
     final_selected_expectations, initial_non_selected_expectations,
@@ -204,11 +201,6 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
             }
         }
 
-        run_try!(write_and_flush_result_prefix(
-            &mut result_output,
-            &expectation.display_id
-        ));
-
         // `--ignore-cache` bypasses reusable answer records in the branch above,
         // but it does not erase the interrogation-policy scope seed: a fresh
         // evaluator turn still starts from the latest answer-history scope.
@@ -317,7 +309,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
             run_try!(writer.write_record(&interrogation.record));
         }
         let should_stop = stop_after_non_pass && !interrogation.record.passed();
-        run_try!(write_and_flush_result_output_after_prefix(
+        run_try!(write_and_flush_result_output(
             &mut result_output,
             &interrogation.record
         ));

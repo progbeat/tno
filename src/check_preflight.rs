@@ -1,4 +1,6 @@
-use crate::{handle_sigint, signal, CHECK_INTERRUPTED};
+use crate::CHECK_INTERRUPTED;
+#[cfg(unix)]
+use crate::{handle_sigint, signal};
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::Ordering;

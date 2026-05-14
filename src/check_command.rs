@@ -179,6 +179,9 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
                 &mut diagnostic_log,
             );
             write_check_finish_report_event(&mut diagnostic_log, false, &report, Some(&err.error))?;
+            // The summary line is computed from the final report and elapsed
+            // time here. Per-expectation records have already been flushed as
+            // they were produced inside `run_check_with_runner`.
             write_summary_line(&mut result_output, &report, started.elapsed())?;
             return Err(CommandError::CheckFailed);
         }
@@ -191,6 +194,8 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &mut diagnostic_log,
     );
     write_check_finish_report_event(&mut diagnostic_log, false, &report, None)?;
+    // The summary line does not exist until the final report exists. This call
+    // renders that newly computed stdout piece and flushes it immediately.
     write_summary_line(&mut result_output, &report, started.elapsed())?;
     if report.records.iter().all(CheckRecord::passed) {
         Ok(())

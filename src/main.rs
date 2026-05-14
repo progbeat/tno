@@ -1,4 +1,6 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;

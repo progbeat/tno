@@ -20,38 +20,6 @@ pub(crate) fn write_and_flush_result_output(
     Ok(())
 }
 
-pub(crate) fn write_and_flush_result_prefix(
-    result_output: &mut Option<&mut dyn Write>,
-    display_id: &str,
-) -> Result<(), String> {
-    if let Some(writer) = result_output.as_mut() {
-        let prefix = format!("{}. ", display_id);
-        writer
-            .write_all(prefix.as_bytes())
-            .map_err(|err| format!("failed to write check result prefix to stdout: {}", err))?;
-        writer
-            .flush()
-            .map_err(|err| format!("failed to flush check result prefix to stdout: {}", err))?;
-    }
-    Ok(())
-}
-
-pub(crate) fn write_and_flush_result_output_after_prefix(
-    result_output: &mut Option<&mut dyn Write>,
-    record: &CheckRecord,
-) -> Result<(), String> {
-    if let Some(writer) = result_output.as_mut() {
-        let suffix = render_check_output_record_after_prefix(record);
-        writer
-            .write_all(suffix.as_bytes())
-            .map_err(|err| format!("failed to write check result to stdout: {}", err))?;
-        writer
-            .flush()
-            .map_err(|err| format!("failed to flush check result to stdout: {}", err))?;
-    }
-    Ok(())
-}
-
 pub(crate) fn write_summary_line(
     result_output: &mut dyn Write,
     report: &CheckRunReport,
@@ -130,12 +98,6 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
         output.push('\n');
     }
     output
-}
-
-fn render_check_output_record_after_prefix(record: &CheckRecord) -> String {
-    let full = render_check_output_record(record);
-    let prefix = format!("{}. ", record.display_id);
-    full.strip_prefix(&prefix).unwrap_or(&full).to_string()
 }
 
 pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {

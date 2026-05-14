@@ -58,7 +58,6 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
         now,
     )?;
     let mut missing = Vec::new();
-    let mut failing = Vec::new();
     for expectation in &selected_expectations {
         let previous = exact_gate_cache_result_for_source(
             root,
@@ -78,29 +77,27 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
         )?;
         match current {
             GateCacheResult::Fail(_) if previous.is_fail() => {}
-            GateCacheResult::Fail(record) => failing.push(*record),
+            GateCacheResult::Fail(record) => {
+                write_stderr_line("canon gate: expectations regressed to cached fail:")?;
+                write_stderr(&render_check_log_record(&record))?;
+                return Err(CommandError::GateFailed);
+            }
             GateCacheResult::Missing => missing.push(expectation.clone()),
             GateCacheResult::Pass => {}
         }
     }
 
-    if missing.is_empty() && failing.is_empty() {
+    if missing.is_empty() {
         return Ok(());
     }
-    if !failing.is_empty() {
-        write_stderr_line("canon gate: expectations regressed to cached fail:")?;
-        for record in &failing {
-            write_stderr(&render_check_log_record(record))?;
-        }
-    }
-    if !missing.is_empty() {
-        write_stderr_line(&format!(
-            "canon gate: missing cached answers for expectations: {}",
-            join_display_ids(&missing)
-        ))?;
-        if let Some(advice) = gate_missing_cache_advice(!failing.is_empty()) {
-            write_stderr_line(advice)?;
-        }
+    // This diagnostic names the complete missing set, so the text is only
+    // computed after the selected-expectation scan has finished.
+    write_stderr_line(&format!(
+        "canon gate: missing cached answers for expectations: {}",
+        join_display_ids(&missing)
+    ))?;
+    if let Some(advice) = gate_missing_cache_advice(false) {
+        write_stderr_line(advice)?;
     }
     Err(CommandError::GateFailed)
 }

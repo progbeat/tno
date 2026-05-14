@@ -162,21 +162,21 @@ pub(crate) fn run(args: Vec<OsString>) -> Result<(), CommandError> {
         NoteCommand::Write => {
             let key = require_key(&args, 1)?;
             let text = collect_text_or_stdin(&args, 2)?;
-            // Silent success: this command has no stdout/stderr segment to
-            // flush after the write is complete.
+            // Silent success: this command computes no public stdout/stderr
+            // piece, so there is nothing to write or flush after the mutation.
             write_note(&config, key, &text)?;
         }
         NoteCommand::Append => {
             let key = require_key(&args, 1)?;
             let text = collect_text_or_stdin(&args, 2)?;
-            // Silent success: this command has no stdout/stderr segment to
-            // flush after the append is complete.
+            // Silent success: this command computes no public stdout/stderr
+            // piece, so there is nothing to write or flush after the mutation.
             append_note(&config, key, &text)?;
         }
         NoteCommand::Delete => {
             let key = require_key(&args, 1)?;
-            // Silent success: this command has no stdout/stderr segment to
-            // flush after the delete is complete.
+            // Silent success: this command computes no public stdout/stderr
+            // piece, so there is nothing to write or flush after the mutation.
             delete_note(&config, key)?;
         }
         NoteCommand::Search => {

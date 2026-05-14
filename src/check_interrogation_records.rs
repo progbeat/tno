@@ -141,7 +141,7 @@ fn normalize_empty_evidence_response(
     if response.evidence.trim().is_empty()
         && response.answer != OBSERVED_MALFORMED
         && response.answer != UNPARSEABLE_OBSERVED
-        && !(response.answer == OBSERVED_IDK && enforced_scope != full_scope())
+        && !is_restricted_scope_idk_retry_candidate(&response, enforced_scope)
     {
         return ParsedAnswer {
             answer: EMPTY_EVIDENCE_OBSERVED.to_string(),
@@ -150,6 +150,17 @@ fn normalize_empty_evidence_response(
         };
     }
     response
+}
+
+fn is_restricted_scope_idk_retry_candidate(
+    response: &ParsedAnswer,
+    enforced_scope: &[String],
+) -> bool {
+    // A restricted-scope `idk` is an intermediate non-answer. It must survive
+    // empty-evidence normalization so `interrogate_with_full_scope_retry` can
+    // perform the policy-mandated full-scope retry; only the final response is
+    // subject to the human-review empty-evidence record.
+    response.answer == OBSERVED_IDK && enforced_scope != full_scope()
 }
 
 fn write_review_events(

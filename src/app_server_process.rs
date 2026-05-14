@@ -1,18 +1,20 @@
 use crate::app_server::AppServerRunner;
 use crate::evaluator_config::app_server_args;
-use crate::output::write_stderr_line;
 use crate::types::{AgentConfig, EvaluatorError};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
-use std::io::{self, BufRead, BufReader};
+use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
 
 #[cfg(unix)]
+use std::io;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 pub(crate) fn spawn_app_server_reader(
     stdout: std::process::ChildStdout,
@@ -102,9 +104,7 @@ impl AppServerRunner {
 
 impl Drop for AppServerRunner {
     fn drop(&mut self) {
-        if let Err(err) = terminate_app_server_child(&mut self.child) {
-            let _ = write_stderr_line(&format!("warning: {}", err));
-        }
+        let _ = terminate_app_server_child(&mut self.child);
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }

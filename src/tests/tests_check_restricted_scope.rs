@@ -196,7 +196,7 @@ fn check_runner_starts_from_latest_answer_history_scope_even_when_failed() {
 }
 
 #[test]
-fn check_runner_scope_seed_does_not_require_reusable_history_answer() {
+fn check_runner_scope_seed_ignores_non_reusable_history_answer() {
     let root = git_project("check-history-scope-non-reusable");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -220,17 +220,13 @@ fn check_runner_scope_seed_does_not_require_reusable_history_answer() {
         },
     )
     .unwrap();
-    let mut runner = FakeRunner::new(&[&answer(
-        "yes",
-        "src/main.rs still answers it",
-        &["src/main.rs"],
-    )]);
+    let mut runner = FakeRunner::new(&[&answer("yes", "full project answers it", &["."])]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert!(records.records[0].passed());
-    assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
+    assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }
 

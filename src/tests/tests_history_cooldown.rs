@@ -153,7 +153,7 @@ expectations:
 }
 
 #[test]
-fn cooldown_reuse_rejects_future_dated_pass() {
+fn cooldown_reuse_accepts_future_dated_pass_as_fresh() {
     let root = git_project("history-cooldown-future-pass");
     let config = parse_check_config(
         r#"
@@ -194,7 +194,8 @@ expectations:
     assert!(
         cooldown_history_record(&root, &config.agent, &expectation, &mut history_cache, 30)
             .unwrap()
-            .is_none()
+            .unwrap()
+            .passed()
     );
     let _ = fs::remove_dir_all(root);
 }
