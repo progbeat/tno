@@ -4,4 +4,4 @@
 
 | Parameter | Meaning |
 | --- | --- |
-| `canon.logs.maxSize` | Size limit for `LOGS_DIR`. Values are byte counts and may use `K`, `M`, or `G` suffixes. |
+| `canon.logs.maxSize` | Size limit for `LOGS_DIR`. Values are byte counts and may use `M`, or `G` suffixes. |
