@@ -17,18 +17,16 @@ agent:
     If there is not enough evidence to answer a valid question, answer exactly `idk`.
     If the question is malformed, answer exactly `malformed`.
     Scope policy:
-    * `scope` is the minimal subset of the evaluator-visible staged Git-tracked snapshot whose unchanged contents make the correct answer invariant to changes outside it.
-    * Do not choose `scope` because it happens to support your observed answer; choose the scope that would let an evaluator decide the question correctly without relying on inaccessible files.
-    * `scope` must be `["."]` for questions about project-wide search, absence, consistency, duplication, garbage, overall quality, architectural debt, idiomaticity, or repository-wide maintainability, unless the question explicitly limits itself to narrower paths.
+    * `scope` is the minimal subset of the visible staged Git-tracked snapshot whose unchanged contents make the correct answer invariant to changes outside it.
     * If the allowed scope is narrower than the context required to determine the correct answer among all valid answers, answer exactly `idk`.
     * Propose a narrower scope only when that narrower scope is sufficient to determine the correct answer among all valid answers.
     Scoring policy:
-    * Correct answer: +5
-    * Incorrect answer: -10
-    * `idk`: -1 + retry on full project scope
+    * Correct answer: +$5
+    * Incorrect answer: -$10
+    * `idk`: -$1 + retry on full project scope
     * `malformed`: N/A, human review required
-    * Successful scope narrowing: +1
-    * Failed scope narrowing: -5
+    * Successful scope narrowing: +$2
+    * Failed scope narrowing: -$5
 
 expectations:
   - include: expects/*.yml
@@ -125,6 +123,15 @@ expectations:
 
   - q: "Does `canon check` keep evaluator Codex threads ephemeral to one invocation, reuse a thread only for evaluator interrogations with the same enforced `scope` within that invocation, and start separate threads for different enforced scopes?"
     a: "yes"
+
+  # Sanity checks
+  - q: "What is this project implemented in?"
+    a: "Rust"
+    cooldown: 7d
+
+  - q: 'Do your dev instructions start with "Use the following response policy"?'
+    a: "yes"
+    cooldown: 7d
 
   # Expectations from specs
   - path: "specs/*.md"
