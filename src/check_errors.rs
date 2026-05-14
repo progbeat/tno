@@ -1,6 +1,6 @@
 use crate::history_cache_key::history_cache_key;
 use crate::scope_hash::ScopeHashCache;
-use crate::time::{format_log_record_timestamp, unix_timestamp};
+use crate::time::{format_record_timestamp, unix_timestamp};
 use crate::types::{AgentConfig, CheckRecord, CheckResult, SelectedExpectation};
 use crate::UNPARSEABLE_OBSERVED;
 use std::path::Path;
@@ -15,7 +15,7 @@ pub(crate) fn error_record_from_interrogation_error(
 ) -> Result<CheckRecord, String> {
     let scope_hash = scope_hash_cache.staged_scope_hash(root, agent, scope)?;
     Ok(CheckRecord {
-        timestamp: format_log_record_timestamp(unix_timestamp()?),
+        timestamp: format_record_timestamp(unix_timestamp()?),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
         number: expectation.number,

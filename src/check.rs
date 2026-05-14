@@ -6,6 +6,7 @@ use crate::check_interrogation_policy::{
     write_scope_narrowing_event, InterrogationCall, ScopedInterrogation,
 };
 use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
+use crate::check_order_state::write_latest_non_pass_record;
 use crate::check_output::{record_requires_human_review, write_and_flush_result_output};
 use crate::check_preflight::check_interrupted;
 use crate::check_selection::{
@@ -305,6 +306,11 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 &mut history_cache,
             ));
         }
+        run_try!(write_latest_non_pass_record(
+            root,
+            expectation,
+            &interrogation.record
+        ));
         if let Some(writer) = diagnostic_log.as_deref_mut() {
             run_try!(writer.write_record(&interrogation.record));
         }

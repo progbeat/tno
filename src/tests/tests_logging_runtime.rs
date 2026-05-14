@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn log_timestamp_uses_utc_rfc3339_format() {
-    assert_eq!(format_log_record_timestamp(0), "1970-01-01T00:00:00Z");
+    assert_eq!(format_record_timestamp(0), "1970-01-01T00:00:00Z");
 }
 
 #[test]
@@ -49,12 +49,13 @@ fn diagnostic_log_rotates_at_start_when_active_file_is_large() {
     let root = git_project("check-log-rotate");
     let log_dir = root.join(".git/canon/logs");
     fs::create_dir_all(&log_dir).unwrap();
-    let config = diagnostic_log_config();
+    let config = diagnostic_log_config(&root).unwrap();
     assert_eq!(config.max_bytes, 1024 * 1024);
     assert_eq!(config.files.len(), 8);
+    let active_limit = config.max_bytes / config.files.len() as u64;
     fs::write(
         log_dir.join("0.jsonl"),
-        "x".repeat((config.max_bytes + 1) as usize),
+        "x".repeat((active_limit + 1) as usize),
     )
     .unwrap();
     for (index, file_name) in config.files.iter().enumerate().skip(1) {
@@ -66,7 +67,7 @@ fn diagnostic_log_rotates_at_start_when_active_file_is_large() {
     assert!(!log_dir.join("0.jsonl").exists());
     assert_eq!(
         fs::read_to_string(log_dir.join("1.jsonl")).unwrap().len(),
-        (config.max_bytes + 1) as usize
+        (active_limit + 1) as usize
     );
     for (index, file_name) in config.files.iter().enumerate().skip(2) {
         assert_eq!(
@@ -82,10 +83,11 @@ fn append_runtime_log_event_rotates_before_writing() {
     let root = git_project("runtime-log-append-rotate");
     let log_dir = root.join(".git/canon/logs");
     fs::create_dir_all(&log_dir).unwrap();
-    let config = diagnostic_log_config();
+    let config = diagnostic_log_config(&root).unwrap();
+    let active_limit = config.max_bytes / config.files.len() as u64;
     fs::write(
         log_dir.join("0.jsonl"),
-        "x".repeat((config.max_bytes + 1) as usize),
+        "x".repeat((active_limit + 1) as usize),
     )
     .unwrap();
 
@@ -95,7 +97,90 @@ fn append_runtime_log_event_rotates_before_writing() {
     assert!(active.contains(r#""event":"worktree.restore.failed""#));
     assert_eq!(
         fs::read_to_string(log_dir.join("1.jsonl")).unwrap().len(),
-        (config.max_bytes + 1) as usize
+        (active_limit + 1) as usize
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn diagnostic_log_config_reads_git_max_size() {
+    let root = git_project("runtime-log-config");
+    let output = Command::new("git")
+        .args(["config", "canon.logs.maxSize", "2M"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let config = diagnostic_log_config(&root).unwrap();
+
+    assert_eq!(config.max_bytes, 2 * 1024 * 1024);
+    assert_eq!(config.files.len(), 8);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn diagnostic_log_rotation_prunes_to_configured_total_size() {
+    let root = git_project("runtime-log-total-size");
+    let output = Command::new("git")
+        .args(["config", "canon.logs.maxSize", "1024"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let log_dir = root.join(".git/canon/logs");
+    fs::create_dir_all(&log_dir).unwrap();
+    let config = diagnostic_log_config(&root).unwrap();
+    let active_limit = config.max_bytes / config.files.len() as u64;
+    fs::write(
+        log_dir.join("0.jsonl"),
+        "x".repeat((active_limit + 1) as usize),
+    )
+    .unwrap();
+    for file_name in config.files.iter().skip(1) {
+        fs::write(log_dir.join(file_name), "x".repeat(300)).unwrap();
+    }
+
+    let writer = DiagnosticLogWriter::create(&root).unwrap();
+
+    assert_eq!(writer.path, log_dir.join("0.jsonl"));
+    let total: u64 = config
+        .files
+        .iter()
+        .map(|file_name| log_dir.join(file_name))
+        .filter_map(|path| path.metadata().ok())
+        .map(|metadata| metadata.len())
+        .sum();
+    assert!(total <= config.max_bytes);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn append_runtime_log_event_prunes_after_writing() {
+    let root = git_project("runtime-log-post-write-prune");
+    let output = Command::new("git")
+        .args(["config", "canon.logs.maxSize", "512"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let log_dir = root.join(".git/canon/logs");
+    fs::create_dir_all(&log_dir).unwrap();
+    let config = diagnostic_log_config(&root).unwrap();
+    fs::write(log_dir.join("1.jsonl"), "x".repeat(450)).unwrap();
+
+    append_runtime_log_event(&root, "info", "post.write.prune", &[]).unwrap();
+
+    let total: u64 = config
+        .files
+        .iter()
+        .map(|file_name| log_dir.join(file_name))
+        .filter_map(|path| path.metadata().ok())
+        .map(|metadata| metadata.len())
+        .sum();
+    assert!(total <= config.max_bytes);
+    assert!(fs::read_to_string(log_dir.join("0.jsonl"))
+        .unwrap()
+        .contains(r#""event":"post.write.prune""#));
     let _ = fs::remove_dir_all(root);
 }

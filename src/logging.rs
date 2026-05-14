@@ -1,7 +1,8 @@
 use crate::fs_util::ensure_dir;
 use crate::git::resolve_git_path;
+use crate::project::command_output_trimmed;
 use crate::repo_inspection::RepoInspectionCache;
-use crate::time::{format_log_record_timestamp, unix_timestamp};
+use crate::time::{format_record_timestamp, unix_timestamp};
 use crate::types::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::{DiagnosticLogConfig, DEFAULT_DIAGNOSTIC_LOG_CONFIG, GIT_CANON_LOG_DIR};
 use serde::ser::SerializeMap;
@@ -10,6 +11,9 @@ use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const LOG_MAX_SIZE_CONFIG_KEY: &str = "canon.logs.maxSize";
 
 #[cfg(test)]
 pub(crate) fn write_diagnostic_log(
@@ -26,6 +30,8 @@ pub(crate) fn write_diagnostic_log(
 
 pub(crate) struct DiagnosticLogWriter {
     pub(crate) path: PathBuf,
+    log_dir: PathBuf,
+    config: DiagnosticLogConfig,
     file: Option<fs::File>,
 }
 
@@ -42,9 +48,15 @@ impl DiagnosticLogWriter {
     ) -> Result<DiagnosticLogWriter, String> {
         let log_dir = cache.git_path(root, GIT_CANON_LOG_DIR)?;
         ensure_dir(&log_dir)?;
-        rotate_diagnostic_logs_if_needed(&log_dir)?;
+        let config = diagnostic_log_config(root)?;
+        rotate_diagnostic_logs_with_config(&log_dir, &config)?;
         let path = log_dir.join("0.jsonl");
-        Ok(DiagnosticLogWriter { path, file: None })
+        Ok(DiagnosticLogWriter {
+            path,
+            log_dir,
+            config,
+            file: None,
+        })
     }
 
     pub(crate) fn write_record(&mut self, record: &CheckRecord) -> Result<(), String> {
@@ -97,7 +109,9 @@ impl DiagnosticLogWriter {
         file.write_all(line.as_bytes())
             .map_err(|err| format!("failed to write {}: {}", self.path.display(), err))?;
         file.flush()
-            .map_err(|err| format!("failed to flush {}: {}", self.path.display(), err))
+            .map_err(|err| format!("failed to flush {}: {}", self.path.display(), err))?;
+        self.file = None;
+        prune_diagnostic_logs_to_limit(&self.log_dir, &self.config)
     }
 }
 
@@ -109,8 +123,9 @@ pub(crate) fn append_runtime_log_event(
 ) -> Result<(), String> {
     let log_dir = resolve_git_path(root, GIT_CANON_LOG_DIR)?;
     ensure_dir(&log_dir)?;
-    rotate_diagnostic_logs_if_needed(&log_dir)?;
-    let path = log_dir.join(diagnostic_log_config().files[0]);
+    let config = diagnostic_log_config(root)?;
+    rotate_diagnostic_logs_with_config(&log_dir, &config)?;
+    let path = log_dir.join(config.files[0]);
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -120,45 +135,148 @@ pub(crate) fn append_runtime_log_event(
     file.write_all(line.as_bytes())
         .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
     file.flush()
-        .map_err(|err| format!("failed to flush {}: {}", path.display(), err))
+        .map_err(|err| format!("failed to flush {}: {}", path.display(), err))?;
+    drop(file);
+    prune_diagnostic_logs_to_limit(&log_dir, &config)
 }
 
-pub(crate) fn rotate_diagnostic_logs_if_needed(log_dir: &Path) -> Result<(), String> {
-    let config = diagnostic_log_config();
+fn rotate_diagnostic_logs_with_config(
+    log_dir: &Path,
+    config: &DiagnosticLogConfig,
+) -> Result<(), String> {
     let active = log_dir.join(config.files[0]);
+    let active_limit = active_log_max_bytes(config);
     let should_rotate = active
         .metadata()
-        .map(|metadata| metadata.len() > config.max_bytes)
+        .map(|metadata| metadata.len() > active_limit)
         .unwrap_or(false);
-    if !should_rotate {
-        return Ok(());
+    if should_rotate {
+        let oldest = log_dir.join(config.files[config.files.len() - 1]);
+        if oldest.exists() {
+            fs::remove_file(&oldest)
+                .map_err(|err| format!("failed to remove {}: {}", oldest.display(), err))?;
+        }
+        for index in (0..config.files.len() - 1).rev() {
+            let from = log_dir.join(config.files[index]);
+            if from.exists() {
+                let to = log_dir.join(config.files[index + 1]);
+                fs::rename(&from, &to).map_err(|err| {
+                    format!(
+                        "failed to rename {} to {}: {}",
+                        from.display(),
+                        to.display(),
+                        err
+                    )
+                })?;
+            }
+        }
     }
-    let oldest = log_dir.join(config.files[config.files.len() - 1]);
-    if oldest.exists() {
-        fs::remove_file(&oldest)
-            .map_err(|err| format!("failed to remove {}: {}", oldest.display(), err))?;
+    prune_diagnostic_logs_to_limit(log_dir, config)?;
+    Ok(())
+}
+
+pub(crate) fn diagnostic_log_config(root: &Path) -> Result<DiagnosticLogConfig, String> {
+    Ok(DiagnosticLogConfig {
+        max_bytes: configured_log_max_size(root)?,
+        files: DEFAULT_DIAGNOSTIC_LOG_CONFIG.files,
+    })
+}
+
+fn configured_log_max_size(root: &Path) -> Result<u64, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("config")
+        .arg("--get")
+        .arg(LOG_MAX_SIZE_CONFIG_KEY)
+        .output()
+        .map_err(|err| format!("failed to run git config: {}", err))?;
+    let stdout = command_output_trimmed(&output.stdout, "git config stdout")?;
+    let stderr = command_output_trimmed(&output.stderr, "git config stderr")?;
+    if output.status.success() {
+        return parse_log_max_size(stdout);
     }
-    for index in (0..config.files.len() - 1).rev() {
-        let from = log_dir.join(config.files[index]);
-        if from.exists() {
-            let to = log_dir.join(config.files[index + 1]);
-            fs::rename(&from, &to).map_err(|err| {
-                format!(
-                    "failed to rename {} to {}: {}",
-                    from.display(),
-                    to.display(),
-                    err
-                )
-            })?;
+    if stdout.is_empty() && stderr.is_empty() {
+        return Ok(DEFAULT_DIAGNOSTIC_LOG_CONFIG.max_bytes);
+    }
+    Err(format!(
+        "failed to read git config {}: {}",
+        LOG_MAX_SIZE_CONFIG_KEY, stderr
+    ))
+}
+
+fn parse_log_max_size(value: &str) -> Result<u64, String> {
+    if value.is_empty() {
+        return Err(format!("{} must not be empty", LOG_MAX_SIZE_CONFIG_KEY));
+    }
+    let (digits, multiplier) = match value.as_bytes().last().copied() {
+        Some(b'M') => (&value[..value.len() - 1], 1024 * 1024),
+        Some(b'G') => (&value[..value.len() - 1], 1024 * 1024 * 1024),
+        Some(byte) if byte.is_ascii_digit() => (value, 1),
+        _ => {
+            return Err(format!(
+                "{} must be a byte count with optional M or G suffix",
+                LOG_MAX_SIZE_CONFIG_KEY
+            ));
+        }
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(format!(
+            "{} must be a byte count with optional M or G suffix",
+            LOG_MAX_SIZE_CONFIG_KEY
+        ));
+    }
+    digits
+        .parse::<u64>()
+        .map_err(|_| format!("{} value is too large", LOG_MAX_SIZE_CONFIG_KEY))?
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("{} value is too large", LOG_MAX_SIZE_CONFIG_KEY))
+}
+
+fn active_log_max_bytes(config: &DiagnosticLogConfig) -> u64 {
+    (config.max_bytes / config.files.len() as u64).max(1)
+}
+
+fn prune_diagnostic_logs_to_limit(
+    log_dir: &Path,
+    config: &DiagnosticLogConfig,
+) -> Result<(), String> {
+    for index in (1..config.files.len()).rev() {
+        if diagnostic_log_dir_size(log_dir, config)? <= config.max_bytes {
+            return Ok(());
+        }
+        let path = log_dir.join(config.files[index]);
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|err| format!("failed to remove {}: {}", path.display(), err))?;
+        }
+    }
+    if diagnostic_log_dir_size(log_dir, config)? > config.max_bytes {
+        let active = log_dir.join(config.files[0]);
+        if active.exists() {
+            fs::remove_file(&active)
+                .map_err(|err| format!("failed to remove {}: {}", active.display(), err))?;
         }
     }
     Ok(())
 }
 
-pub(crate) fn diagnostic_log_config() -> &'static DiagnosticLogConfig {
-    // The public Logs spec deliberately avoids concrete retention values. The
-    // configured policy lives here as implementation defaults.
-    &DEFAULT_DIAGNOSTIC_LOG_CONFIG
+fn diagnostic_log_dir_size(log_dir: &Path, config: &DiagnosticLogConfig) -> Result<u64, String> {
+    let mut total = 0u64;
+    for file_name in config.files {
+        let path = log_dir.join(file_name);
+        if !path.exists() {
+            continue;
+        }
+        let size = path
+            .metadata()
+            .map_err(|err| format!("failed to stat {}: {}", path.display(), err))?
+            .len();
+        total = total
+            .checked_add(size)
+            .ok_or_else(|| format!("{} size is too large", log_dir.display()))?;
+    }
+    Ok(total)
 }
 
 pub(crate) fn render_runtime_log_event(
@@ -167,7 +285,7 @@ pub(crate) fn render_runtime_log_event(
     fields: &[(&str, Value)],
 ) -> Result<String, String> {
     let event = RuntimeLogEvent {
-        timestamp: format_log_record_timestamp(unix_timestamp()?),
+        timestamp: format_record_timestamp(unix_timestamp()?),
         level,
         event,
         extra: fields,

@@ -175,7 +175,7 @@ expectations:
     let expectation = options.selected[0].clone();
     let old_hash = "old-scope".to_string();
     let mut record = expectation_record(&config.agent, &expectation, "pass", "yes", old_hash);
-    record.timestamp = format_log_record_timestamp(unix_timestamp().unwrap());
+    record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
     let mut runner = FakeRunner::new(&[]);
     let mut output = FlushCountingWriter::new();
@@ -223,7 +223,7 @@ expectations:
     let expectation = options.selected[0].clone();
     let old_hash = "old-scope".to_string();
     let mut record = expectation_record(&config.agent, &expectation, "pass", "yes", old_hash);
-    record.timestamp = format_log_record_timestamp(unix_timestamp().unwrap());
+    record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
     let mut runner = FakeRunner::new(&[]);
 

@@ -5,7 +5,7 @@ pub(crate) fn unix_timestamp() -> Result<u64, String> {
         .map_err(|err| format!("system time is before UNIX_EPOCH: {}", err))
 }
 
-pub(crate) fn format_log_record_timestamp(seconds: u64) -> String {
+pub(crate) fn format_record_timestamp(seconds: u64) -> String {
     let (year, month, day, hour, minute, second) = utc_parts_from_unix_seconds(seconds);
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
@@ -13,7 +13,7 @@ pub(crate) fn format_log_record_timestamp(seconds: u64) -> String {
     )
 }
 
-pub(crate) fn parse_log_record_timestamp(value: &str) -> Option<u64> {
+pub(crate) fn parse_record_timestamp(value: &str) -> Option<u64> {
     if value.len() != 20 || !value.ends_with('Z') {
         return None;
     }

@@ -72,6 +72,7 @@ mod check_interrogation_state;
 mod check_lazy_reset;
 mod check_model_fallback;
 mod check_narrowing;
+mod check_order_state;
 mod check_output;
 mod check_preflight;
 mod check_query;

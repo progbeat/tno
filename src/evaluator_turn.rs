@@ -3,7 +3,7 @@ use crate::hash::full_scope;
 use crate::history_cache_key::history_cache_key;
 use crate::history_reuse::is_reusable_history_record;
 use crate::logging::DiagnosticLogWriter;
-use crate::time::{format_log_record_timestamp, unix_timestamp};
+use crate::time::{format_record_timestamp, unix_timestamp};
 use crate::types::{
     AgentConfig, CheckRecord, CheckResult, EvaluatorError, EvaluatorRunner, ObservedAnswerState,
     ParsedAnswer, SelectedExpectation, TokenUsage,
@@ -96,7 +96,7 @@ pub(crate) fn record_from_response(
         CheckResult::Fail
     };
     Ok(CheckRecord {
-        timestamp: format_log_record_timestamp(unix_timestamp()?),
+        timestamp: format_record_timestamp(unix_timestamp()?),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
         number: expectation.number,

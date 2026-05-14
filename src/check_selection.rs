@@ -1,15 +1,11 @@
-use crate::fs_util::for_each_nonempty_line;
-use crate::git::resolve_git_path;
+use crate::check_order_state::latest_recorded_non_pass_timestamp;
 use crate::hash::expectation_id;
 use crate::history::HistoryCache;
 use crate::history_reuse::cooldown_history_record;
-use crate::time::parse_log_record_timestamp;
+use crate::time::parse_record_timestamp;
 use crate::types::{AgentConfig, CheckConfig, CheckOptions, Cooldown, SelectedExpectation};
-use crate::{GIT_CANON_LOG_DIR, RESULT_PASS};
-use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::fs;
 use std::path::Path;
 
 pub(crate) fn parse_check_options(
@@ -220,14 +216,13 @@ pub(crate) fn order_expectations_by_latest_non_pass(
     selected: Vec<SelectedExpectation>,
     history_cache: &mut HistoryCache,
 ) -> Result<Vec<SelectedExpectation>, String> {
-    let runtime_non_pass = latest_runtime_non_pass_timestamps(root)?;
     let mut ordered = selected
         .into_iter()
         .enumerate()
         .map(|(index, expectation)| {
             let latest = latest_history_non_pass_timestamp(root, &expectation, history_cache)?
                 .into_iter()
-                .chain(runtime_non_pass.get(&expectation.id).copied())
+                .chain(latest_recorded_non_pass_timestamp(root, &expectation)?)
                 .max();
             Ok(OrderedExpectation {
                 expectation,
@@ -261,71 +256,14 @@ fn latest_history_non_pass_timestamp(
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
 ) -> Result<Option<u64>, String> {
+    // This reads answer-history cache records, not runtime logs. Runtime logs
+    // are diagnostic output and must not feed selection/order behavior.
     Ok(history_cache
         .read_records(root, expectation)?
         .into_iter()
         .filter(|record| !record.passed())
-        .filter_map(|record| parse_log_record_timestamp(&record.timestamp))
+        .filter_map(|record| parse_record_timestamp(&record.timestamp))
         .max())
-}
-
-fn latest_runtime_non_pass_timestamps(root: &Path) -> Result<BTreeMap<String, u64>, String> {
-    let log_dir = resolve_git_path(root, GIT_CANON_LOG_DIR)?;
-    let mut latest = BTreeMap::new();
-    if !log_dir.exists() {
-        return Ok(latest);
-    }
-    for entry in fs::read_dir(&log_dir)
-        .map_err(|err| format!("failed to read {}: {}", log_dir.display(), err))?
-    {
-        let entry =
-            entry.map_err(|err| format!("failed to read {}: {}", log_dir.display(), err))?;
-        let path = entry.path();
-        if !path.is_file()
-            || path.extension().and_then(|extension| extension.to_str()) != Some("jsonl")
-        {
-            continue;
-        }
-        collect_runtime_non_pass_timestamps(&path, &mut latest)?;
-    }
-    Ok(latest)
-}
-
-fn collect_runtime_non_pass_timestamps(
-    path: &Path,
-    latest: &mut BTreeMap<String, u64>,
-) -> Result<(), String> {
-    for_each_nonempty_line(path, |line_number, line| {
-        let value = serde_json::from_str::<Value>(&line).map_err(|err| {
-            format!(
-                "invalid runtime log JSON in {} line {}: {}",
-                path.display(),
-                line_number,
-                err
-            )
-        })?;
-        if value.get("event").and_then(Value::as_str) != Some("expectation.result") {
-            return Ok(());
-        }
-        if value.get("result").and_then(Value::as_str) == Some(RESULT_PASS) {
-            return Ok(());
-        }
-        let Some(id) = value.get("id").and_then(Value::as_str) else {
-            return Ok(());
-        };
-        let Some(timestamp) = value
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(parse_log_record_timestamp)
-        else {
-            return Ok(());
-        };
-        latest
-            .entry(id.to_string())
-            .and_modify(|current| *current = (*current).max(timestamp))
-            .or_insert(timestamp);
-        Ok(())
-    })
 }
 
 pub(crate) fn parse_cooldown(value: &str) -> Result<Cooldown, String> {

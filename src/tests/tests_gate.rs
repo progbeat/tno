@@ -178,7 +178,7 @@ expectations:
     let old_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
     let mut record =
         expectation_record(&config.agent, &expectation, "pass", "yes", old_hash.clone());
-    record.timestamp = format_log_record_timestamp(unix_timestamp().unwrap());
+    record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
     fs::write(root.join("README.md"), "changed\n").unwrap();
     Command::new("git")
@@ -243,7 +243,7 @@ expectations:
         "yes",
         "old".to_string(),
     );
-    pass.timestamp = format_log_record_timestamp(unix_timestamp().unwrap());
+    pass.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &pass).unwrap();
 
     let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);

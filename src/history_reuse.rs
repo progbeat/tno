@@ -1,7 +1,7 @@
 use crate::history::HistoryCache;
 use crate::scope::sanitize_scope_for_hash;
 use crate::scope_hash::{ScopeHashCache, ScopeHashSource};
-use crate::time::parse_log_record_timestamp;
+use crate::time::parse_record_timestamp;
 use crate::types::{AgentConfig, CheckRecord, ObservedAnswerState, SelectedExpectation};
 use std::path::Path;
 
@@ -64,7 +64,7 @@ pub(crate) fn cooldown_history_record(
         return Ok(None);
     };
     scan_latest_history_records(root, expectation, history_cache, |record| {
-        let Some(timestamp) = parse_log_record_timestamp(&record.timestamp) else {
+        let Some(timestamp) = parse_record_timestamp(&record.timestamp) else {
             return Ok(HistoryRecordScan::Continue);
         };
         // Cooldown keys off the latest valid history record, not the latest

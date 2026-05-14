@@ -214,6 +214,11 @@ expectations:
     assert!(!records.records[0].passed());
     assert!(record_requires_human_review(&records.records[0]));
     assert_eq!(records.records[0].observed, "idk");
+    assert!(
+        latest_recorded_non_pass_timestamp(&root, &options.selected[0])
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
@@ -297,8 +302,37 @@ fn selected_expectations_run_latest_non_pass_first() {
 }
 
 #[test]
-fn selected_expectations_use_runtime_log_errors_for_order() {
+fn selected_expectations_use_recorded_errors_for_order() {
     let root = git_project("check-order-runtime-errors");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1", "2"], false, true);
+    let first = options.selected[0].clone();
+    let second = options.selected[1].clone();
+    let mut record = expectation_record(
+        &config.agent,
+        &second,
+        "fail",
+        UNPARSEABLE_OBSERVED,
+        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+    );
+    record.timestamp = "2026-01-01T00:00:00Z".to_string();
+    write_latest_non_pass_record(&root, &second, &record).unwrap();
+    let mut history_cache = HistoryCache::new();
+
+    let ordered = order_expectations_by_latest_non_pass(
+        &root,
+        vec![first, second.clone()],
+        &mut history_cache,
+    )
+    .unwrap();
+
+    assert_eq!(ordered[0].id, second.id);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn selected_expectations_ignore_runtime_log_errors_for_order() {
+    let root = git_project("check-order-ignores-runtime-errors");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1", "2"], false, true);
     let first = options.selected[0].clone();
@@ -320,11 +354,11 @@ fn selected_expectations_use_runtime_log_errors_for_order() {
 
     let ordered = order_expectations_by_latest_non_pass(
         &root,
-        vec![first, second.clone()],
+        vec![first.clone(), second],
         &mut history_cache,
     )
     .unwrap();
 
-    assert_eq!(ordered[0].id, second.id);
+    assert_eq!(ordered[0].id, first.id);
     let _ = fs::remove_dir_all(root);
 }

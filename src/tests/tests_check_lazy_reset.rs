@@ -113,7 +113,7 @@ expectations:
         "yes",
         staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
     );
-    record.timestamp = format_log_record_timestamp(unix_timestamp().unwrap());
+    record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
 
     assert!(

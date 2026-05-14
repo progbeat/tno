@@ -42,6 +42,7 @@ use crate::check_model_fallback::{
     write_model_fallback_events,
 };
 use crate::check_narrowing::scope_narrowing_log_fields;
+use crate::check_order_state::{latest_recorded_non_pass_timestamp, write_latest_non_pass_record};
 use crate::check_output::{
     compact_json_string_array, record_requires_human_review, write_and_flush_result_output,
     write_query_output, write_summary_line,
@@ -156,7 +157,7 @@ use crate::scope_hash::{
 use crate::scope_hash::{ScopeHashCache, ScopeHashSource};
 use crate::staged_worktree::snapshot_parent_outside_worktree;
 use crate::staged_worktree::StagedWorktreeView;
-use crate::time::{format_log_record_timestamp, parse_log_record_timestamp, unix_timestamp};
+use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use crate::types::ModelConfig;
 use crate::types::{
     check_run_error, AgentConfig, CheckCommandArgs, CheckConfig, CheckOptions, CheckRecord,

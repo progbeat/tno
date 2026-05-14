@@ -33,6 +33,9 @@ fn sanitize_scope_paths(
         }
         normalized.push(path);
     }
+    // The guard above rejects an originally empty scope. Reaching full scope
+    // here requires an explicit "." entry or an internal caller that normalized
+    // a current-directory spelling to "." before canonicalization.
     if has_full_scope || normalized.is_empty() {
         Ok(full_scope())
     } else {
