@@ -179,6 +179,7 @@ pub(crate) fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Resul
     }
 }
 
+#[cfg(unix)]
 fn finish_app_server_cleanup(errors: Vec<String>) -> Result<(), String> {
     if errors.is_empty() {
         Ok(())
