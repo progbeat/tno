@@ -2,8 +2,8 @@ version: 1
 
 agent:
   model:
-    primary: gpt-5.3-codex-spark
-    fallbacks: [gpt-5.4-mini]
+    primary: gpt-5.4-mini
+    fallbacks: [gpt-5.3-codex-spark]
   thinking: medium  # off | minimal | low | medium | high | xhigh | adaptive | max
   plugins: []
   ignore:
