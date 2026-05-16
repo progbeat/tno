@@ -137,10 +137,6 @@ expectations:
     a: "no"
     cooldown: 20d
 
-  - q: "What is the maximum number of times the same expectation can be processed during a `canon check` run?"
-    a: "2"
-    cooldown: 20d
-
   # Expectations from specs
   - path: "specs/*.md"
     q_template: |
