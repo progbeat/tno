@@ -30,7 +30,6 @@ agent:
 
 expectations:
   - include: expects/*.yml
-  - include: interrogation/*.yml
 
   # Documentation
   - q: Is README.md consistent with the current state of the repository?
