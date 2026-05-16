@@ -1,5 +1,7 @@
 # `canon check` Order
 
+## Default Policy
+
 `canon check` runs the selected expectations by descending time of each
 expectation's latest final non-pass result.
 
