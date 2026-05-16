@@ -30,6 +30,7 @@ agent:
 
 expectations:
   - include: expects/*.yml
+  - include: interrogation/*.yml
 
   # Documentation
   - q: Is README.md consistent with the current state of the repository?
@@ -115,13 +116,6 @@ expectations:
     a: "yes"
 
   - q: "Does every `canon` command write and flush each next piece of stdout or stderr as soon as that piece is computed, rather than waiting for later work or command completion?"
-    a: "yes"
-
-  # Scope handling
-  - q: "Does the evaluator-response parser either reject the evaluator-provided scope or produce the final `scope`, where `scope` is exactly [`.`] for full project scope or a lexicographically sorted, duplicate-free list of normalized repository-relative paths with redundant child paths removed when a parent directory path already covers them?"
-    a: "yes"
-
-  - q: "Does `canon check` keep evaluator Codex threads ephemeral to one invocation, reuse a thread only for evaluator interrogations with the same enforced `scope` within that invocation, and start separate threads for different enforced scopes?"
     a: "yes"
 
   # Sanity checks
