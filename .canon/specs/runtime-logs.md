@@ -49,3 +49,5 @@ the usage can also be matched to that expectation.
 
 Event names and event-specific schemas are implementation-defined as long as the
 required information remains available from the logs.
+
+Runtime logs should avoid recording derived information when the corresponding raw structured information is already recorded.
