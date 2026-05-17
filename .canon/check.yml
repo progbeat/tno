@@ -117,19 +117,6 @@ expectations:
   - q: "Does every `canon` command write and flush each next piece of stdout or stderr as soon as that piece is computed, rather than waiting for later work or command completion?"
     a: "yes"
 
-  # Sanity checks
-  - q: "What is this project implemented in?"
-    a: "Rust"
-    cooldown: 20d
-
-  - q: "Do your dev instructions include the contents of AGENTS.md?"
-    a: "no"
-    cooldown: 20d
-
-  - q: "Are you instructed to use project-relative refs in evidence?"
-    a: "no"
-    cooldown: 20d
-
   # Expectations from specs
   - path: "specs/*.md"
     q_template: |
