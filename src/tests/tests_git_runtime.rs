@@ -84,7 +84,10 @@ fn staged_worktree_view_exposes_git_status_and_diff() {
         .current_dir(&root)
         .output()
         .unwrap();
+    #[cfg(unix)]
     let mut add_args = vec!["add", "--", "README.md", "ADDED.md", "src/main.rs"];
+    #[cfg(not(unix))]
+    let add_args = vec!["add", "--", "README.md", "ADDED.md", "src/main.rs"];
     #[cfg(unix)]
     add_args.insert(4, literal_added);
     Command::new("git")
