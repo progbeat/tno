@@ -49,7 +49,7 @@ impl DiagnosticLogWriter {
     // effective instructions, evaluator_turn.rs logs agent request/response and
     // per-turn token usage, check_model_fallback.rs logs fallback decisions,
     // check_interrogation_records.rs logs review-required diagnostics, and
-    // check_reporting.rs logs aggregate token usage plus check.finish.
+    // check_reporting.rs logs check.finish.
     #[cfg(test)]
     pub(crate) fn create(root: &Path) -> DiagnosticLogResult<DiagnosticLogWriter> {
         let mut cache = RepoInspectionCache::new();

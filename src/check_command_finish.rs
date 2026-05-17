@@ -1,6 +1,6 @@
 use crate::check::CheckRunCaches;
-use crate::check_lazy_reset::apply_lazy_full_scope_reset_or_warn;
-use crate::check_reporting::{write_check_finish_report_event, write_check_token_usage_event};
+use crate::check_lazy_reset::apply_lazy_full_scope_reset;
+use crate::check_reporting::write_check_finish_event;
 use crate::check_selection::ExpectationIdentity;
 use crate::check_types::{CheckRecord, CheckRunReport, SelectedExpectation};
 use crate::cli::CommandError;
@@ -37,7 +37,7 @@ pub(crate) fn finish_check_report(
     // Per-expectation output, the public token-usage line, and the public
     // summary are written and flushed before this finish step is called. This
     // function only handles pieces that become computable after those steps:
-    // the optional pass-improvement notice and structured finish log records.
+    // the optional pass-improvement notice, lazy reset, and finish lifecycle log.
     write_pass_improvement_notice_if_needed(
         context.root,
         context.config,
@@ -46,15 +46,14 @@ pub(crate) fn finish_check_report(
         context.result_output,
         context.check_caches,
     )?;
-    write_check_token_usage_event(context.diagnostic_log, usage)?;
-    apply_lazy_full_scope_reset_or_warn(
+    apply_lazy_full_scope_reset(
         context.root,
         context.config,
         usage,
         &report.non_selected,
         context.diagnostic_log,
-    );
-    write_check_finish_report_event(context.diagnostic_log, false, report, error)?;
+    )?;
+    write_check_finish_event(context.diagnostic_log, false, error)?;
     Ok(())
 }
 

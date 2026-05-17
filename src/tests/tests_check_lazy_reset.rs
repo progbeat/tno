@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn lazy_full_scope_reset_prunes_only_sampled_narrowed_history() {
+fn lazy_full_scope_reset_sets_only_sampled_narrowed_history_to_full_scope() {
     let root = git_project("check-lazy-reset-history");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectations = check_options(&config, &[], false, true).selected;
@@ -14,21 +14,33 @@ fn lazy_full_scope_reset_prunes_only_sampled_narrowed_history() {
         &expectation_record(&config.agent, &expectations[0], "pass", "yes", first_hash),
     )
     .unwrap();
-    let mut narrowed_record =
-        expectation_record(&config.agent, &expectations[1], "pass", "no", second_hash);
+    let mut narrowed_record = expectation_record(
+        &config.agent,
+        &expectations[1],
+        "pass",
+        "no",
+        second_hash.clone(),
+    );
     narrowed_record.scope = second_scope;
     append_history_record(&root, &expectations[1], &narrowed_record).unwrap();
     let reset_history_path = history_path(&root, &expectations[1]).unwrap();
 
-    assert!(reset_non_selected_expectation_histories(&root, &[expectations[1].clone()]).is_empty());
+    reset_non_selected_expectation_histories(&root, &[expectations[1].clone()]).unwrap();
 
     assert_eq!(
         read_history_records(&root, &expectations[0]).unwrap().len(),
         1
     );
-    assert!(!reset_history_path.exists());
+    assert!(reset_history_path.exists());
     let reset_records = read_history_records(&root, &expectations[1]).unwrap();
-    assert!(reset_records.is_empty());
+    assert_eq!(reset_records.len(), 1);
+    assert_eq!(reset_records[0].scope, full_scope());
+    assert_eq!(reset_records[0].scope_hash, second_hash);
+    assert!(
+        reusable_history_record(&root, &config.agent, &expectations[1])
+            .unwrap()
+            .is_none()
+    );
     let mut history_cache = HistoryCache::new();
     assert_eq!(
         latest_history_scope_with_cache(
@@ -38,7 +50,7 @@ fn lazy_full_scope_reset_prunes_only_sampled_narrowed_history() {
             &mut history_cache,
         )
         .unwrap(),
-        None
+        Some(full_scope())
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -114,14 +126,18 @@ fn lazy_full_scope_reset_preserves_existing_full_scope_pass_when_resetting_narro
     narrowed_record.scope = narrowed_scope;
     append_history_record(&root, &expectation, &narrowed_record).unwrap();
 
-    assert!(
-        reset_non_selected_expectation_histories(&root, std::slice::from_ref(&expectation))
-            .is_empty()
-    );
+    reset_non_selected_expectation_histories(&root, std::slice::from_ref(&expectation)).unwrap();
 
     let records = read_history_records(&root, &expectation).unwrap();
-    assert_eq!(records.len(), 1);
+    assert_eq!(records.len(), 2);
     assert_eq!(records[0].scope, full_scope());
+    assert_eq!(records[1].scope, full_scope());
+    assert_eq!(
+        reusable_history_record(&root, &config.agent, &expectation)
+            .unwrap()
+            .map(|record| record.scope),
+        Some(full_scope())
+    );
     let mut history_cache = HistoryCache::new();
     assert_eq!(
         latest_history_scope_with_cache(&root, &config.agent, &expectation, &mut history_cache,)
@@ -197,7 +213,7 @@ fn lazy_full_scope_reset_does_not_create_missing_history_files() {
     let expectation = check_options(&config, &[], false, true).selected[0].clone();
     let path = history_path(&root, &expectation).unwrap();
 
-    assert!(reset_non_selected_expectation_histories(&root, &[expectation]).is_empty());
+    reset_non_selected_expectation_histories(&root, &[expectation]).unwrap();
 
     assert!(!path.exists());
     let _ = fs::remove_dir_all(root);
@@ -232,10 +248,7 @@ expectations:
     append_history_record(&root, &expectation, &record).unwrap();
     let reset_history_path = history_path(&root, &expectation).unwrap();
 
-    assert!(
-        reset_non_selected_expectation_histories(&root, std::slice::from_ref(&expectation))
-            .is_empty()
-    );
+    reset_non_selected_expectation_histories(&root, std::slice::from_ref(&expectation)).unwrap();
 
     assert!(reset_history_path.exists());
     assert_eq!(read_history_records(&root, &expectation).unwrap().len(), 1);

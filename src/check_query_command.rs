@@ -4,7 +4,6 @@ use crate::check_output::write_query_output;
 use crate::check_query::run_query_with_runner;
 use crate::check_reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
-    write_check_token_usage_event, CheckFinishStats,
 };
 use crate::config_types::CheckConfig;
 use crate::logging::DiagnosticLogWriter;
@@ -59,7 +58,6 @@ pub(crate) fn run_check_query_command(
         Err(err) => {
             let usage = collect_check_token_usage(&mut execution.runner)?;
             print_token_usage_summary(Some(usage))?;
-            write_check_token_usage_event(&mut diagnostic_log, usage)?;
             write_query_error_finish(&mut diagnostic_log, &err)?;
             return Err(err);
         }
@@ -85,24 +83,15 @@ pub(crate) fn run_check_query_command(
     // drained above. Once known, `print_token_usage_summary` writes and flushes
     // the stderr line before the internal finish log event is recorded.
     print_token_usage_summary(Some(usage))?;
-    write_check_token_usage_event(&mut diagnostic_log, usage)?;
     // Query mode is ad-hoc and has no selected/non-selected expectation set.
     // Do not run lazy full-scope reset here; that reset invalidates expectation
     // caches and belongs only to normal expectation-check invocations.
-    write_check_finish_event(&mut diagnostic_log, true, CheckFinishStats::default(), None)
+    write_check_finish_event(&mut diagnostic_log, true, None)
 }
 
 fn write_query_error_finish(
     diagnostic_log: &mut DiagnosticLogWriter,
     err: &str,
 ) -> Result<(), String> {
-    write_check_finish_event(
-        diagnostic_log,
-        true,
-        CheckFinishStats {
-            errors: 1,
-            ..CheckFinishStats::default()
-        },
-        Some(err),
-    )
+    write_check_finish_event(diagnostic_log, true, Some(err))
 }

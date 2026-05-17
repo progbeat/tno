@@ -39,7 +39,6 @@ use crate::check_interrogation_state::{
     evaluator_session_key, should_retry_full_scope_after_restricted_idk, CheckRuntime,
     InterrogationState,
 };
-use crate::check_lazy_reset::apply_lazy_full_scope_reset_or_warn;
 use crate::check_lazy_reset::{
     estimate_staged_project_size_tokens, lazy_full_scope_reset_count, plan_lazy_full_scope_reset,
     reset_non_selected_expectation_histories,
@@ -66,11 +65,8 @@ use crate::check_query::run_query_with_runner;
 use crate::check_query_command::run_check_query_command;
 use crate::check_reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
-    write_check_finish_report_event, CheckFinishStats,
 };
-use crate::check_result::{
-    report_error_count, report_failed_count, report_output_skipped_count, report_passed_count,
-};
+use crate::check_result::report_output_skipped_count;
 use crate::check_selection::{
     expectation_identities, final_selected_expectations, initial_non_selected_expectations,
     order_expectations_by_latest_non_pass, parse_check_options, parse_cooldown,
@@ -109,8 +105,7 @@ use crate::evaluator_scope::parse_scope_strings;
 use crate::evaluator_turn::{
     ask_and_log, ask_once, effective_thinking, evaluator_models, is_context_window_failure,
     is_model_technical_failure, model_label, record_from_response,
-    session_failure_invalidates_thread, token_usage_log_fields, EvaluatorFailureKind,
-    EvaluatorTurnContext,
+    session_failure_invalidates_thread, EvaluatorFailureKind, EvaluatorTurnContext,
 };
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::fs_util::{ensure_dir, for_each_nonempty_line, replace_file_with_temp};

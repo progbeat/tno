@@ -1,4 +1,4 @@
-use crate::check_types::SelectedExpectation;
+use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::fs_util::replace_file_with_temp;
 use crate::git::{read_staged_file_bytes_from_raw_path, staged_tracked_path_bytes};
@@ -48,33 +48,17 @@ pub(crate) fn apply_lazy_full_scope_reset(
             ],
         )
         .map_err(|err| err.to_string())?;
-    for error in reset_non_selected_expectation_histories(root, &reset.expectations) {
+    if let Err(error) = reset_non_selected_expectation_histories(root, &reset.expectations) {
         diagnostic_log
             .write_event(
-                "warning",
+                "error",
                 "lazy_full_scope_reset.error",
-                &[("message", json!(error))],
+                &[("message", json!(error.clone()))],
             )
             .map_err(|err| err.to_string())?;
+        return Err(error);
     }
     Ok(())
-}
-
-pub(crate) fn apply_lazy_full_scope_reset_or_warn(
-    root: &Path,
-    config: &CheckConfig,
-    usage: TokenUsage,
-    non_selected: &[SelectedExpectation],
-    diagnostic_log: &mut DiagnosticLogWriter,
-) {
-    if let Err(err) = apply_lazy_full_scope_reset(root, config, usage, non_selected, diagnostic_log)
-    {
-        let _ = diagnostic_log.write_event(
-            "warning",
-            "lazy_full_scope_reset.failed",
-            &[("message", json!(err))],
-        );
-    }
 }
 
 pub(crate) struct LazyFullScopeResetPlan {
@@ -230,17 +214,12 @@ pub(crate) fn sample_reset_expectations(
 pub(crate) fn reset_non_selected_expectation_histories(
     root: &Path,
     expectations: &[SelectedExpectation],
-) -> Vec<String> {
-    let mut errors = Vec::new();
+) -> Result<(), String> {
     let mut history_cache = HistoryCache::new();
     for expectation in expectations {
-        if let Err(err) =
-            reset_expectation_history_to_full_scope_seed(root, expectation, &mut history_cache)
-        {
-            errors.push(err);
-        }
+        reset_expectation_history_to_full_scope_seed(root, expectation, &mut history_cache)?;
     }
-    errors
+    Ok(())
 }
 
 fn reset_expectation_history_to_full_scope_seed(
@@ -252,33 +231,50 @@ fn reset_expectation_history_to_full_scope_seed(
     if !path.exists() {
         return Ok(());
     }
-    let records = read_history_records_from_path(&path)?;
-    let mut kept = Vec::new();
+    let mut records = read_history_records_from_path(&path)?;
+    let Some(index) = records
+        .iter()
+        .rposition(|record| reusable_record_scope(record, expectation).is_some())
+    else {
+        return Ok(());
+    };
+    if reusable_record_scope(&records[index], expectation)
+        .is_some_and(|scope| scope == full_scope())
+    {
+        return Ok(());
+    }
+
+    // Lazy reset changes only the next interrogation scope seed. Keep the
+    // original scopeHash with the old answer so exact-cache lookup cannot
+    // treat a narrowed answer as a reusable full-scope result.
+    records[index].scope = full_scope();
+    let temp_path = compact_history_temp_path(&path)?;
+    let mut file = fs::File::create(&temp_path)
+        .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
     for record in records {
-        if sanitize_scope_for_hash(&record.scope).is_ok_and(|scope| scope == full_scope()) {
-            kept.push(record);
-        }
-    }
-    if kept.is_empty() {
-        fs::remove_file(&path)
-            .map_err(|err| format!("failed to remove {}: {}", path.display(), err))?;
-    } else {
-        let temp_path = compact_history_temp_path(&path)?;
-        let mut file = fs::File::create(&temp_path)
+        let line = render_check_log_record(&record).map_err(|err| err.to_string())?;
+        file.write_all(line.as_bytes())
             .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-        for record in kept {
-            let line = render_check_log_record(&record).map_err(|err| err.to_string())?;
-            file.write_all(line.as_bytes())
-                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-        }
-        file.flush()
-            .map_err(|err| format!("failed to flush {}: {}", temp_path.display(), err))?;
-        drop(file);
-        replace_file_with_temp(&temp_path, &path)?;
     }
+    file.flush()
+        .map_err(|err| format!("failed to flush {}: {}", temp_path.display(), err))?;
+    drop(file);
+    replace_file_with_temp(&temp_path, &path)?;
     history_cache.records.remove(&path);
     history_cache.reusable_records.clear();
     Ok(())
+}
+
+fn reusable_record_scope(
+    record: &CheckRecord,
+    expectation: &SelectedExpectation,
+) -> Option<Vec<String>> {
+    if !ObservedAnswerState::from_expected_and_observed(&expectation.a, &record.observed)
+        .is_reusable_history()
+    {
+        return None;
+    }
+    sanitize_scope_for_hash(&record.scope).ok()
 }
 
 fn random_reset_seed() -> u64 {

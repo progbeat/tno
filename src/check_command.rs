@@ -8,7 +8,6 @@ use crate::check_preflight::install_sigint_handler;
 use crate::check_query_command::run_check_query_command;
 use crate::check_reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
-    CheckFinishStats,
 };
 use crate::check_selection::{expectation_identities, parse_check_options_with_identities};
 use crate::check_types::{CheckRecord, CheckRunReport};
@@ -222,22 +221,10 @@ fn fail_check_after_start(
 fn write_check_error_finish_event(
     diagnostic_log: &mut DiagnosticLogWriter,
     query: bool,
-    errors: usize,
+    _errors: usize,
     err: &str,
 ) -> Result<(), String> {
-    write_check_finish_event(
-        diagnostic_log,
-        query,
-        check_finish_error_stats(errors),
-        Some(err),
-    )
-}
-
-fn check_finish_error_stats(errors: usize) -> CheckFinishStats {
-    CheckFinishStats {
-        errors,
-        ..CheckFinishStats::default()
-    }
+    write_check_finish_event(diagnostic_log, query, Some(err))
 }
 
 pub(crate) struct PreparedCheckExecution {

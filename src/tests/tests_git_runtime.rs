@@ -137,6 +137,7 @@ fn staged_worktree_view_exposes_git_status_and_diff() {
             .collect::<Vec<_>>();
         assert!(diff_names.iter().any(|path| path == "README.md"));
         assert!(diff_names.iter().any(|path| path == "ADDED.md"));
+        #[cfg(unix)]
         assert!(diff_names.iter().any(|path| path == literal_added));
         assert!(diff_names.iter().any(|path| path == "new-name.txt"));
         assert!(diff_names.iter().any(|path| path == "src/main.rs"));

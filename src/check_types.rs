@@ -281,6 +281,9 @@ pub(crate) struct CheckRunReport {
     // Non-selected expectations that intentionally produce no per-expectation
     // stdout, currently cooldown matches and silent exact-cache passes.
     pub(crate) silent: usize,
+    // Kept for internal assertions around scope-narrowing behavior; public
+    // output and runtime logs rely on the per-event narrowing records instead.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) narrowing: NarrowingStats,
 }
 

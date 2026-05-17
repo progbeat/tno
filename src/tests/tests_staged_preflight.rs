@@ -53,7 +53,7 @@ fn check_command_logs_start_and_finish_for_config_load_failure() {
     let log = fs::read_to_string(root.join(".git/canon/logs/0.jsonl")).unwrap();
     assert!(log.contains(r#""event":"check.start""#));
     assert!(log.contains(r#""event":"check.finish""#));
-    assert!(log.contains(r#""errors":1"#));
+    assert!(!log.contains(r#""errors":"#));
     assert!(log.contains("failed to parse .canon/check.yml"));
     let _ = fs::remove_dir_all(root);
 }
@@ -311,7 +311,7 @@ fn check_command_logs_start_and_finish_for_cache_cleanup_failure() {
     let log = fs::read_to_string(root.join(".git/canon/logs/0.jsonl")).unwrap();
     assert!(log.contains(r#""event":"check.start""#));
     assert!(log.contains(r#""event":"check.finish""#));
-    assert!(log.contains(r#""errors":1"#));
+    assert!(!log.contains(r#""errors":"#));
     assert!(log.contains("failed to read"));
     let _ = fs::remove_dir_all(root);
 }

@@ -29,16 +29,6 @@ pub(crate) fn model_label(model: Option<&str>) -> &str {
     model.unwrap_or("<default>")
 }
 
-pub(crate) fn token_usage_log_fields(usage: TokenUsage) -> Vec<(&'static str, Value)> {
-    vec![
-        ("total", json!(usage.total_tokens)),
-        ("input", json!(usage.input_tokens)),
-        ("cached_input", json!(usage.cached_input_tokens)),
-        ("output", json!(usage.output_tokens)),
-        ("reasoning_output", json!(usage.reasoning_output_tokens)),
-    ]
-}
-
 pub(crate) fn is_model_technical_failure(err: &EvaluatorError) -> bool {
     err.kind()
         .is_some_and(EvaluatorFailureKind::is_model_technical)
