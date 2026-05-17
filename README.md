@@ -13,7 +13,7 @@ That is how this project was built: no human-written implementation code,
 just Codex working against `canon` until the repo satisfied its own canon.
 
 See the canon for canon in [`.canon/check.yml`](.canon/check.yml).
-For terminology used by the CLI and docs, see the [Glossary](GLOSSARY.md).
+For terminology used by the CLI and docs, see the [Glossary](docs/GLOSSARY.md).
 
 ## Install
 
