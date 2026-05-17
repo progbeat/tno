@@ -14,13 +14,14 @@ def stochastic_round(x):
     return n + int(random() < p)
 
 def lazy_full_scope_reset(final_total_tokens, project_size_tokens, non_selected_expectations):
+    candidates = [e for e in non_selected_expectations if e.scope != ["."]]
     num_to_reset = min(
         stochastic_round(0.1 * final_total_tokens / project_size_tokens),
-        len(non_selected_expectations)
+        len(candidates)
     )
-    expectations_to_reset = random.sample(non_selected_expectations, num_to_reset)
+    expectations_to_reset = random.sample(candidates, num_to_reset)
     for expectation in expectations_to_reset:
-        reset_scope_and_invalidate_cache(expectation)
+        set_scope(expectation, ["."])
     # Takes effect starting with the next `canon check` invocation.
 ```
 
