@@ -36,7 +36,7 @@ fn staged_worktree_view_materializes_staged_snapshot_without_touching_worktree()
             fs::read_to_string(snapshot_root.join("README.md")).unwrap(),
             "staged\n"
         );
-        assert!(!snapshot_root.join(".git").exists());
+        assert!(snapshot_root.join(".git").exists());
         assert!(!snapshot_root.join("untracked.txt").exists());
         assert_eq!(
             fs::read_to_string(root.join("README.md")).unwrap(),
@@ -59,6 +59,162 @@ fn staged_worktree_view_materializes_staged_snapshot_without_touching_worktree()
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&diff.stdout).trim(), "README.md");
     assert_eq!(stash_count(&root), stash_count_before);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_worktree_view_exposes_git_status_and_diff() {
+    let root = git_project("staged-snapshot-git-commands");
+    fs::write(root.join("old-name.txt"), "renamed\n").unwrap();
+    Command::new("git")
+        .args(["add", "old-name.txt"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "initial");
+    fs::write(root.join("README.md"), "staged\n").unwrap();
+    fs::write(root.join("ADDED.md"), "added\n").unwrap();
+    let literal_added = ":(literal)added.md";
+    fs::write(root.join(literal_added), "literal added\n").unwrap();
+    fs::remove_file(root.join("src/main.rs")).unwrap();
+    Command::new("git")
+        .args(["mv", "old-name.txt", "new-name.txt"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .arg("--literal-pathspecs")
+        .args([
+            "add",
+            "--",
+            "README.md",
+            "ADDED.md",
+            literal_added,
+            "src/main.rs",
+        ])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    fs::write(root.join("README.md"), "unstaged\n").unwrap();
+
+    {
+        let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        assert_eq!(
+            fs::read_to_string(staged_view.snapshot_root().join("README.md")).unwrap(),
+            "staged\n"
+        );
+
+        let status = Command::new("git")
+            .args(["status", "--short"])
+            .current_dir(staged_view.snapshot_root())
+            .output()
+            .unwrap();
+        assert!(
+            status.status.success(),
+            "{}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+        let status = String::from_utf8_lossy(&status.stdout);
+        assert!(status.lines().any(|line| line == " M README.md"));
+        assert!(status.lines().any(|line| line == " A ADDED.md"));
+        assert!(status.lines().any(|line| line == " A :(literal)added.md"));
+        assert!(status.lines().any(|line| line.contains("new-name.txt")));
+        assert!(status.lines().any(|line| line.contains("old-name.txt")));
+        assert!(status.lines().any(|line| line == " D src/main.rs"));
+
+        let diff_names = Command::new("git")
+            .args(["diff", "--name-only"])
+            .current_dir(staged_view.snapshot_root())
+            .output()
+            .unwrap();
+        assert!(
+            diff_names.status.success(),
+            "{}",
+            String::from_utf8_lossy(&diff_names.stderr)
+        );
+        let diff_names = String::from_utf8_lossy(&diff_names.stdout)
+            .lines()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+        assert!(diff_names.iter().any(|path| path == "README.md"));
+        assert!(diff_names.iter().any(|path| path == "ADDED.md"));
+        assert!(diff_names.iter().any(|path| path == literal_added));
+        assert!(diff_names.iter().any(|path| path == "new-name.txt"));
+        assert!(diff_names.iter().any(|path| path == "src/main.rs"));
+
+        let log = Command::new("git")
+            .args(["log", "--oneline", "-1"])
+            .current_dir(staged_view.snapshot_root())
+            .output()
+            .unwrap();
+        assert!(
+            log.status.success(),
+            "{}",
+            String::from_utf8_lossy(&log.stderr)
+        );
+    }
+
+    assert_eq!(
+        fs::read_to_string(root.join("README.md")).unwrap(),
+        "unstaged\n"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_worktree_view_copies_local_hook_metadata() {
+    let root = git_project("staged-snapshot-hooks");
+    commit_all(&root, "initial");
+    fs::create_dir_all(root.join(PRE_COMMIT_HOOK_PATH).parent().unwrap()).unwrap();
+    fs::write(root.join(PRE_COMMIT_HOOK_PATH), DEFAULT_PRE_COMMIT_HOOK).unwrap();
+    Command::new("git")
+        .args(["config", "--local", "core.hooksPath", GIT_HOOKS_PATH])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    {
+        let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        let hooks_path = Command::new("git")
+            .args(["config", "--local", "--get", "core.hooksPath"])
+            .current_dir(staged_view.snapshot_root())
+            .output()
+            .unwrap();
+        assert!(hooks_path.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&hooks_path.stdout).trim(),
+            GIT_HOOKS_PATH
+        );
+        assert_eq!(
+            fs::read_to_string(staged_view.snapshot_root().join(PRE_COMMIT_HOOK_PATH)).unwrap(),
+            DEFAULT_PRE_COMMIT_HOOK
+        );
+    }
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_scope_hash_ignores_local_git_hook_metadata() {
+    let root = git_project("scope-hash-hooks");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let scope = vec![".git".to_string()];
+    let before = staged_scope_hash(&root, &config.agent, &scope).unwrap();
+
+    fs::create_dir_all(root.join(PRE_COMMIT_HOOK_PATH).parent().unwrap()).unwrap();
+    fs::write(root.join(PRE_COMMIT_HOOK_PATH), DEFAULT_PRE_COMMIT_HOOK).unwrap();
+    Command::new("git")
+        .args(["config", "--local", "core.hooksPath", GIT_HOOKS_PATH])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let after_install = staged_scope_hash(&root, &config.agent, &scope).unwrap();
+
+    fs::write(root.join(PRE_COMMIT_HOOK_PATH), "changed\n").unwrap();
+    let after_hook_change = staged_scope_hash(&root, &config.agent, &scope).unwrap();
+
+    assert_eq!(before, after_install);
+    assert_eq!(after_install, after_hook_change);
     let _ = fs::remove_dir_all(root);
 }
 

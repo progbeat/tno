@@ -1,16 +1,6 @@
 use super::*;
 
 #[test]
-fn generator_template_requires_exactly_one_content_placeholder() {
-    assert!(
-        validate_generator_template("Example JSON: {\"ok\": true}\n{content}\nDone", 1).is_ok()
-    );
-    assert!(validate_generator_template("{content}\n{name}", 1).is_ok());
-    assert!(validate_generator_template("no placeholder", 1).is_err());
-    assert!(validate_generator_template("{content}\n{content}", 1).is_err());
-}
-
-#[test]
 fn generator_paths_support_multiple_filename_wildcards() {
     let root = temp_home("generator-multi-wildcard");
     fs::create_dir_all(root.join("specs")).unwrap();
@@ -42,6 +32,84 @@ fn repo_inspection_cache_reuses_generator_path_expansion() {
 
     assert_eq!(first, vec!["specs/a.md".to_string()]);
     assert_eq!(second, first);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn expectation_generator_empty_matches_generate_no_expectations() {
+    let root = temp_home("expectation-generator-empty");
+    let mut cache = RepoInspectionCache::new();
+
+    let config = parse_check_config_content_with_root(
+        &root,
+        Path::new("check.yml"),
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - path: "specs/*.md"
+    q_template: "{content}"
+    a: "yes"
+  - q: "Local?"
+    a: "no"
+"#,
+        &mut cache,
+    )
+    .unwrap();
+
+    assert_eq!(config.expectations.len(), 1);
+    assert_eq!(config.expectations[0].q, "Local?");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn expectation_generator_substitutes_content_placeholders() {
+    let root = temp_home("expectation-generator-placeholder");
+    fs::create_dir_all(root.join("specs")).unwrap();
+    fs::write(root.join("specs/a.md"), "A").unwrap();
+    let mut cache = RepoInspectionCache::new();
+
+    let missing = parse_check_config_content_with_root(
+        &root,
+        Path::new("check.yml"),
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - path: "specs/*.md"
+    q_template: "No placeholder"
+    a: "yes"
+"#,
+        &mut cache,
+    )
+    .unwrap();
+    assert_eq!(missing.expectations[0].q, "No placeholder");
+
+    let mut cache = RepoInspectionCache::new();
+    let duplicate = parse_check_config_content_with_root(
+        &root,
+        Path::new("check.yml"),
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - path: "specs/*.md"
+    q_template: "{content} then {content}"
+    a: "yes"
+"#,
+        &mut cache,
+    )
+    .unwrap();
+    assert_eq!(duplicate.expectations[0].q, "A then A");
     let _ = fs::remove_dir_all(root);
 }
 

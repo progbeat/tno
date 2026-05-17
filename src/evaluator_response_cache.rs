@@ -1,6 +1,7 @@
+use crate::check_types::ParsedAnswer;
+use crate::config_types::AgentConfig;
 use crate::evaluator_response::parse_evaluator_response;
 use crate::scope::effective_ignore_patterns;
-use crate::types::{AgentConfig, ParsedAnswer};
 use std::collections::BTreeMap;
 
 #[derive(Default)]

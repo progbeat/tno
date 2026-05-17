@@ -3,41 +3,82 @@ use crate::check_cache::{
 };
 use crate::check_interrogation_policy::{
     interrogate_or_error_record, interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
+    restore_record_to_enforced_scope, turn_exceeds_break_after_tokens, turn_has_context_compaction,
     write_scope_narrowing_event, InterrogationCall, ScopedInterrogation,
 };
 use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
-use crate::check_order_state::write_latest_non_pass_record;
+use crate::check_order_state::write_latest_non_pass_record_with_cache;
 use crate::check_output::{record_requires_human_review, write_and_flush_result_output};
 use crate::check_preflight::check_interrupted;
 use crate::check_selection::{
-    final_selected_expectations, initial_non_selected_expectations,
-    order_expectations_by_latest_non_pass,
+    final_selected_expectations, order_expectations_by_latest_non_pass, FinalSelection,
 };
-use crate::evaluator_turn::is_verified_record;
+use crate::check_types::{
+    check_run_error, CheckOptions, CheckRunError, CheckRunReport, NarrowingStats,
+    SelectedExpectation,
+};
+#[cfg(test)]
+use crate::config_types::CheckConfig;
+use crate::evaluator_types::EvaluatorRunner;
 use crate::hash::full_scope;
 use crate::history::HistoryCache;
 use crate::history_append::append_history_record_with_cache;
-use crate::history_reuse::latest_history_scope_with_cache;
+use crate::history_reuse::{is_reusable_history_record, latest_history_scope_with_cache};
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::{is_strict_scope_subset, scope_is_within};
 use crate::scope_hash::ScopeHashCache;
 use crate::time::unix_timestamp;
-use crate::types::{
-    check_run_error, CheckConfig, CheckOptions, CheckRunError, CheckRunReport, EvaluatorRunner,
-    NarrowingStats,
-};
-use std::collections::BTreeSet;
 use std::io::Write;
+#[cfg(test)]
 use std::path::Path;
 
+pub(crate) struct CheckRunCaches {
+    pub(crate) history: HistoryCache,
+    pub(crate) scope_hash: ScopeHashCache,
+}
+
+impl CheckRunCaches {
+    pub(crate) fn new() -> CheckRunCaches {
+        CheckRunCaches {
+            history: HistoryCache::new(),
+            scope_hash: ScopeHashCache::new(),
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     root: &Path,
     snapshot_root: &Path,
     config: &CheckConfig,
     options: &CheckOptions,
     runner: &mut R,
+    diagnostic_log: Option<&mut DiagnosticLogWriter>,
+    result_output: Option<&mut dyn Write>,
+) -> Result<CheckRunReport, CheckRunError> {
+    let mut caches = CheckRunCaches::new();
+    let runtime = CheckRuntime {
+        root,
+        snapshot_root,
+        config,
+    };
+    run_check_with_runner_and_caches(
+        runtime,
+        options,
+        runner,
+        diagnostic_log,
+        result_output,
+        &mut caches,
+    )
+}
+
+pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
+    runtime: CheckRuntime<'_>,
+    options: &CheckOptions,
+    runner: &mut R,
     mut diagnostic_log: Option<&mut DiagnosticLogWriter>,
     mut result_output: Option<&mut dyn Write>,
+    caches: &mut CheckRunCaches,
 ) -> Result<CheckRunReport, CheckRunError> {
     let mut records = Vec::new();
     // Start from the CLI candidate count, then shrink this as final-selection
@@ -47,34 +88,17 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     let mut skipped = options.skipped;
     let mut silent = 0usize;
     let mut narrowing = NarrowingStats::default();
-    let mut non_selected = match initial_non_selected_expectations(config, &options.selected) {
-        Ok(non_selected) => non_selected,
-        Err(err) => {
-            return Err(check_run_error(
-                &records,
-                &[],
-                selected,
-                skipped,
-                silent,
-                narrowing,
-                err,
-            ));
-        }
-    };
-    let runtime = CheckRuntime {
-        root,
-        snapshot_root,
-        config,
-    };
+    let mut non_selected = options.non_selected.clone();
+    let root = runtime.root;
+    let config = runtime.config;
     // Per-run state is shared so equal canonical enforced scopes can reuse one
     // ephemeral evaluator thread; InterrogationState stores thread IDs by scope,
     // so different enforced scopes still start separate threads within the run.
     let mut interrogation_state = InterrogationState::new();
-    let mut scope_hash_cache = ScopeHashCache::new();
-    let mut history_cache = HistoryCache::new();
     macro_rules! run_try {
         ($expr:expr) => {
             $expr.map_err(|err| {
+                let error = err.to_string();
                 check_run_error(
                     &records,
                     &non_selected,
@@ -82,50 +106,58 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                     skipped,
                     silent,
                     narrowing,
-                    err,
+                    error,
                 )
             })?
         };
     }
-    let final_selection = match final_selected_expectations(
-        root,
-        &config.agent,
-        options.selected.clone(),
-        &mut history_cache,
-        run_try!(unix_timestamp()),
-    ) {
-        Ok(final_selection) => final_selection,
-        Err(err) => {
-            let skipped_now = err.skipped.len();
-            non_selected.extend(err.skipped);
-            skipped += skipped_now;
-            silent += skipped_now;
-            selected = selected.saturating_sub(skipped_now);
-            return Err(check_run_error(
-                &records,
-                &non_selected,
-                selected,
-                skipped,
-                silent,
-                narrowing,
-                err.error,
-            ));
+    let final_selection = if options.ignore_cooldown {
+        FinalSelection {
+            selected: options.selected.clone(),
+            skipped: Vec::new(),
+        }
+    } else {
+        match final_selected_expectations(
+            root,
+            &config.agent,
+            options.selected.clone(),
+            &mut caches.history,
+            run_try!(unix_timestamp()),
+        ) {
+            Ok(final_selection) => final_selection,
+            Err(err) => {
+                mark_expectations_skipped(
+                    err.skipped,
+                    &mut non_selected,
+                    &mut selected,
+                    &mut skipped,
+                    &mut silent,
+                );
+                return Err(check_run_error(
+                    &records,
+                    &non_selected,
+                    selected,
+                    skipped,
+                    silent,
+                    narrowing,
+                    err.error,
+                ));
+            }
         }
     };
-    let final_selected_ids = final_selection
-        .selected
-        .iter()
-        .map(|expectation| expectation.id.clone())
-        .collect::<BTreeSet<_>>();
-    for expectation in &options.selected {
-        if !final_selected_ids.contains(&expectation.id) {
-            non_selected.push(expectation.clone());
-        }
-    }
-    skipped += final_selection.skipped.len();
-    silent += final_selection.skipped.len();
+    let FinalSelection {
+        selected: cooldown_selected,
+        skipped: cooldown_skipped,
+    } = final_selection;
+    mark_expectations_skipped(
+        cooldown_skipped,
+        &mut non_selected,
+        &mut selected,
+        &mut skipped,
+        &mut silent,
+    );
     let final_selected = if options.ignore_cache {
-        final_selection.selected
+        cooldown_selected
     } else {
         // Passing exact-cache hits satisfy candidates before the
         // selected-expectation loop below. They are final-selection
@@ -135,24 +167,28 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         let cache_selection = run_try!(final_selected_after_current_pass_cache(
             root,
             &config.agent,
-            final_selection.selected,
-            &mut history_cache,
-            &mut scope_hash_cache,
+            cooldown_selected,
+            &mut caches.history,
+            &mut caches.scope_hash,
         ));
         for (expectation, hit) in cache_selection.skipped_passes {
+            mark_expectations_skipped(
+                vec![expectation],
+                &mut non_selected,
+                &mut selected,
+                &mut skipped,
+                &mut silent,
+            );
             if let Some(writer) = diagnostic_log.as_deref_mut() {
                 run_try!(write_cache_hit(writer, &hit));
             }
-            non_selected.push(expectation);
-            skipped += 1;
-            silent += 1;
         }
         cache_selection.selected
     };
     let final_selected = run_try!(order_expectations_by_latest_non_pass(
         root,
         final_selected,
-        &mut history_cache
+        &mut caches.history
     ));
     selected = final_selected.len();
     let stop_after_non_pass = !options.check_all;
@@ -176,8 +212,8 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 root,
                 &config.agent,
                 expectation,
-                &mut history_cache,
-                &mut scope_hash_cache,
+                &mut caches.history,
+                &mut caches.scope_hash,
             )) {
                 let should_stop = stop_after_non_pass && !hit.record.passed();
                 if let Some(writer) = diagnostic_log.as_deref_mut() {
@@ -203,13 +239,12 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         }
 
         // `--ignore-cache` bypasses reusable answer records in the branch above,
-        // but it does not erase the interrogation-policy scope seed: a fresh
-        // evaluator turn still starts from the latest answer-history scope.
+        // but it does not erase the interrogation-policy scope seed.
         let mut enforced_scope = run_try!(latest_history_scope_with_cache(
             root,
             &config.agent,
             expectation,
-            &mut history_cache
+            &mut caches.history
         ))
         .unwrap_or_else(full_scope);
         // Response-format problems are handled inside this call: malformed,
@@ -228,8 +263,13 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
             runner,
             &mut diagnostic_log,
             &mut interrogation_state,
-            &mut scope_hash_cache,
+            &mut caches.scope_hash,
+            options.break_after_tokens,
         ));
+        let mut break_after_tokens_hit =
+            turn_exceeds_break_after_tokens(&interrogation, options.break_after_tokens);
+        let mut context_compaction_hit = turn_has_context_compaction(&interrogation);
+        let mut stop_after_current_expectation = interrogation.stop_after_current_expectation;
 
         let record_scope = interrogation.record.scope.clone();
         // Interrogation finalization rejects evaluator-proposed widening before
@@ -241,6 +281,9 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         // Cache-spec narrowing verification applies only to verified answers.
         // Non-answer states (`idk`, `malformed`, unparseable) are never reusable
         // cache records and are handled by the review-required/idk policy above.
+        // Token-break and context-compaction signals stop after this expectation;
+        // they do not skip the independent verification needed to trust a
+        // strictly narrower cache scope for this expectation's final record.
         if !record_requires_human_review(&interrogation.record)
             && is_strict_scope_subset(&record_scope, &enforced_scope)
         {
@@ -261,8 +304,12 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                 runner,
                 &mut diagnostic_log,
                 &mut interrogation_state,
-                &mut scope_hash_cache,
+                &mut caches.scope_hash,
             ));
+            break_after_tokens_hit |=
+                turn_exceeds_break_after_tokens(&narrowed, options.break_after_tokens);
+            context_compaction_hit |= turn_has_context_compaction(&narrowed);
+            stop_after_current_expectation |= narrowed.stop_after_current_expectation;
             if narrowed_scope_is_accepted(&interrogation.record, &narrowed.record) {
                 narrowing.accepted += 1;
                 run_try!(write_scope_narrowing_event(
@@ -286,35 +333,49 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
                     &initial_record,
                     &narrowed.record,
                 ));
-                let enforced_scope_hash = run_try!(scope_hash_cache.staged_scope_hash(
+                let enforced_scope_hash = run_try!(caches.scope_hash.staged_scope_hash(
                     root,
                     &config.agent,
                     &enforced_scope
                 ));
-                interrogation.record.scope = enforced_scope.clone();
-                interrogation.record.scope_hash = enforced_scope_hash;
+                // A rejected narrowing invalidates only the evaluator's
+                // proposed reusable cache scope. The original answer/evidence
+                // came from the wider enforced scope, so keep that wide
+                // interrogation result and restore its wide cache identity
+                // instead of keeping anything from the narrowed verification
+                // turn.
+                interrogation.record = restore_record_to_enforced_scope(
+                    initial_record,
+                    &enforced_scope,
+                    enforced_scope_hash,
+                );
             }
         }
-        // Only verified yes/no/option answer records are reusable. Human-review
+        // Correct and incorrect parsed answers are reusable for every
+        // expectation shape, including free-form exact strings. Human-review
         // states such as idk, malformed, and rejected widened scopes are not
         // written to history.
-        if is_verified_record(&interrogation.record) {
+        if is_reusable_history_record(&interrogation.record) {
             run_try!(append_history_record_with_cache(
                 root,
                 expectation,
                 &interrogation.record,
-                &mut history_cache,
+                &mut caches.history,
             ));
         }
-        run_try!(write_latest_non_pass_record(
+        run_try!(write_latest_non_pass_record_with_cache(
             root,
             expectation,
-            &interrogation.record
+            &interrogation.record,
+            &mut caches.history
         ));
         if let Some(writer) = diagnostic_log.as_deref_mut() {
             run_try!(writer.write_record(&interrogation.record));
         }
-        let should_stop = stop_after_non_pass && !interrogation.record.passed();
+        let should_stop = (stop_after_non_pass && !interrogation.record.passed())
+            || break_after_tokens_hit
+            || context_compaction_hit
+            || stop_after_current_expectation;
         run_try!(write_and_flush_result_output(
             &mut result_output,
             &interrogation.record
@@ -339,4 +400,18 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         silent,
         narrowing,
     })
+}
+
+fn mark_expectations_skipped(
+    expectations: Vec<SelectedExpectation>,
+    non_selected: &mut Vec<SelectedExpectation>,
+    selected: &mut usize,
+    skipped: &mut usize,
+    silent: &mut usize,
+) {
+    let count = expectations.len();
+    non_selected.extend(expectations);
+    *selected = selected.saturating_sub(count);
+    *skipped += count;
+    *silent += count;
 }

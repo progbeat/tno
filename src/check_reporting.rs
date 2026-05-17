@@ -3,29 +3,28 @@ use crate::app_server_protocol::render_token_usage_summary;
 use crate::check_result::{
     report_error_count, report_failed_count, report_output_skipped_count, report_passed_count,
 };
+use crate::check_types::{CheckRunReport, NarrowingStats};
 use crate::evaluator_turn::token_usage_log_fields;
 use crate::logging::DiagnosticLogWriter;
 use crate::output::write_stderr_line;
-use crate::types::{CheckRunReport, NarrowingStats, TokenUsage};
+use crate::token_usage_types::TokenUsage;
 use serde_json::json;
 
 pub(crate) fn collect_check_token_usage(
     runner: &mut LazyAppServerRunner,
-    diagnostic_log: &mut DiagnosticLogWriter,
 ) -> Result<TokenUsage, String> {
     runner.drain_token_usage_updates();
-    let usage = runner.token_usage().unwrap_or_default();
-    diagnostic_log.write_event("info", "token.usage", &token_usage_log_fields(usage))?;
-    Ok(usage)
+    Ok(runner.token_usage().unwrap_or_default())
 }
 
-pub(crate) fn collect_and_print_check_token_usage(
-    runner: &mut LazyAppServerRunner,
+pub(crate) fn write_check_token_usage_event(
     diagnostic_log: &mut DiagnosticLogWriter,
-) -> Result<TokenUsage, String> {
-    let usage = collect_check_token_usage(runner, diagnostic_log)?;
-    print_token_usage_summary(Some(usage))?;
-    Ok(usage)
+    usage: TokenUsage,
+) -> Result<(), String> {
+    diagnostic_log
+        .write_event("info", "token.usage", &token_usage_log_fields(usage))
+        .map_err(|err| err.to_string())?;
+    Ok(())
 }
 
 pub(crate) fn write_check_finish_report_event(
@@ -79,7 +78,9 @@ pub(crate) fn write_check_finish_event(
     if let Some(error) = error {
         fields.push(("error", json!(error)));
     }
-    diagnostic_log.write_event("info", "check.finish", &fields)
+    diagnostic_log
+        .write_event("info", "check.finish", &fields)
+        .map_err(|err| err.to_string())
 }
 
 pub(crate) fn print_token_usage_summary(usage: Option<TokenUsage>) -> Result<(), String> {

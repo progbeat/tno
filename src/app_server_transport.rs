@@ -1,14 +1,19 @@
-use crate::app_server::AppServerRunner;
+use crate::app_server::{AppServerRunner, ThreadTurnCarryover};
 use crate::app_server_protocol::{
     app_server_error_value, app_server_failure_from_value, app_server_message,
-    append_completed_agent_text, token_usage_update, turn_idle_timed_out, turn_started_id,
-    turn_text,
+    append_completed_agent_text, context_compaction_event, token_usage_update, turn_idle_timed_out,
+    turn_started_id, turn_text,
 };
 use crate::check_preflight::check_interrupted;
 use crate::evaluator_turn::EvaluatorFailureKind;
-use crate::types::{EvaluatorError, TokenUsage};
+use crate::evaluator_types::EvaluatorError;
+use crate::thread_reuse_config::CarryoverTokenTarget;
+use crate::token_usage_types::{
+    ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
+};
 use crate::APP_SERVER_TURN_TIMEOUT_SECS;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
@@ -25,7 +30,7 @@ impl AppServerRunner {
                 return Err("interrupted".into());
             }
             let message = self.read_message()?;
-            self.record_token_usage(&message);
+            self.record_app_server_events(&message);
             let envelope = app_server_message(&message).map_err(app_server_protocol_error)?;
             if envelope.id == Some(id) {
                 if let Some(error) = envelope.error.as_ref() {
@@ -46,6 +51,7 @@ impl AppServerRunner {
         method: &str,
         params: Value,
     ) -> Result<String, EvaluatorError> {
+        self.last_turn_usage = None;
         let id = self.send_json_rpc_request(method, &params, "request")?;
 
         let mut saw_response = false;
@@ -81,7 +87,7 @@ impl AppServerRunner {
                 continue;
             };
             last_activity = Instant::now();
-            self.record_token_usage(&message);
+            self.record_app_server_events(&message);
             let envelope = app_server_message(&message).map_err(app_server_protocol_error)?;
             if let Some(started_turn_id) = turn_started_id(&message) {
                 turn_id = Some(started_turn_id);
@@ -98,7 +104,7 @@ impl AppServerRunner {
                 }
                 saw_response = true;
                 if saw_completed {
-                    return Ok(turn_text(text, completed_text));
+                    return self.finish_turn_request(text, completed_text, turn_id);
                 }
                 continue;
             }
@@ -126,7 +132,7 @@ impl AppServerRunner {
                     }
                     saw_completed = true;
                     if saw_response {
-                        return Ok(turn_text(text, completed_text));
+                        return self.finish_turn_request(text, completed_text, turn_id);
                     }
                 }
                 Some("error") => {
@@ -141,6 +147,122 @@ impl AppServerRunner {
                 }
                 _ => {}
             }
+        }
+    }
+
+    fn finish_turn_request(
+        &mut self,
+        text: String,
+        completed_text: String,
+        turn_id: Option<String>,
+    ) -> Result<String, EvaluatorError> {
+        self.drain_token_usage_updates();
+        let mut completed_turn_usage = None;
+        if let Some(turn_id) = turn_id {
+            let usage = self
+                .token_usage_by_turn
+                .get(&turn_id)
+                .copied()
+                .unwrap_or_default();
+            let updates = self
+                .token_usage_updates_by_turn
+                .get(&turn_id)
+                .cloned()
+                .unwrap_or_default();
+            let compaction_events = self
+                .context_compaction_events_by_turn
+                .get(&turn_id)
+                .cloned()
+                .unwrap_or_default();
+            if !updates.is_empty() || !compaction_events.is_empty() {
+                let thread_id = updates
+                    .first()
+                    .map(|update| update.thread_id.clone())
+                    .or_else(|| {
+                        compaction_events
+                            .first()
+                            .map(|event| event.thread_id.clone())
+                    });
+                if let Some(thread_id) = thread_id {
+                    completed_turn_usage = Some(EvaluatorTurnUsage {
+                        thread_id,
+                        turn_id,
+                        usage,
+                        token_usage_updates: updates,
+                        context_compaction_events: compaction_events,
+                    });
+                }
+            }
+        }
+        if let Some(turn_usage) = completed_turn_usage {
+            self.apply_thread_reuse_policy(&turn_usage)?;
+            self.last_turn_usage = Some(turn_usage);
+        }
+        Ok(turn_text(text, completed_text))
+    }
+
+    fn apply_thread_reuse_policy(
+        &mut self,
+        turn_usage: &EvaluatorTurnUsage,
+    ) -> Result<(), EvaluatorError> {
+        let current = ThreadTurnCarryover {
+            turn_id: turn_usage.turn_id.clone(),
+            tokens: carryover_tokens(turn_usage.usage),
+        };
+        let should_rollback = {
+            let turns = self
+                .turn_carryover_by_thread
+                .entry(turn_usage.thread_id.clone())
+                .or_default();
+            let should_rollback = turns.last().is_some_and(|previous| {
+                thread_reuse_policy_should_rollback(
+                    previous.tokens,
+                    current.tokens,
+                    self.carryover_token_target,
+                )
+            });
+            turns.push(current);
+            should_rollback
+        };
+        if should_rollback {
+            match self.rollback_latest_thread_turn(&turn_usage.thread_id)? {
+                ThreadRollbackOutcome::RolledBack => {
+                    if let Some(turns) =
+                        self.turn_carryover_by_thread.get_mut(&turn_usage.thread_id)
+                    {
+                        turns.pop();
+                    }
+                }
+                ThreadRollbackOutcome::UnsupportedByEphemeralHistory => {
+                    // Evaluator threads are intentionally ephemeral and keep no
+                    // persisted history. Some app-server versions reject
+                    // thread/rollback for those threads, so the equivalent
+                    // future-state operation is to retire this session and
+                    // avoid carrying any of its turns into later questions.
+                    self.turn_carryover_by_thread.remove(&turn_usage.thread_id);
+                    self.retired_sessions.insert(turn_usage.thread_id.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn rollback_latest_thread_turn(
+        &mut self,
+        thread_id: &str,
+    ) -> Result<ThreadRollbackOutcome, EvaluatorError> {
+        match self.send_request(
+            "thread/rollback",
+            json!({
+                "threadId": thread_id,
+                "numTurns": 1
+            }),
+        ) {
+            Ok(_) => Ok(ThreadRollbackOutcome::RolledBack),
+            Err(err) if rollback_requires_persisted_history(&err) => {
+                Ok(ThreadRollbackOutcome::UnsupportedByEphemeralHistory)
+            }
+            Err(err) => Err(err),
         }
     }
 
@@ -228,11 +350,17 @@ impl AppServerRunner {
         }
     }
 
-    fn record_token_usage(&mut self, message: &Value) {
-        let Some((turn_id, usage)) = token_usage_update(message) else {
-            return;
-        };
-        self.token_usage_by_turn.insert(turn_id, usage);
+    fn record_app_server_events(&mut self, message: &Value) {
+        if let Some(update) = token_usage_update(message) {
+            record_token_usage_update(
+                &mut self.token_usage_by_turn,
+                &mut self.token_usage_updates_by_turn,
+                update,
+            );
+        }
+        if let Some(event) = context_compaction_event(message) {
+            record_context_compaction_event(&mut self.context_compaction_events_by_turn, event);
+        }
     }
 
     pub(crate) fn token_usage(&self) -> Option<TokenUsage> {
@@ -250,12 +378,65 @@ impl AppServerRunner {
     pub(crate) fn drain_token_usage_updates(&mut self) {
         loop {
             match self.messages.recv_timeout(Duration::from_millis(50)) {
-                Ok(Ok(message)) => self.record_token_usage(&message),
+                Ok(Ok(message)) => self.record_app_server_events(&message),
                 Ok(Err(_)) => return,
                 Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => return,
             }
         }
     }
+}
+
+pub(crate) fn record_context_compaction_event(
+    context_compaction_events_by_turn: &mut BTreeMap<String, Vec<ContextCompactionEvent>>,
+    mut event: ContextCompactionEvent,
+) {
+    let events = context_compaction_events_by_turn
+        .entry(event.turn_id.clone())
+        .or_default();
+    event.sequence = events.len() as u64 + 1;
+    events.push(event);
+}
+
+pub(crate) fn record_token_usage_update(
+    token_usage_by_turn: &mut BTreeMap<String, TokenUsage>,
+    token_usage_updates_by_turn: &mut BTreeMap<String, Vec<TokenUsageUpdate>>,
+    mut update: TokenUsageUpdate,
+) {
+    let usage = update.last_usage;
+    let turn_id = update.turn_id.clone();
+    let updates = token_usage_updates_by_turn
+        .entry(turn_id.clone())
+        .or_default();
+    update.sequence = updates.len() as u64 + 1;
+    updates.push(update);
+    let current = token_usage_by_turn
+        .get(&turn_id)
+        .copied()
+        .unwrap_or_default();
+    token_usage_by_turn.insert(turn_id, current.add(usage));
+}
+
+pub(crate) fn carryover_tokens(usage: TokenUsage) -> u64 {
+    usage.input_tokens.saturating_add(usage.output_tokens)
+}
+
+pub(crate) fn thread_reuse_policy_should_rollback(
+    previous_carryover_tokens: u64,
+    current_carryover_tokens: u64,
+    target: CarryoverTokenTarget,
+) -> bool {
+    previous_carryover_tokens >= target.min || current_carryover_tokens > target.max
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThreadRollbackOutcome {
+    RolledBack,
+    UnsupportedByEphemeralHistory,
+}
+
+pub(crate) fn rollback_requires_persisted_history(err: &EvaluatorError) -> bool {
+    err.message_str()
+        .contains("thread rollback requires persisted thread history")
 }
 
 fn app_server_protocol_error(error: String) -> EvaluatorError {

@@ -1,7 +1,7 @@
 use crate::check_config::parse_staged_check_config_content_with_root;
 use crate::check_generator_paths::expand_generator_paths;
-use crate::git::{read_staged_file_content_from_path, resolve_git_path};
-use crate::types::CheckConfig;
+use crate::config_types::{CheckConfig, RawExpectationItem};
+use crate::git::{read_staged_file_content, resolve_git_path};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -11,7 +11,8 @@ use std::fs;
 type GitPathCacheKey = (PathBuf, String);
 type GeneratorPathsCacheKey = (PathBuf, PathBuf, String, bool);
 type StagedFileContentCacheKey = (PathBuf, PathBuf);
-type CheckConfigCacheKey = (PathBuf, PathBuf, bool, String);
+type CheckConfigCacheKey = (PathBuf, PathBuf, String);
+type IncludedExpectationsCacheKey = (String, String);
 
 #[derive(Default)]
 pub(crate) struct RepoInspectionCache {
@@ -21,6 +22,8 @@ pub(crate) struct RepoInspectionCache {
     #[cfg(test)]
     filesystem_text: BTreeMap<PathBuf, Result<String, String>>,
     check_configs: BTreeMap<CheckConfigCacheKey, Result<CheckConfig, String>>,
+    included_expectations:
+        BTreeMap<IncludedExpectationsCacheKey, Result<Vec<RawExpectationItem>, String>>,
 }
 
 impl RepoInspectionCache {
@@ -62,21 +65,14 @@ impl RepoInspectionCache {
     pub(crate) fn staged_file_content(
         &mut self,
         root: &Path,
-        path: &str,
+        path: impl AsRef<Path>,
     ) -> Result<String, String> {
-        self.staged_file_content_path(root, Path::new(path))
-    }
-
-    pub(crate) fn staged_file_content_path(
-        &mut self,
-        root: &Path,
-        path: &Path,
-    ) -> Result<String, String> {
+        let path = path.as_ref();
         let key = (root.to_path_buf(), path.to_path_buf());
         if let Some(cached) = self.staged_file_contents.get(&key) {
             return cached.clone();
         }
-        let content = read_staged_file_content_from_path(root, path);
+        let content = read_staged_file_content(root, path);
         self.staged_file_contents.insert(key, content.clone());
         content
     }
@@ -98,11 +94,10 @@ impl RepoInspectionCache {
         root: &Path,
         config_path: &Path,
     ) -> Result<CheckConfig, String> {
-        let content = self.staged_file_content_path(root, config_path)?;
+        let content = self.staged_file_content(root, config_path)?;
         let key = (
             root.to_path_buf(),
             config_path.to_path_buf(),
-            true,
             content.clone(),
         );
         if let Some(cached) = self.check_configs.get(&key) {
@@ -110,6 +105,21 @@ impl RepoInspectionCache {
         }
         let parsed = parse_staged_check_config_content_with_root(root, config_path, &content, self);
         self.check_configs.insert(key, parsed.clone());
+        parsed
+    }
+
+    pub(crate) fn included_expectation_items(
+        &mut self,
+        file: &str,
+        content: &str,
+    ) -> Result<Vec<RawExpectationItem>, String> {
+        let key = (file.to_string(), content.to_string());
+        if let Some(cached) = self.included_expectations.get(&key) {
+            return cached.clone();
+        }
+        let parsed = serde_yaml::from_str(content)
+            .map_err(|err| format!("failed to parse {}: {}", file, err));
+        self.included_expectations.insert(key, parsed.clone());
         parsed
     }
 }

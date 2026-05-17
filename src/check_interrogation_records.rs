@@ -1,12 +1,13 @@
 use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
-use crate::evaluator_turn::record_from_response;
+use crate::check_types::{
+    CheckRecord, InterrogationResult, ObservedAnswerState, ParsedAnswer, QueryInterrogationResult,
+    SelectedExpectation,
+};
+use crate::evaluator_turn::{record_from_response, ParsedTurnResponse};
+use crate::evaluator_types::EvaluatorError;
 use crate::hash::full_scope;
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::scope_is_within;
-use crate::types::{
-    CheckRecord, EvaluatorError, InterrogationResult, ObservedAnswerState, ParsedAnswer,
-    QueryInterrogationResult, SelectedExpectation,
-};
 use crate::{
     EMPTY_EVIDENCE_OBSERVED, MALFORMED_REVIEW_WARNING, OBSERVED_IDK, OBSERVED_MALFORMED,
     UNPARSEABLE_OBSERVED,
@@ -19,25 +20,16 @@ pub(crate) fn finalize_interrogation_response(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationState,
     enforced_scope: &[String],
-    response: ParsedAnswer,
+    turn_response: ParsedTurnResponse,
 ) -> Result<InterrogationResult, EvaluatorError> {
-    let mut response = enforce_response_scope(response, enforced_scope);
-    response = normalize_empty_evidence_response(response, enforced_scope);
-    if response.answer == UNPARSEABLE_OBSERVED {
-        response.scope = enforced_scope.to_vec();
-    }
-    let record_scope = response.scope.clone();
-    let scope_hash = state.scope_hash_cache.staged_scope_hash(
-        runtime.root,
-        &runtime.config.agent,
-        &record_scope,
-    )?;
+    let finalized = finalize_parsed_answer(runtime, state, enforced_scope, turn_response.answer)?;
+    let record_scope = finalized.response.scope.clone();
     let record = record_from_response(
         &runtime.config.agent,
         expectation,
-        response,
+        finalized.response,
         record_scope,
-        scope_hash,
+        finalized.scope_hash,
     )?;
     write_review_events(
         diagnostic_log,
@@ -48,7 +40,12 @@ pub(crate) fn finalize_interrogation_response(
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_interrogation_record(&record)?;
     }
-    Ok(InterrogationResult { record })
+    Ok(InterrogationResult {
+        record,
+        turn_usage: turn_response.usage,
+        context_compacted: turn_response.context_compacted,
+        stop_after_current_expectation: false,
+    })
 }
 
 pub(crate) fn finalize_query_response(
@@ -59,22 +56,14 @@ pub(crate) fn finalize_query_response(
     response: ParsedAnswer,
 ) -> Result<QueryInterrogationResult, EvaluatorError> {
     let enforced_scope = full_scope();
-    let mut response = enforce_response_scope(response, &enforced_scope);
-    response = normalize_empty_evidence_response(response, &enforced_scope);
-    if response.answer == UNPARSEABLE_OBSERVED {
-        response.scope = enforced_scope;
-    }
-    let scope_hash = state.scope_hash_cache.staged_scope_hash(
-        runtime.root,
-        &runtime.config.agent,
-        &response.scope,
-    )?;
+    let finalized = finalize_parsed_answer(runtime, state, &enforced_scope, response)?;
     write_parsed_answer_review_events(
         diagnostic_log,
         None,
         &full_scope(),
-        &response.answer,
-        &response.evidence,
+        None,
+        &finalized.response.answer,
+        &finalized.response.evidence,
     )?;
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_event(
@@ -82,14 +71,43 @@ pub(crate) fn finalize_query_response(
             "query.result",
             &[
                 ("prompt", json!(question)),
-                ("observed", json!(response.answer.clone())),
-                ("evidence", json!(response.evidence.clone())),
-                ("scope", json!(response.scope.clone())),
-                ("scopeHash", json!(scope_hash.clone())),
+                ("observed", json!(finalized.response.answer.clone())),
+                ("evidence", json!(finalized.response.evidence.clone())),
+                ("scope", json!(finalized.response.scope.clone())),
+                ("scopeHash", json!(finalized.scope_hash.clone())),
             ],
         )?;
     }
-    Ok(QueryInterrogationResult { answer: response })
+    Ok(QueryInterrogationResult {
+        answer: finalized.response,
+    })
+}
+
+struct FinalizedParsedAnswer {
+    response: ParsedAnswer,
+    scope_hash: String,
+}
+
+fn finalize_parsed_answer(
+    runtime: &CheckRuntime<'_>,
+    state: &mut InterrogationState,
+    enforced_scope: &[String],
+    response: ParsedAnswer,
+) -> Result<FinalizedParsedAnswer, EvaluatorError> {
+    let mut response = enforce_response_scope(response, enforced_scope);
+    response = normalize_empty_evidence_response(response, enforced_scope);
+    if response.answer == UNPARSEABLE_OBSERVED {
+        response.scope = enforced_scope.to_vec();
+    }
+    let scope_hash = state.scope_hash_cache.staged_scope_hash(
+        runtime.root,
+        &runtime.config.agent,
+        &response.scope,
+    )?;
+    Ok(FinalizedParsedAnswer {
+        response,
+        scope_hash,
+    })
 }
 
 pub(crate) fn enforce_response_scope(
@@ -173,6 +191,7 @@ fn write_review_events(
         diagnostic_log,
         expectation_id,
         enforced_scope,
+        record.expected_text(),
         &record.observed,
         &record.evidence,
     )
@@ -182,10 +201,14 @@ pub(crate) fn write_parsed_answer_review_events(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_id: Option<&str>,
     enforced_scope: &[String],
+    expected: Option<&str>,
     observed: &str,
     evidence: &str,
 ) -> Result<(), EvaluatorError> {
-    match ObservedAnswerState::from_observed(observed) {
+    let state = expected
+        .map(|expected| ObservedAnswerState::from_expected_and_observed(expected, observed))
+        .unwrap_or_else(|| ObservedAnswerState::from_observed(observed));
+    match state {
         ObservedAnswerState::Malformed => {
             write_review_required(diagnostic_log, expectation_id, MALFORMED_REVIEW_WARNING)?;
         }

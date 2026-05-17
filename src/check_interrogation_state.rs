@@ -1,9 +1,10 @@
+use crate::check_types::{CheckRecord, ObservedAnswerState};
+use crate::config_types::{AgentConfig, CheckConfig};
 use crate::evaluator_config::app_server_model_key;
 use crate::evaluator_response_cache::EvaluatorResponseParseCache;
 use crate::evaluator_turn::evaluator_models;
 use crate::hash::full_scope;
 use crate::scope_hash::ScopeHashCache;
-use crate::types::{AgentConfig, CheckConfig, CheckRecord, ObservedAnswerState};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -65,5 +66,10 @@ impl InterrogationState {
 
     pub(crate) fn mark_model_unavailable(&mut self, model: Option<&str>) {
         self.unavailable_models.insert(app_server_model_key(model));
+    }
+
+    pub(crate) fn clear_thread_sessions(&mut self) {
+        self.sessions_by_scope.clear();
+        self.session_instructions.clear();
     }
 }

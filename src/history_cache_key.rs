@@ -1,6 +1,7 @@
+use crate::check_types::SelectedExpectation;
+use crate::config_types::AgentConfig;
 use crate::hash::hash_120;
 use crate::scope::effective_ignore_patterns;
-use crate::types::{AgentConfig, SelectedExpectation};
 
 pub(crate) fn history_cache_key(agent: &AgentConfig, expectation: &SelectedExpectation) -> String {
     // History directories stay keyed by q/a for stable cleanup semantics.

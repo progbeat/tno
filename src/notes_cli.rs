@@ -1,10 +1,10 @@
 use crate::fs_util::ensure_dir;
 use crate::notes_header::validate_note_key;
 use crate::output::{write_stderr_bytes, write_stdout_bytes};
-use crate::types::Config;
+use crate::project_types::Config;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::thread;
 
 pub(crate) const INDEX_LOCK_STALE_AFTER_SECS: u64 = 600;
@@ -59,21 +59,20 @@ pub(crate) fn run_rg(config: &Config, rg_args: &[OsString]) -> Result<(), String
     command.args(rg_args);
     command.arg("--");
     command.arg(&config.root);
-    let mut child = command
+    let child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|err| format!("failed to run rg: {}", err))?;
+    let mut child = ChildCleanup::new(child);
     let stdout = child
-        .stdout
-        .take()
+        .take_stdout()
         .ok_or_else(|| "failed to capture rg stdout".to_string())?;
     let stderr = child
-        .stderr
-        .take()
+        .take_stderr()
         .ok_or_else(|| "failed to capture rg stderr".to_string())?;
-    let stdout_thread = thread::spawn(move || stream_rg_stdout(stdout));
-    let stderr_thread = thread::spawn(move || stream_rg_stderr(stderr));
+    let stdout_thread = thread::spawn(move || stream_rg_output(stdout, write_stdout_bytes));
+    let stderr_thread = thread::spawn(move || stream_rg_output(stderr, write_stderr_bytes));
     let status = child
         .wait()
         .map_err(|err| format!("failed to wait for rg: {}", err))?;
@@ -90,12 +89,41 @@ pub(crate) fn run_rg(config: &Config, rg_args: &[OsString]) -> Result<(), String
     }
 }
 
-fn stream_rg_stdout(stdout: impl Read) -> Result<(), String> {
-    stream_rg_output(stdout, write_stdout_bytes)
+struct ChildCleanup {
+    child: Option<Child>,
 }
 
-fn stream_rg_stderr(stderr: impl Read) -> Result<(), String> {
-    stream_rg_output(stderr, write_stderr_bytes)
+impl ChildCleanup {
+    fn new(child: Child) -> ChildCleanup {
+        ChildCleanup { child: Some(child) }
+    }
+
+    fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.child.as_mut()?.stdout.take()
+    }
+
+    fn take_stderr(&mut self) -> Option<ChildStderr> {
+        self.child.as_mut()?.stderr.take()
+    }
+
+    fn wait(&mut self) -> Result<ExitStatus, std::io::Error> {
+        let status = self
+            .child
+            .as_mut()
+            .expect("rg child must exist before wait")
+            .wait()?;
+        self.child = None;
+        Ok(status)
+    }
+}
+
+impl Drop for ChildCleanup {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 fn stream_rg_output(

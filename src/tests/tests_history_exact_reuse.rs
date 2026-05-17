@@ -15,8 +15,8 @@ fn reusable_history_record_uses_current_expectation_metadata() {
             display_id: expectation.display_id.clone(),
             number: 99,
             result: CheckResult::Pass,
-            prompt: "old prompt text".to_string(),
-            expected: "old expected".to_string(),
+            prompt: Some("old prompt text".to_string()),
+            expected: Some("old expected".to_string()),
             observed: "yes".to_string(),
             evidence: "cached answer".to_string(),
             scope: full_scope(),
@@ -32,8 +32,50 @@ fn reusable_history_record_uses_current_expectation_metadata() {
         .unwrap()
         .unwrap();
     assert_eq!(record.number, 7);
-    assert_eq!(record.prompt, expectation.q);
-    assert_eq!(record.expected, expectation.a);
+    assert_eq!(record.prompt.as_deref(), Some(expectation.q.as_str()));
+    assert_eq!(record.expected.as_deref(), Some(expectation.a.as_str()));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn reusable_history_record_cache_is_refreshed_after_append() {
+    let root = git_project("history-reuse-cache-append");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true)
+        .selected
+        .remove(0);
+    let mut history_cache = HistoryCache::new();
+    let mut scope_hash_cache = ScopeHashCache::new();
+
+    assert!(reusable_history_record_with_cache(
+        &root,
+        &config.agent,
+        &expectation,
+        &mut history_cache,
+        &mut scope_hash_cache,
+    )
+    .unwrap()
+    .is_none());
+
+    let record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+    );
+    append_history_record_with_cache(&root, &expectation, &record, &mut history_cache).unwrap();
+
+    assert!(reusable_history_record_with_cache(
+        &root,
+        &config.agent,
+        &expectation,
+        &mut history_cache,
+        &mut scope_hash_cache,
+    )
+    .unwrap()
+    .unwrap()
+    .passed());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -60,16 +102,52 @@ fn reusable_history_record_allows_missing_cache_key() {
 }
 
 #[test]
-fn unknown_observed_history_states_are_not_reusable_answers() {
+fn free_form_observed_history_answers_are_reusable() {
     let mut record = sample_record(1, RESULT_FAIL);
+    record.expected = Some("maybe".to_string());
     record.observed = "maybe".to_string();
 
-    assert!(record_requires_human_review(&record));
-    assert!(!is_reusable_history_record(&record));
+    assert!(!record_requires_human_review(&record));
+    assert!(is_reusable_history_record(&record));
+
+    record.observed = "Rust".to_string();
+    assert!(!record_requires_human_review(&record));
+    assert!(is_reusable_history_record(&record));
 
     record.observed = "z".to_string();
     assert!(!record_requires_human_review(&record));
     assert!(is_reusable_history_record(&record));
+
+    record.observed = "yes\nno".to_string();
+    assert!(record_requires_human_review(&record));
+    assert!(!is_reusable_history_record(&record));
+
+    record.observed = format!("yes{}no", '\u{2028}');
+    assert!(record_requires_human_review(&record));
+    assert!(!is_reusable_history_record(&record));
+}
+
+#[test]
+fn yes_no_history_answers_reject_free_form_answer_shape() {
+    let mut record = sample_record(1, RESULT_FAIL);
+    record.expected = Some("no".to_string());
+    record.observed = "Yes: concrete bug".to_string();
+
+    assert!(record_requires_human_review(&record));
+    assert!(!is_reusable_history_record(&record));
+
+    record.observed = "yes".to_string();
+    assert!(!record_requires_human_review(&record));
+    assert!(is_reusable_history_record(&record));
+
+    record.expected = Some("a".to_string());
+    record.observed = "b".to_string();
+    assert!(!record_requires_human_review(&record));
+    assert!(is_reusable_history_record(&record));
+
+    record.observed = "Rust".to_string();
+    assert!(record_requires_human_review(&record));
+    assert!(!is_reusable_history_record(&record));
 }
 
 #[test]
@@ -162,8 +240,8 @@ expectations:
             display_id: old_expectation.display_id.clone(),
             number: old_expectation.number,
             result: CheckResult::Pass,
-            prompt: old_expectation.q.clone(),
-            expected: old_expectation.a.clone(),
+            prompt: Some(old_expectation.q.clone()),
+            expected: Some(old_expectation.a.clone()),
             observed: "yes".to_string(),
             evidence: "README.md answers it".to_string(),
             scope: vec!["README.md".to_string()],
@@ -241,11 +319,11 @@ fn scope_hash_includes_tracked_canon_paths() {
 }
 
 #[test]
-fn scope_hash_preserves_legacy_hash_for_normal_paths() {
-    let root = git_project("history-scope-hash-legacy-compatible");
+fn scope_hash_uses_length_prefixed_entries_for_normal_paths() {
+    let root = git_project("history-scope-hash-length-prefixed");
     let entries = staged_scope_entries(&root, &full_scope()).unwrap();
 
-    assert_eq!(
+    assert_ne!(
         hash_scope_entries(&entries),
         hash_120(entries.join("\n").as_bytes())
     );
@@ -276,6 +354,40 @@ fn scope_hash_handles_newline_paths_without_line_splitting() {
         .arg("add")
         .arg(path)
         .current_dir(&root)
+        .output()
+        .unwrap();
+    let after = staged_scope_hash(&root, &config.agent, &[path.to_string()]).unwrap();
+    assert_ne!(before, after);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn scope_hash_treats_git_pathspec_magic_as_literal_path() {
+    let root = git_project("history-scope-hash-literal-pathspec");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let path = ":(literal)name.txt";
+    fs::write(root.join(path), "first").unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("--literal-pathspecs")
+        .args(["add", "--"])
+        .arg(path)
+        .output()
+        .unwrap();
+
+    let entries = staged_scope_entries(&root, &[path.to_string()]).unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].ends_with(path));
+    let before = staged_scope_hash(&root, &config.agent, &[path.to_string()]).unwrap();
+    fs::write(root.join(path), "second").unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("--literal-pathspecs")
+        .args(["add", "--"])
+        .arg(path)
         .output()
         .unwrap();
     let after = staged_scope_hash(&root, &config.agent, &[path.to_string()]).unwrap();

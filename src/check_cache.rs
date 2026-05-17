@@ -1,8 +1,9 @@
+use crate::check_types::{CheckRecord, SelectedExpectation};
+use crate::config_types::AgentConfig;
 use crate::history::HistoryCache;
-use crate::history_reuse::reusable_history_record_for_source;
+use crate::history_reuse::reusable_history_record_with_cache;
 use crate::logging::DiagnosticLogWriter;
-use crate::scope_hash::{ScopeHashCache, ScopeHashSource};
-use crate::types::{AgentConfig, CheckRecord, SelectedExpectation};
+use crate::scope_hash::ScopeHashCache;
 use serde_json::json;
 use std::path::Path;
 
@@ -22,15 +23,11 @@ pub(crate) fn cached_record_for_expectation(
     history_cache: &mut HistoryCache,
     scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<Option<CheckCacheHit>, String> {
-    reusable_history_record_for_source(
-        root,
-        agent,
-        expectation,
-        ScopeHashSource::Index,
-        history_cache,
-        scope_hash_cache,
-    )
-    .map(|record| record.map(|record| CheckCacheHit { record }))
+    // The Cache spec's reusable-result lookup lives here. Cooldown filtering
+    // has already happened before this call path; every hit returned from here
+    // matched the current staged scopeHash.
+    reusable_history_record_with_cache(root, agent, expectation, history_cache, scope_hash_cache)
+        .map(|record| record.map(|record| CheckCacheHit { record }))
 }
 
 pub(crate) fn cached_failure_for_expectation(
@@ -77,15 +74,19 @@ pub(crate) fn write_cache_hit(
     writer: &mut DiagnosticLogWriter,
     hit: &CheckCacheHit,
 ) -> Result<(), String> {
-    writer.write_event(
-        "info",
-        "cache.exact_hit",
-        &[
-            ("id", json!(hit.record.id)),
-            ("result", json!(hit.record.result)),
-            ("scope", json!(hit.record.scope)),
-            ("scopeHash", json!(hit.record.scope_hash)),
-        ],
-    )?;
-    writer.write_record(&hit.record)
+    writer
+        .write_event(
+            "info",
+            "cache.exact_hit",
+            &[
+                ("id", json!(hit.record.id)),
+                ("result", json!(hit.record.result)),
+                ("scope", json!(hit.record.scope)),
+                ("scopeHash", json!(hit.record.scope_hash)),
+            ],
+        )
+        .map_err(|err| err.to_string())?;
+    writer
+        .write_record(&hit.record)
+        .map_err(|err| err.to_string())
 }

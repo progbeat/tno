@@ -1,6 +1,6 @@
+use crate::check_types::CheckCommandArgs;
 use crate::notes_cli::arg_to_string;
 use crate::scope::normalize_repo_path;
-use crate::types::CheckCommandArgs;
 use crate::CHECK_PATH;
 use std::ffi::OsString;
 use std::path::PathBuf;

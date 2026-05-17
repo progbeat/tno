@@ -1,0 +1,313 @@
+use crate::config_types::AgentConfig;
+use crate::history_cache_key::history_cache_key;
+use crate::time::{format_record_timestamp, unix_timestamp};
+use crate::token_usage_types::TokenUsage;
+use crate::{
+    EMPTY_EVIDENCE_OBSERVED, OBSERVED_IDK, OBSERVED_MALFORMED, RESULT_FAIL, RESULT_PASS,
+    UNPARSEABLE_OBSERVED,
+};
+use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+pub(crate) fn contains_line_break(value: &str) -> bool {
+    value.chars().any(is_line_break_char)
+}
+
+pub(crate) fn is_line_break_char(char: char) -> bool {
+    matches!(
+        char,
+        '\n' | '\r' | '\u{000b}' | '\u{000c}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
+    )
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SelectedExpectation {
+    pub(crate) number: usize,
+    pub(crate) id: String,
+    pub(crate) display_id: String,
+    pub(crate) q: String,
+    pub(crate) a: String,
+    pub(crate) cooldown: Option<Cooldown>,
+    pub(crate) thinking: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Cooldown {
+    pub(crate) seconds: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ParsedAnswer {
+    pub(crate) answer: String,
+    pub(crate) evidence: String,
+    pub(crate) scope: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObservedAnswerState {
+    Answer,
+    Idk,
+    Malformed,
+    Unparseable,
+    EmptyEvidence,
+    Unknown,
+}
+
+impl ObservedAnswerState {
+    pub(crate) fn from_observed(observed: &str) -> ObservedAnswerState {
+        match observed {
+            OBSERVED_IDK => ObservedAnswerState::Idk,
+            OBSERVED_MALFORMED => ObservedAnswerState::Malformed,
+            UNPARSEABLE_OBSERVED => ObservedAnswerState::Unparseable,
+            EMPTY_EVIDENCE_OBSERVED => ObservedAnswerState::EmptyEvidence,
+            _ if contains_line_break(observed) => ObservedAnswerState::Unknown,
+            _ => ObservedAnswerState::Answer,
+        }
+    }
+
+    pub(crate) fn from_expected_and_observed(
+        expected: &str,
+        observed: &str,
+    ) -> ObservedAnswerState {
+        let state = ObservedAnswerState::from_observed(observed);
+        if state != ObservedAnswerState::Answer {
+            return state;
+        }
+        // The JSON parser remains vocabulary-neutral because only the expectation
+        // tells us whether the answer should be yes/no, an option token, or a
+        // free-form exact string. Enforce the closed vocabularies here; free-form
+        // expectations still accept any parsed single-line answer for exact
+        // pass/fail comparison.
+        if is_yes_no_token(expected) {
+            if is_yes_no_token(observed) {
+                ObservedAnswerState::Answer
+            } else {
+                ObservedAnswerState::Unknown
+            }
+        } else if is_option_token(expected) {
+            if is_option_token(observed) {
+                ObservedAnswerState::Answer
+            } else {
+                ObservedAnswerState::Unknown
+            }
+        } else {
+            ObservedAnswerState::Answer
+        }
+    }
+
+    pub(crate) fn requires_human_review(self) -> bool {
+        !matches!(self, ObservedAnswerState::Answer)
+    }
+
+    pub(crate) fn is_reusable_history(self) -> bool {
+        matches!(self, ObservedAnswerState::Answer)
+    }
+}
+
+fn is_yes_no_token(value: &str) -> bool {
+    matches!(value, "yes" | "no")
+}
+
+fn is_option_token(value: &str) -> bool {
+    value.len() == 1 && value.bytes().all(|byte| byte.is_ascii_lowercase())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EvaluatorResponseJson {
+    pub(crate) answer: String,
+    pub(crate) evidence: String,
+    pub(crate) scope: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CheckResult {
+    Pass,
+    Fail,
+}
+
+impl CheckResult {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            CheckResult::Pass => RESULT_PASS,
+            CheckResult::Fail => RESULT_FAIL,
+        }
+    }
+}
+
+impl std::fmt::Display for CheckResult {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+// In-memory check record used by history reuse, runtime logs, gate diagnostics,
+// and check output. It deliberately does not implement `Serialize`; persisted
+// history and runtime-log records must go through the dedicated render structs
+// in `logging_render.rs`, which write the full expectation ID and never the
+// human display/selector prefix.
+// Deserialization keeps prompt/expected metadata optional so older history
+// records that contain only the cache-required prefix do not get confused with
+// real empty strings.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CheckRecord {
+    pub(crate) timestamp: String,
+    #[serde(default)]
+    pub(crate) number: usize,
+    pub(crate) result: CheckResult,
+    #[serde(default)]
+    pub(crate) prompt: Option<String>,
+    #[serde(default)]
+    pub(crate) expected: Option<String>,
+    pub(crate) observed: String,
+    pub(crate) evidence: String,
+    pub(crate) scope: Vec<String>,
+    #[serde(rename = "scopeHash")]
+    pub(crate) scope_hash: String,
+    #[serde(default)]
+    pub(crate) id: String,
+    #[serde(default, skip)]
+    pub(crate) display_id: String,
+    #[serde(default, rename = "cacheKey")]
+    pub(crate) cache_key: Option<String>,
+}
+
+pub(crate) struct CheckRecordOutcome {
+    pub(crate) result: CheckResult,
+    pub(crate) observed: String,
+    pub(crate) evidence: String,
+    pub(crate) scope: Vec<String>,
+    pub(crate) scope_hash: String,
+}
+
+impl CheckRecord {
+    pub(crate) fn current_from_expectation(
+        agent: &AgentConfig,
+        expectation: &SelectedExpectation,
+        outcome: CheckRecordOutcome,
+    ) -> Result<CheckRecord, String> {
+        Ok(Self::from_expectation(
+            format_record_timestamp(unix_timestamp()?),
+            expectation,
+            Some(history_cache_key(agent, expectation)),
+            outcome,
+        ))
+    }
+
+    pub(crate) fn from_expectation(
+        timestamp: String,
+        expectation: &SelectedExpectation,
+        cache_key: Option<String>,
+        outcome: CheckRecordOutcome,
+    ) -> CheckRecord {
+        CheckRecord {
+            timestamp,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
+            result: outcome.result,
+            prompt: Some(expectation.q.clone()),
+            expected: Some(expectation.a.clone()),
+            observed: outcome.observed,
+            evidence: outcome.evidence,
+            scope: outcome.scope,
+            scope_hash: outcome.scope_hash,
+            cache_key,
+        }
+    }
+
+    pub(crate) fn prompt_text(&self) -> &str {
+        self.prompt.as_deref().unwrap_or("")
+    }
+
+    pub(crate) fn expected_text(&self) -> Option<&str> {
+        self.expected.as_deref()
+    }
+}
+
+pub(crate) struct CheckOptions {
+    // CLI-expanded expectation candidates. This is not the final selected set:
+    // cooldown and silent exact-cache passes can remove candidates before the
+    // check report records its selected/skipped counts. Exact cache lookup can
+    // still reuse failed records; those stay selected and are reported.
+    pub(crate) selected: Vec<SelectedExpectation>,
+    pub(crate) non_selected: Vec<SelectedExpectation>,
+    pub(crate) skipped: usize,
+    // `canon check` stops after the first final non-pass by default. `--all`
+    // keeps running the full already-selected set.
+    pub(crate) check_all: bool,
+    pub(crate) ignore_cache: bool,
+    pub(crate) ignore_cooldown: bool,
+    pub(crate) break_after_tokens: Option<u64>,
+}
+
+pub(crate) struct CheckCommandArgs {
+    pub(crate) config_path: PathBuf,
+    pub(crate) query: Option<String>,
+    pub(crate) option_args: Vec<OsString>,
+}
+
+pub(crate) struct InterrogationResult {
+    pub(crate) record: CheckRecord,
+    pub(crate) turn_usage: Option<TokenUsage>,
+    pub(crate) context_compacted: bool,
+    pub(crate) stop_after_current_expectation: bool,
+}
+
+pub(crate) struct QueryInterrogationResult {
+    pub(crate) answer: ParsedAnswer,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct NarrowingStats {
+    pub(crate) attempted: usize,
+    pub(crate) accepted: usize,
+    pub(crate) rejected: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CheckRunReport {
+    pub(crate) records: Vec<CheckRecord>,
+    pub(crate) non_selected: Vec<SelectedExpectation>,
+    // Final selected count after every selection rule has run. This excludes
+    // command-selector misses, cooldown matches, and silent exact-cache passes.
+    // Failed exact-cache hits stay selected because they produce FAILED output.
+    pub(crate) selected: usize,
+    // Final non-selected count. Silent exact-cache passes are non-selected for
+    // reporting because they produce no per-expectation stdout.
+    pub(crate) skipped: usize,
+    // Non-selected expectations that intentionally produce no per-expectation
+    // stdout, currently cooldown matches and silent exact-cache passes.
+    pub(crate) silent: usize,
+    pub(crate) narrowing: NarrowingStats,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CheckRunError {
+    pub(crate) error: String,
+    pub(crate) report: CheckRunReport,
+}
+
+pub(crate) fn check_run_error(
+    records: &[CheckRecord],
+    non_selected: &[SelectedExpectation],
+    selected: usize,
+    skipped: usize,
+    silent: usize,
+    narrowing: NarrowingStats,
+    error: String,
+) -> CheckRunError {
+    CheckRunError {
+        error,
+        report: CheckRunReport {
+            records: records.to_vec(),
+            non_selected: non_selected.to_vec(),
+            selected,
+            skipped,
+            silent,
+            narrowing,
+        },
+    }
+}

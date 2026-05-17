@@ -1,12 +1,18 @@
+use crate::check_types::SelectedExpectation;
+use crate::config_types::{AgentConfig, CheckConfig};
+use crate::fs_util::replace_file_with_temp;
 use crate::git::{read_staged_file_bytes_from_raw_path, staged_tracked_path_bytes};
-use crate::history::{history_path, read_history_records_from_path};
-use crate::history_reuse::is_reusable_history_record;
-use crate::logging::{render_check_log_record, DiagnosticLogWriter};
-use crate::scope::is_denied_path_bytes;
-use crate::types::{AgentConfig, CheckConfig, SelectedExpectation, TokenUsage};
+use crate::hash::full_scope;
+use crate::history::{read_history_records_from_path, HistoryCache};
+use crate::history_compaction::compact_history_temp_path;
+use crate::history_reuse::latest_history_scope_with_cache;
+use crate::logging::render_check_log_record;
+use crate::logging::DiagnosticLogWriter;
+use crate::scope::{is_denied_path_bytes, sanitize_scope_for_hash};
+use crate::token_usage_types::TokenUsage;
 use serde_json::json;
 use std::fs;
-use std::io;
+use std::io::Write;
 use std::path::Path;
 
 pub(crate) fn apply_lazy_full_scope_reset(
@@ -23,29 +29,33 @@ pub(crate) fn apply_lazy_full_scope_reset(
         non_selected,
         random_reset_seed(),
     )?;
-    diagnostic_log.write_event(
-        "info",
-        "lazy_full_scope_reset",
-        &[
-            ("projectSizeTokens", json!(reset.project_size_tokens)),
-            ("candidates", json!(non_selected.len())),
-            ("reset", json!(reset.expectations.len())),
-            (
-                "ids",
-                json!(reset
-                    .expectations
-                    .iter()
-                    .map(|expectation| expectation.id.clone())
-                    .collect::<Vec<_>>()),
-            ),
-        ],
-    )?;
+    diagnostic_log
+        .write_event(
+            "info",
+            "lazy_full_scope_reset",
+            &[
+                ("projectSizeTokens", json!(reset.project_size_tokens)),
+                ("candidates", json!(non_selected.len())),
+                ("reset", json!(reset.expectations.len())),
+                (
+                    "ids",
+                    json!(reset
+                        .expectations
+                        .iter()
+                        .map(|expectation| expectation.id.clone())
+                        .collect::<Vec<_>>()),
+                ),
+            ],
+        )
+        .map_err(|err| err.to_string())?;
     for error in reset_non_selected_expectation_histories(root, &reset.expectations) {
-        diagnostic_log.write_event(
-            "warning",
-            "lazy_full_scope_reset.error",
-            &[("message", json!(error))],
-        )?;
+        diagnostic_log
+            .write_event(
+                "warning",
+                "lazy_full_scope_reset.error",
+                &[("message", json!(error))],
+            )
+            .map_err(|err| err.to_string())?;
     }
     Ok(())
 }
@@ -72,6 +82,12 @@ pub(crate) struct LazyFullScopeResetPlan {
     pub(crate) expectations: Vec<SelectedExpectation>,
 }
 
+#[derive(Clone)]
+struct ScopedNonSelectedExpectation {
+    expectation: SelectedExpectation,
+    scope: Vec<String>,
+}
+
 pub(crate) fn plan_lazy_full_scope_reset(
     root: &Path,
     agent: &AgentConfig,
@@ -80,12 +96,43 @@ pub(crate) fn plan_lazy_full_scope_reset(
     seed: u64,
 ) -> Result<LazyFullScopeResetPlan, String> {
     let project_size_tokens = estimate_staged_project_size_tokens(root, agent)?;
+    let scoped_non_selected =
+        non_selected_expectations_with_current_scope(root, agent, non_selected)?;
+    let candidates = lazy_full_scope_reset_candidates(&scoped_non_selected);
     let reset_count =
-        lazy_full_scope_reset_count(total_tokens, project_size_tokens, seed, non_selected.len());
+        lazy_full_scope_reset_count(total_tokens, project_size_tokens, seed, candidates.len());
     Ok(LazyFullScopeResetPlan {
         project_size_tokens,
-        expectations: sample_reset_expectations(non_selected, reset_count, seed),
+        expectations: sample_reset_expectations(&candidates, reset_count, seed),
     })
+}
+
+fn non_selected_expectations_with_current_scope(
+    root: &Path,
+    agent: &AgentConfig,
+    non_selected: &[SelectedExpectation],
+) -> Result<Vec<ScopedNonSelectedExpectation>, String> {
+    let mut history_cache = HistoryCache::new();
+    let mut scoped = Vec::new();
+    for expectation in non_selected {
+        let scope = latest_history_scope_with_cache(root, agent, expectation, &mut history_cache)?
+            .unwrap_or_else(full_scope);
+        scoped.push(ScopedNonSelectedExpectation {
+            expectation: expectation.clone(),
+            scope,
+        });
+    }
+    Ok(scoped)
+}
+
+fn lazy_full_scope_reset_candidates(
+    non_selected: &[ScopedNonSelectedExpectation],
+) -> Vec<SelectedExpectation> {
+    non_selected
+        .iter()
+        .filter(|expectation| expectation.scope != full_scope())
+        .map(|expectation| expectation.expectation.clone())
+        .collect()
 }
 
 pub(crate) fn estimate_staged_project_size_tokens(
@@ -148,7 +195,7 @@ pub(crate) fn lazy_full_scope_reset_count(
     if total_tokens == 0 || project_size_tokens == 0 || candidate_count == 0 {
         return 0;
     }
-    let denominator = 10u128 * project_size_tokens as u128;
+    let denominator = 20u128 * project_size_tokens as u128;
     let numerator = total_tokens as u128;
     let mut count = (numerator / denominator) as usize;
     let remainder = numerator % denominator;
@@ -185,42 +232,53 @@ pub(crate) fn reset_non_selected_expectation_histories(
     expectations: &[SelectedExpectation],
 ) -> Vec<String> {
     let mut errors = Vec::new();
+    let mut history_cache = HistoryCache::new();
     for expectation in expectations {
-        let path = match history_path(root, expectation) {
-            Ok(path) => path,
-            Err(err) => {
-                errors.push(err);
-                continue;
-            }
-        };
-        match reset_scope_and_invalidate_cache(&path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => errors.push(format!("failed to reset {}: {}", path.display(), err)),
+        if let Err(err) =
+            reset_expectation_history_to_full_scope_seed(root, expectation, &mut history_cache)
+        {
+            errors.push(err);
         }
     }
     errors
 }
 
-fn reset_scope_and_invalidate_cache(path: &Path) -> io::Result<()> {
+fn reset_expectation_history_to_full_scope_seed(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+) -> Result<(), String> {
+    let path = history_cache.path(root, expectation)?;
     if !path.exists() {
         return Ok(());
     }
-    let records = read_history_records_from_path(path).map_err(io::Error::other)?;
-    let mut output = String::new();
+    let records = read_history_records_from_path(&path)?;
+    let mut kept = Vec::new();
     for record in records {
-        if is_reusable_history_record(&record) {
-            // Narrowed scope state is derived from reusable history records by
-            // `latest_history_scope_with_cache`; exact cache hits are derived
-            // from those same records by `reusable_history_record_for_source`.
-            // Dropping the reusable records resets the next invocation to
-            // full-scope interrogation and invalidates the exact cache without
-            // writing synthetic history records that would violate cache shape.
-            continue;
+        if sanitize_scope_for_hash(&record.scope).is_ok_and(|scope| scope == full_scope()) {
+            kept.push(record);
         }
-        output.push_str(&render_check_log_record(&record));
     }
-    fs::write(path, output)
+    if kept.is_empty() {
+        fs::remove_file(&path)
+            .map_err(|err| format!("failed to remove {}: {}", path.display(), err))?;
+    } else {
+        let temp_path = compact_history_temp_path(&path)?;
+        let mut file = fs::File::create(&temp_path)
+            .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+        for record in kept {
+            let line = render_check_log_record(&record).map_err(|err| err.to_string())?;
+            file.write_all(line.as_bytes())
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+        }
+        file.flush()
+            .map_err(|err| format!("failed to flush {}: {}", temp_path.display(), err))?;
+        drop(file);
+        replace_file_with_temp(&temp_path, &path)?;
+    }
+    history_cache.records.remove(&path);
+    history_cache.reusable_records.clear();
+    Ok(())
 }
 
 fn random_reset_seed() -> u64 {

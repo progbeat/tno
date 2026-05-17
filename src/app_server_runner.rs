@@ -1,14 +1,20 @@
 use crate::app_server::{AppServerRunner, LazyAppServerRunner};
 use crate::check_validation::codex_reasoning_effort;
+use crate::config_types::AgentConfig;
 use crate::evaluator::{
     evaluator_response_output_schema, evaluator_turn_input, render_evaluator_turn_input,
 };
 use crate::evaluator_config::evaluator_thread_config;
 use crate::evaluator_turn::is_model_technical_failure;
-use crate::types::{AgentConfig, EvaluatorError, EvaluatorRunner, TokenUsage};
+use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
+use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::Path;
+
+const EVALUATOR_SESSION_START_SOURCE: &str = "clear";
+const EVALUATOR_BASE_INSTRUCTIONS: &str =
+    "You are a read-only canon evaluator. Answer the current turn using only this thread's developer instructions, current turn input, and permitted project files.";
 
 impl LazyAppServerRunner {
     pub(crate) fn token_usage(&self) -> Option<TokenUsage> {
@@ -89,6 +95,23 @@ impl EvaluatorRunner for LazyAppServerRunner {
         }
         result
     }
+
+    fn take_last_turn_usage(&mut self) -> Option<EvaluatorTurnUsage> {
+        self.inner
+            .as_mut()
+            .and_then(AppServerRunner::take_last_turn_usage)
+    }
+
+    fn take_retired_sessions(&mut self) -> Vec<String> {
+        let Some(inner) = self.inner.as_mut() else {
+            return Vec::new();
+        };
+        let retired = inner.drain_retired_sessions();
+        for session_id in &retired {
+            self.sessions.remove(session_id);
+        }
+        retired
+    }
 }
 
 impl EvaluatorRunner for AppServerRunner {
@@ -103,11 +126,15 @@ impl EvaluatorRunner for AppServerRunner {
     ) -> Result<String, EvaluatorError> {
         let params = ThreadStartParams {
             cwd: root.display().to_string(),
+            base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
             developer_instructions: instructions,
             approval_policy: "never",
             config: evaluator_thread_config(agent, scope, model, thinking),
             ephemeral: true,
-            session_start_source: "startup",
+            // Evaluator threads must not inherit the parent Codex conversation:
+            // canon questions about "your dev instructions" refer only to the
+            // rendered evaluator developerInstructions parameter below.
+            session_start_source: EVALUATOR_SESSION_START_SOURCE,
         };
         let params = serde_json::to_value(params)
             .map_err(|err| format!("failed to encode thread/start params: {}", err))?;
@@ -144,11 +171,21 @@ impl EvaluatorRunner for AppServerRunner {
         request["outputSchema"] = evaluator_response_output_schema();
         self.send_turn_request("turn/start", request)
     }
+
+    fn take_last_turn_usage(&mut self) -> Option<EvaluatorTurnUsage> {
+        self.last_turn_usage.take()
+    }
+
+    fn take_retired_sessions(&mut self) -> Vec<String> {
+        self.drain_retired_sessions()
+    }
 }
 
 #[derive(Serialize)]
 struct ThreadStartParams<'a> {
     cwd: String,
+    #[serde(rename = "baseInstructions")]
+    base_instructions: &'a str,
     #[serde(rename = "developerInstructions")]
     developer_instructions: &'a str,
     #[serde(rename = "approvalPolicy")]

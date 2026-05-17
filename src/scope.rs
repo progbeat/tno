@@ -1,5 +1,5 @@
+use crate::config_types::AgentConfig;
 use crate::hash::full_scope;
-use crate::types::AgentConfig;
 use std::path::Path;
 
 pub(crate) fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, String> {
@@ -65,7 +65,7 @@ pub(crate) fn normalize_repo_path(value: &str) -> Result<String, String> {
         return Err("path must not be empty".to_string());
     }
     // Git paths may contain newlines and other control bytes, and scope
-    // hashing has a length-prefixed path for those entries. NUL is different:
+    // hashing length-prefixes every entry before hashing. NUL is different:
     // Git paths and process arguments cannot represent it, so reject it at the
     // normalized repo-path boundary instead of failing later in Command::arg.
     if value.contains('\0') {
@@ -208,7 +208,7 @@ pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
 
 pub(crate) fn normalized_ignore_pattern(pattern: &str) -> String {
     normalize_repo_path(pattern)
-        .unwrap_or_else(|_| pattern.trim().trim_start_matches("./").to_string())
+        .unwrap_or_else(|_| pattern.strip_prefix("./").unwrap_or(pattern).to_string())
 }
 
 pub(crate) const MANDATORY_EVALUATOR_DENY_PATTERNS: &[&str] = &[

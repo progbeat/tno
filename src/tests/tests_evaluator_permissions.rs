@@ -126,8 +126,9 @@ expectations:
 
 #[test]
 fn app_server_starts_with_plugins_disabled_by_default() {
+    let root = git_project("app-server-args-default");
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let disabled = app_server_args(false, &config.agent);
+    let disabled = app_server_args(&root, false, &config.agent).unwrap();
     assert_eq!(&disabled[..3], ["app-server", "--disable", "plugins"]);
     assert_eq!(&disabled[disabled.len() - 2..], ["--listen", "stdio://"]);
     assert!(disabled
@@ -162,11 +163,15 @@ fn app_server_starts_with_plugins_disabled_by_default() {
     assert!(filesystem_arg.contains(r#""~/.codex/memories/**"="none""#));
     assert!(!filesystem_arg.contains(r#""write""#));
     assert!(!filesystem_arg.contains(r#""."="read""#));
+    assert!(disabled
+        .windows(2)
+        .any(|pair| { pair == ["-c", "thread_reuse.carryover_token_target=[10000,30000]",] }));
 
-    let enabled = app_server_args(true, &config.agent);
+    let enabled = app_server_args(&root, true, &config.agent).unwrap();
     assert_eq!(enabled.first().map(String::as_str), Some("app-server"));
     assert!(!enabled.iter().any(|arg| arg == "--disable"));
     assert_eq!(&enabled[enabled.len() - 2..], ["--listen", "stdio://"]);
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -190,4 +195,49 @@ fn app_server_startup_config_escapes_toml_control_characters() {
     assert!(filesystem_arg.contains(r#""delete\u007Fpath"="none""#));
     assert!(!filesystem_arg.contains('\u{0007}'));
     assert!(!filesystem_arg.contains('\u{007f}'));
+}
+
+#[test]
+fn thread_reuse_config_reads_git_carryover_token_target() {
+    let root = git_project("thread-reuse-config");
+    let output = Command::new("git")
+        .args([
+            "config",
+            "canon.threadReuse.carryoverTokenTarget",
+            "12000,24000",
+        ])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let config = thread_reuse_config(&root).unwrap();
+
+    assert_eq!(config.carryover_token_target.min, 12_000);
+    assert_eq!(config.carryover_token_target.max, 24_000);
+    assert_eq!(
+        thread_reuse_carryover_token_target_arg(&config),
+        "thread_reuse.carryover_token_target=[12000,24000]"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn thread_reuse_config_defaults_and_validates_carryover_token_target() {
+    let root = git_project("thread-reuse-config-default");
+    assert_eq!(
+        thread_reuse_config(&root).unwrap(),
+        DEFAULT_THREAD_REUSE_CONFIG
+    );
+
+    assert!(parse_carryover_token_target("30000,10000")
+        .unwrap_err()
+        .contains("MIN"));
+    assert!(parse_carryover_token_target("10000")
+        .unwrap_err()
+        .contains("MIN,MAX"));
+    assert!(parse_carryover_token_target("0,10000")
+        .unwrap_err()
+        .contains("greater than zero"));
+    let _ = fs::remove_dir_all(root);
 }

@@ -4,8 +4,9 @@ use super::*;
 fn evaluator_prompt_is_only_current_question_text() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let prompt = "Permission question?".to_string();
+    let response_format_heading = response_format_block().lines().next().unwrap();
     assert_eq!(prompt, "Permission question?");
-    assert!(!prompt.contains("Response format:"));
+    assert!(!prompt.contains(response_format_heading));
     assert!(!prompt.contains("ANSWER: <single-line answer>"));
     assert!(!prompt.contains("Instructions:"));
     assert!(!prompt.contains(config.agent.instructions.trim()));
@@ -50,16 +51,11 @@ fn evaluator_turn_uses_strict_json_output_schema() {
 fn developer_instructions_include_agent_instructions_and_response_format() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let instructions = developer_instructions(&config.agent, &full_scope());
+    let answer_policy = include_str!("../instructions/evaluator_answer_policy.txt").trim_end();
     assert!(instructions.contains(config.agent.instructions.trim()));
-    assert!(instructions.contains("Response format:\nReturn exactly one valid JSON object"));
-    assert!(instructions.contains(r#""answer":"<single-line answer>""#));
-    assert!(instructions.contains(r#""scope":["<normalized repository-relative path>"]"#));
-    assert!(instructions
-        .contains("do not answer `idk` merely because a build or test command cannot run"));
-    assert!(instructions.contains(
-        "if a question asks whether you can read or open `.canon/check.yml`, answer `no`"
-    ));
-    assert!(instructions.contains(
-        "if a question asks whether you can read files under `CANON_STATE_DIR`, answer `no`"
-    ));
+    assert!(instructions.contains(response_format_block()));
+    assert!(instructions.contains("project-relative refs enclosed in backticks"));
+    assert!(instructions.contains(answer_policy));
+    assert!(instructions.contains("\"your dev instructions\" mean only this rendered evaluator"));
+    assert!(instructions.contains("does not include the contents of AGENTS.md"));
 }

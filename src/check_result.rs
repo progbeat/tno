@@ -1,5 +1,5 @@
 use crate::check_output::record_requires_human_review;
-use crate::types::{CheckRecord, CheckResult, CheckRunReport};
+use crate::check_types::{CheckRecord, CheckResult, CheckRunReport};
 
 pub(crate) fn report_passed_count(report: &CheckRunReport) -> usize {
     report

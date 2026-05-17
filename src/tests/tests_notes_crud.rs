@@ -36,7 +36,7 @@ fn write_and_append_preserve_metadata() {
 }
 
 #[test]
-fn write_replaces_visible_note_content_without_rewriting_log() {
+fn write_replaces_visible_note_content_and_compacts_file() {
     with_env("write-replace", |_| {
         let config = Config::from_env().unwrap();
         write_note(&config, "src/main.rs", "old body").unwrap();
@@ -46,7 +46,50 @@ fn write_replaces_visible_note_content_without_rewriting_log() {
         let content = materialize_note_content(&note, &raw).unwrap();
         assert!(!content.contains("old body"));
         assert!(content.contains("new body"));
-        assert!(raw.contains("old body"));
+        assert!(!raw.contains("old body"));
+        assert!(!raw.contains("<!-- canon log v1 -->"));
+    });
+}
+
+#[test]
+fn append_persists_log_record_without_rewriting_note() {
+    with_env("append-log", |_| {
+        let config = Config::from_env().unwrap();
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        ensure_dir(&config.root).unwrap();
+        fs::write(
+            &note.path,
+            format!("{}body\n", initial_content(&note.key, &note.hash)),
+        )
+        .unwrap();
+
+        append_note(&config, "src/main.rs", "decision").unwrap();
+
+        let raw = fs::read_to_string(&note.path).unwrap();
+        let content = materialize_note_content(&note, &raw).unwrap();
+        assert!(content.contains("\nbody\n"));
+        assert!(content.contains("decision"));
+        assert!(raw.contains("<!-- canon log v1 -->"));
+        assert!(raw.contains(r#""op":"append""#));
+    });
+}
+
+#[test]
+fn append_compacts_note_log_after_threshold() {
+    with_env("append-log-compact", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "body").unwrap();
+        append_note(
+            &config,
+            "src/main.rs",
+            &"decision".repeat((NOTE_LOG_COMPACT_MIN_BYTES / 8) as usize + 1),
+        )
+        .unwrap();
+
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let raw = fs::read_to_string(&note.path).unwrap();
+        assert!(!raw.contains("<!-- canon log v1 -->"));
+        assert!(raw.contains("decision"));
     });
 }
 

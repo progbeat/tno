@@ -22,14 +22,21 @@ pub(crate) fn resolve_git_path(root: &Path, path: &str) -> Result<PathBuf, Strin
     Ok(root.join(path_from_git_stdout(output.stdout)))
 }
 
-pub(crate) fn read_staged_file_content(root: &Path, path: &str) -> Result<String, String> {
-    read_staged_file_content_from_path(root, Path::new(path))
+pub(crate) fn git_head_tree_exists(root: &Path) -> Result<bool, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "-q", "HEAD^{tree}"])
+        .output()
+        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
+    Ok(output.status.success())
 }
 
-pub(crate) fn read_staged_file_content_from_path(
+pub(crate) fn read_staged_file_content(
     root: &Path,
-    path: &Path,
+    path: impl AsRef<Path>,
 ) -> Result<String, String> {
+    let path = path.as_ref();
     let output = read_staged_file_bytes_from_raw_path(root, &git_path_bytes(path)?)?;
     String::from_utf8(output).map_err(|_| format!("staged {} must be valid UTF-8", path.display()))
 }
@@ -38,8 +45,10 @@ pub(crate) fn read_staged_file_bytes_from_raw_path(
     root: &Path,
     path: &[u8],
 ) -> Result<Vec<u8>, String> {
-    let mut revision = Vec::with_capacity(path.len() + 1);
-    revision.push(b':');
+    let mut revision = Vec::with_capacity(path.len() + 3);
+    // Use explicit stage-0 index syntax so literal paths that begin with `:`
+    // are not parsed as another Git revision form.
+    revision.extend_from_slice(b":0:");
     revision.extend_from_slice(path);
     let revision = git_path_from_raw_bytes(&revision)?;
     let output = Command::new("git")

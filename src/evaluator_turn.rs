@@ -1,14 +1,14 @@
-use crate::evaluator_response_cache::{response_excerpt, EvaluatorResponseParseCache};
-use crate::hash::full_scope;
-use crate::history_cache_key::history_cache_key;
-use crate::history_reuse::is_reusable_history_record;
-use crate::logging::DiagnosticLogWriter;
-use crate::time::{format_record_timestamp, unix_timestamp};
-use crate::types::{
-    AgentConfig, CheckRecord, CheckResult, EvaluatorError, EvaluatorRunner, ObservedAnswerState,
-    ParsedAnswer, SelectedExpectation, TokenUsage,
+use crate::check_types::{
+    CheckRecord, CheckRecordOutcome, CheckResult, ObservedAnswerState, ParsedAnswer,
+    SelectedExpectation,
 };
-use crate::{EMPTY_EVIDENCE_OBSERVED, OBSERVED_IDK, OBSERVED_MALFORMED, UNPARSEABLE_OBSERVED};
+use crate::config_types::AgentConfig;
+use crate::evaluator_response_cache::{response_excerpt, EvaluatorResponseParseCache};
+use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
+use crate::hash::full_scope;
+use crate::logging::DiagnosticLogWriter;
+use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
+use crate::UNPARSEABLE_OBSERVED;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -89,30 +89,24 @@ pub(crate) fn record_from_response(
     scope_hash: String,
 ) -> Result<CheckRecord, String> {
     let requires_human_review =
-        ObservedAnswerState::from_observed(&response.answer).requires_human_review();
+        ObservedAnswerState::from_expected_and_observed(&expectation.a, &response.answer)
+            .requires_human_review();
     let result = if !requires_human_review && response.answer == expectation.a {
         CheckResult::Pass
     } else {
         CheckResult::Fail
     };
-    Ok(CheckRecord {
-        timestamp: format_record_timestamp(unix_timestamp()?),
-        id: expectation.id.clone(),
-        display_id: expectation.display_id.clone(),
-        number: expectation.number,
-        result,
-        prompt: expectation.q.clone(),
-        expected: expectation.a.clone(),
-        observed: response.answer,
-        evidence: response.evidence,
-        scope: enforced_scope,
-        scope_hash,
-        cache_key: Some(history_cache_key(agent, expectation)),
-    })
-}
-
-pub(crate) fn is_verified_record(record: &CheckRecord) -> bool {
-    is_reusable_history_record(record)
+    CheckRecord::current_from_expectation(
+        agent,
+        expectation,
+        CheckRecordOutcome {
+            result,
+            observed: response.answer,
+            evidence: response.evidence,
+            scope: enforced_scope,
+            scope_hash,
+        },
+    )
 }
 
 // This module owns one evaluator turn: model labels, response parsing, and
@@ -128,6 +122,18 @@ pub(crate) struct EvaluatorTurnContext<'a> {
     pub(crate) thinking: &'a str,
 }
 
+pub(crate) struct ParsedTurnResponse {
+    pub(crate) answer: ParsedAnswer,
+    pub(crate) usage: Option<TokenUsage>,
+    pub(crate) context_compacted: bool,
+}
+
+pub(crate) struct RawTurnResponse {
+    pub(crate) text: String,
+    pub(crate) usage: Option<TokenUsage>,
+    pub(crate) context_compacted: bool,
+}
+
 pub(crate) fn ask_once<R: EvaluatorRunner>(
     runner: &mut R,
     turn: &EvaluatorTurnContext<'_>,
@@ -136,7 +142,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
     parser_cache: &mut EvaluatorResponseParseCache,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_id: Option<&str>,
-) -> Result<ParsedAnswer, EvaluatorError> {
+) -> Result<ParsedTurnResponse, EvaluatorError> {
     let response = ask_and_log(
         runner,
         turn,
@@ -146,32 +152,24 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
         1,
         "initial",
     )?;
-    let mut parsed = match parser_cache.parse(&response, agent) {
+    let parsed = match parser_cache.parse(&response.text, agent) {
         Ok(answer) => answer,
         Err(err) => ParsedAnswer {
             answer: UNPARSEABLE_OBSERVED.to_string(),
             evidence: format!(
                 "evaluator response could not be parsed: {}\nresponse: {}",
                 err,
-                response_excerpt(&response)
+                response_excerpt(&response.text)
             ),
             scope: full_scope(),
         },
     };
 
-    if parsed.evidence.trim().is_empty()
-        && parsed.answer != OBSERVED_IDK
-        && parsed.answer != OBSERVED_MALFORMED
-        && parsed.answer != UNPARSEABLE_OBSERVED
-    {
-        parsed = ParsedAnswer {
-            answer: EMPTY_EVIDENCE_OBSERVED.to_string(),
-            evidence: "evaluator response evidence was empty".to_string(),
-            scope: parsed.scope,
-        };
-    }
-
-    Ok(parsed)
+    Ok(ParsedTurnResponse {
+        answer: parsed,
+        usage: response.usage,
+        context_compacted: response.context_compacted,
+    })
 }
 
 pub(crate) fn ask_and_log<R: EvaluatorRunner>(
@@ -182,7 +180,7 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
     expectation_id: Option<&str>,
     attempt: usize,
     reason: &str,
-) -> Result<String, EvaluatorError> {
+) -> Result<RawTurnResponse, EvaluatorError> {
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         let raw_request = serde_json::to_value(EvaluatorTurnLogRequest {
             session_id: turn.session_id,
@@ -198,32 +196,49 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
                 ("id", json!(expectation_id)),
                 ("attempt", json!(attempt)),
                 ("reason", json!(reason)),
-                ("raw", json!(prompt)),
-                ("rawRequest", raw_request.clone()),
                 ("request", raw_request),
             ],
         )?;
     }
     let response = runner.ask(turn.session_id, prompt, turn.model, turn.thinking)?;
+    let turn_usage = runner.take_last_turn_usage();
+    let response_usage = turn_usage.as_ref().map(|turn_usage| turn_usage.usage);
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         let raw_response = json!({
             "sessionId": turn.session_id,
             "text": response.clone(),
         });
-        writer.write_event(
-            "info",
-            "agent.response",
-            &[
-                ("id", json!(expectation_id)),
-                ("attempt", json!(attempt)),
-                ("reason", json!(reason)),
-                ("raw", json!(response.clone())),
-                ("rawResponse", json!(response.clone())),
-                ("response", raw_response),
-            ],
-        )?;
+        let mut fields = vec![
+            ("id", json!(expectation_id)),
+            ("attempt", json!(attempt)),
+            ("reason", json!(reason)),
+            ("response", raw_response),
+        ];
+        if let Some(EvaluatorTurnUsage {
+            thread_id,
+            turn_id,
+            token_usage_updates,
+            context_compaction_events,
+            ..
+        }) = turn_usage.as_ref()
+        {
+            fields.push(("threadId", json!(thread_id)));
+            fields.push(("turnId", json!(turn_id)));
+            fields.push(("tokenUsageUpdates", json!(token_usage_updates)));
+            if !context_compaction_events.is_empty() {
+                fields.push(("contextCompactionEvents", json!(context_compaction_events)));
+            }
+        }
+        writer.write_event("info", "agent.response", &fields)?;
     }
-    Ok(response)
+    let context_compacted = turn_usage
+        .as_ref()
+        .is_some_and(|turn_usage| !turn_usage.context_compaction_events.is_empty());
+    Ok(RawTurnResponse {
+        text: response,
+        usage: response_usage,
+        context_compacted,
+    })
 }
 
 #[derive(Serialize)]

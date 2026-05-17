@@ -1,51 +1,34 @@
 use crate::fs_util::{for_each_nonempty_line, replace_file_with_temp};
-use crate::hash::fnv64_with_seed;
 use crate::history::parse_history_record_line;
-use crate::{
-    COMPACTION_SAMPLE_COUNTER, FNV_OFFSET, HISTORY_COMPACT_KEEP_RECORDS,
-    HISTORY_COMPACT_SAMPLE_INTERVAL,
-};
+use crate::{HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) fn should_compact_history(path: &Path) -> Result<bool, String> {
-    sample_approximately_one_in(HISTORY_COMPACT_SAMPLE_INTERVAL, "history-compact", path)
+static HISTORY_COMPACT_CHANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static HISTORY_COMPACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn should_compact_history() -> bool {
+    should_compact_history_for_seed(compaction_chance_seed())
 }
 
-pub(crate) fn sample_approximately_one_in(
-    interval: u64,
-    label: &str,
-    path: &Path,
-) -> Result<bool, String> {
-    if interval == 0 {
-        return Err("sample interval must be greater than zero".to_string());
-    }
-    let counter = COMPACTION_SAMPLE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|err| format!("system clock is before UNIX_EPOCH: {}", err))?
-        .as_nanos();
-    let seed = format!(
-        "{}\0{}\0{}\0{}\0{}",
-        label,
-        process::id(),
-        counter,
-        now,
-        path.display()
-    );
-    Ok(
-        fnv64_with_seed(FNV_OFFSET ^ 0xa24b_aed4_963e_e407, seed.as_bytes())
-            .is_multiple_of(interval),
-    )
+pub(crate) fn should_compact_history_for_seed(seed: u64) -> bool {
+    seed.is_multiple_of(HISTORY_COMPACT_CHANCE_DENOMINATOR)
+}
+
+fn compaction_chance_seed() -> u64 {
+    let counter = HISTORY_COMPACT_CHANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    nanos ^ counter.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ process::id() as u64
 }
 
 pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
     let mut valid_lines = 0usize;
     let mut invalid_lines = 0usize;
     let mut lines = std::collections::VecDeque::new();
@@ -84,6 +67,7 @@ pub(crate) fn compact_history_temp_path(path: &Path) -> Result<PathBuf, String> 
         .file_name()
         .ok_or_else(|| format!("history path has no file name: {}", path.display()))?;
     let mut temp_name = file_name.to_os_string();
-    temp_name.push(".tmp");
+    let sequence = HISTORY_COMPACT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    temp_name.push(format!(".tmp.{}.{}", process::id(), sequence));
     Ok(path.with_file_name(temp_name))
 }

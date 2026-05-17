@@ -1,32 +1,24 @@
+use crate::check_types::{contains_line_break, EvaluatorResponseJson, ParsedAnswer};
+use crate::config_types::AgentConfig;
 use crate::evaluator_json::validate_evaluator_response_key_order;
 use crate::evaluator_scope::parse_scope_strings;
-use crate::types::{AgentConfig, EvaluatorResponseJson, ParsedAnswer};
-use crate::{OBSERVED_IDK, OBSERVED_MALFORMED};
 
 pub(crate) fn parse_evaluator_response(
     text: &str,
     agent: &AgentConfig,
 ) -> Result<ParsedAnswer, String> {
     let response = parse_evaluator_response_json(text)?;
-    if response.answer.contains('\n') || response.answer.contains('\r') {
+    if contains_line_break(&response.answer) {
         return Err("answer must be a single-line string".to_string());
     }
-    if !evaluator_answer_is_allowed(&response.answer) {
-        return Err(
-            "answer must be exactly yes, no, idk, malformed, or one lowercase ASCII option letter"
-                .to_string(),
-        );
-    }
+    // Parsed answers stay vocabulary-neutral. `ObservedAnswerState` validates
+    // the answer shape against the expectation: yes/no questions reject
+    // free-form prose, while free-form expectations can compare exact strings.
     Ok(ParsedAnswer {
         answer: response.answer,
         evidence: response.evidence,
         scope: parse_scope_strings(&response.scope, agent)?,
     })
-}
-
-pub(crate) fn evaluator_answer_is_allowed(answer: &str) -> bool {
-    matches!(answer, "yes" | "no" | OBSERVED_IDK | OBSERVED_MALFORMED)
-        || matches!(answer.as_bytes(), [letter] if letter.is_ascii_lowercase())
 }
 
 pub(crate) fn parse_evaluator_response_json(text: &str) -> Result<EvaluatorResponseJson, String> {

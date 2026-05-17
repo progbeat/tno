@@ -1,6 +1,8 @@
-use crate::check_selection::{expectation_identities, parse_cooldown};
+use crate::check_selection::parse_cooldown;
+use crate::check_types::contains_line_break;
+use crate::config_types::CheckConfig;
 use crate::scope::normalize_repo_path;
-use crate::types::CheckConfig;
+use crate::{OBSERVED_IDK, OBSERVED_MALFORMED};
 
 pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
     if config.version != 1 {
@@ -36,15 +38,21 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 number
             ));
         }
-        if expectation.a.contains('\n') || expectation.a.contains('\r') {
+        if contains_line_break(&expectation.a) {
             return Err(format!(
                 "expectation {} expected answer must be single-line",
                 number
             ));
         }
-        if !expected_answer_is_allowed(&expectation.a) {
+        if !contains_visible_config_text(&expectation.a) {
             return Err(format!(
-                "expectation {} expected answer must be yes, no, or one lowercase ASCII option letter",
+                "expectation {} expected answer must contain visible text",
+                number
+            ));
+        }
+        if matches!(expectation.a.as_str(), OBSERVED_IDK | OBSERVED_MALFORMED) {
+            return Err(format!(
+                "expectation {} expected answer must not be idk or malformed",
                 number
             ));
         }
@@ -57,7 +65,6 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 .map_err(|err| format!("expectation {} thinking: {}", number, err))?;
         }
     }
-    expectation_identities(config)?;
     Ok(())
 }
 
@@ -70,7 +77,7 @@ pub(crate) fn validate_plugin_config_key(value: &str) -> Result<(), String> {
     if value != value.trim() {
         return Err("agent plugin entries must not have surrounding whitespace".to_string());
     }
-    if value.contains('\n') || value.contains('\r') {
+    if contains_line_break(value) {
         return Err("agent plugin entries must be single-line strings".to_string());
     }
     if value.chars().any(char::is_whitespace) {
@@ -104,11 +111,6 @@ fn is_plugin_key_segment(value: &str) -> bool {
     value
         .bytes()
         .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
-
-fn expected_answer_is_allowed(answer: &str) -> bool {
-    matches!(answer, "yes" | "no")
-        || matches!(answer.as_bytes(), [letter] if letter.is_ascii_lowercase())
 }
 
 fn contains_visible_config_text(value: &str) -> bool {
@@ -193,7 +195,7 @@ pub(crate) fn validate_thinking(value: &str) -> Result<(), String> {
     if value.trim().is_empty() {
         return Err("check.yml agent.thinking must not be empty".to_string());
     }
-    if value.contains('\n') || value.contains('\r') {
+    if contains_line_break(value) {
         return Err("check.yml agent.thinking must be a single-line string".to_string());
     }
     match value {
@@ -224,5 +226,8 @@ pub(crate) fn validate_relative_config_path(value: &str, label: &str) -> Result<
 }
 
 pub(crate) fn normalize_agent_ignore_pattern_for_config(value: &str) -> Result<String, String> {
-    normalize_repo_path(value.trim()).map_err(|err| format!("agent ignore pattern: {}", err))
+    if value.trim().is_empty() {
+        return Err("agent ignore pattern: path must not be empty".to_string());
+    }
+    normalize_repo_path(value).map_err(|err| format!("agent ignore pattern: {}", err))
 }

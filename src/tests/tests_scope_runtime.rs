@@ -89,7 +89,7 @@ version: 1
 agent:
   instructions: x
   ignore:
-    - " foo/./bar/** "
+    - "foo/./bar/**"
   plugins: []
 expectations:
   - q: "Does this behavior work?"
@@ -100,6 +100,34 @@ expectations:
 
     assert_eq!(config.agent.ignore, vec!["foo/bar/**"]);
     assert!(parse_scope_strings(&["foo/bar/baz.rs".to_string()], &config.agent).is_err());
+}
+
+#[test]
+fn agent_ignore_patterns_preserve_leading_and_trailing_spaces() {
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore:
+    - " leading.txt"
+    - "trailing.txt "
+  plugins: []
+expectations:
+  - q: "Does this behavior work?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        config.agent.ignore,
+        vec![" leading.txt".to_string(), "trailing.txt ".to_string()]
+    );
+    assert!(is_denied_path(&config.agent, " leading.txt"));
+    assert!(is_denied_path(&config.agent, "trailing.txt "));
+    assert!(!is_denied_path(&config.agent, "leading.txt"));
+    assert!(!is_denied_path(&config.agent, "trailing.txt"));
 }
 
 #[test]

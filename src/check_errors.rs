@@ -1,7 +1,6 @@
-use crate::history_cache_key::history_cache_key;
+use crate::check_types::{CheckRecord, CheckRecordOutcome, CheckResult, SelectedExpectation};
+use crate::config_types::AgentConfig;
 use crate::scope_hash::ScopeHashCache;
-use crate::time::{format_record_timestamp, unix_timestamp};
-use crate::types::{AgentConfig, CheckRecord, CheckResult, SelectedExpectation};
 use crate::UNPARSEABLE_OBSERVED;
 use std::path::Path;
 
@@ -14,18 +13,15 @@ pub(crate) fn error_record_from_interrogation_error(
     scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<CheckRecord, String> {
     let scope_hash = scope_hash_cache.staged_scope_hash(root, agent, scope)?;
-    Ok(CheckRecord {
-        timestamp: format_record_timestamp(unix_timestamp()?),
-        id: expectation.id.clone(),
-        display_id: expectation.display_id.clone(),
-        number: expectation.number,
-        result: CheckResult::Fail,
-        prompt: expectation.q.clone(),
-        expected: expectation.a.clone(),
-        observed: UNPARSEABLE_OBSERVED.to_string(),
-        evidence: error.to_string(),
-        scope: scope.to_vec(),
-        scope_hash,
-        cache_key: Some(history_cache_key(agent, expectation)),
-    })
+    CheckRecord::current_from_expectation(
+        agent,
+        expectation,
+        CheckRecordOutcome {
+            result: CheckResult::Fail,
+            observed: UNPARSEABLE_OBSERVED.to_string(),
+            evidence: error.to_string(),
+            scope: scope.to_vec(),
+            scope_hash,
+        },
+    )
 }

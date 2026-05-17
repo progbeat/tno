@@ -71,6 +71,52 @@ fn index_updates_do_not_drop_hash_collisions() {
 }
 
 #[test]
+fn index_updates_are_append_only_and_materialized_by_reader() {
+    with_env("index-append-only", |_| {
+        let config = Config::from_env().unwrap();
+        ensure_dir(&config.root).unwrap();
+
+        upsert_index(&config, "hash-one", "target-key").unwrap();
+        upsert_index(&config, "hash-two", "target-key").unwrap();
+        remove_index(&config, "hash-two", "target-key").unwrap();
+
+        let raw = fs::read_to_string(config.root.join("index.tsv")).unwrap();
+        assert_eq!(raw.lines().count(), 3);
+        assert!(read_index(&config.root.join("index.tsv"))
+            .unwrap()
+            .is_empty());
+
+        upsert_index(&config, "hash-three", "target-key").unwrap();
+        let raw = fs::read_to_string(config.root.join("index.tsv")).unwrap();
+        assert_eq!(raw.lines().count(), 4);
+        assert_eq!(
+            read_index(&config.root.join("index.tsv")).unwrap(),
+            vec![("hash-three".to_string(), "target-key".to_string())]
+        );
+    });
+}
+
+#[test]
+fn index_updates_compact_after_threshold() {
+    with_env("index-append-compact", |_| {
+        let config = Config::from_env().unwrap();
+        ensure_dir(&config.root).unwrap();
+        let writes = (INDEX_COMPACT_MIN_BYTES / 16) as usize;
+        for index in 0..writes {
+            upsert_index(&config, &format!("hash-{:08}", index), "target-key").unwrap();
+        }
+        upsert_index(&config, "hash-final", "target-key").unwrap();
+
+        let raw = fs::read_to_string(config.root.join("index.tsv")).unwrap();
+        assert!(raw.lines().count() < writes);
+        assert_eq!(
+            read_index(&config.root.join("index.tsv")).unwrap(),
+            vec![("hash-final".to_string(), "target-key".to_string())]
+        );
+    });
+}
+
+#[test]
 fn read_index_rejects_malformed_lines() {
     with_env("bad-index", |_| {
         let config = Config::from_env().unwrap();

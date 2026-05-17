@@ -4,11 +4,12 @@ use crate::check_interrogation_state::{
 };
 use crate::check_model_fallback::interrogate_expectation_with_model_fallbacks;
 use crate::check_narrowing::scope_narrowing_log_fields;
-use crate::evaluator_turn::is_verified_record;
+use crate::check_types::{CheckRecord, InterrogationResult, SelectedExpectation};
+use crate::evaluator_types::EvaluatorRunner;
 use crate::hash::full_scope;
+use crate::history_reuse::is_reusable_history_record;
 use crate::logging::DiagnosticLogWriter;
 use crate::scope_hash::ScopeHashCache;
-use crate::types::{CheckRecord, EvaluatorRunner, InterrogationResult, SelectedExpectation};
 use std::path::Path;
 
 pub(crate) struct InterrogationCall<'a> {
@@ -31,6 +32,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     interrogation_state: &mut InterrogationState,
     scope_hash_cache: &mut ScopeHashCache,
+    break_after_tokens: Option<u64>,
 ) -> Result<InterrogationResult, String> {
     let mut interrogation = interrogate_or_error_record(
         InterrogationCall {
@@ -44,6 +46,9 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
         interrogation_state,
         scope_hash_cache,
     )?;
+    let should_stop_after_current_expectation =
+        turn_exceeds_break_after_tokens(&interrogation, break_after_tokens)
+            || turn_has_context_compaction(&interrogation);
     if should_retry_full_scope_after_restricted_idk(&interrogation.record, call.enforced_scope) {
         // `idk` is a non-answer, not a cache-spec "same answer" that can prove
         // a narrower scope. The interrogation policy requires a separate
@@ -62,6 +67,9 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
             interrogation_state,
             scope_hash_cache,
         )?;
+        interrogation.stop_after_current_expectation |= should_stop_after_current_expectation;
+    } else if should_stop_after_current_expectation {
+        return Ok(interrogation);
     }
     Ok(interrogation)
 }
@@ -91,12 +99,43 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
                 &err,
                 scope_hash_cache,
             )?,
+            turn_usage: None,
+            context_compacted: false,
+            stop_after_current_expectation: false,
         }),
     }
 }
 
+pub(crate) fn turn_exceeds_break_after_tokens(
+    interrogation: &InterrogationResult,
+    break_after_tokens: Option<u64>,
+) -> bool {
+    let (Some(limit), Some(usage)) = (break_after_tokens, interrogation.turn_usage) else {
+        return false;
+    };
+    usage.input_tokens.saturating_add(usage.output_tokens) > limit
+}
+
+pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -> bool {
+    interrogation.context_compacted
+}
+
 pub(crate) fn narrowed_scope_is_accepted(wide: &CheckRecord, narrowed: &CheckRecord) -> bool {
-    narrowed.observed == wide.observed || (is_verified_record(narrowed) && !narrowed.passed())
+    // The evaluator proposes the smallest sufficient scope in its response, but
+    // canon only trusts a strict narrowing after this second interrogation shows
+    // the answer remains stable under that narrower filesystem boundary.
+    narrowed.observed == wide.observed
+        || (is_reusable_history_record(narrowed) && !narrowed.passed())
+}
+
+pub(crate) fn restore_record_to_enforced_scope(
+    mut record: CheckRecord,
+    enforced_scope: &[String],
+    enforced_scope_hash: String,
+) -> CheckRecord {
+    record.scope = enforced_scope.to_vec();
+    record.scope_hash = enforced_scope_hash;
+    record
 }
 
 pub(crate) fn write_scope_narrowing_event(
@@ -111,16 +150,18 @@ pub(crate) fn write_scope_narrowing_event(
     let Some(writer) = diagnostic_log.as_deref_mut() else {
         return Ok(());
     };
-    writer.write_event(
-        "info",
-        "scope.narrowing",
-        &scope_narrowing_log_fields(
-            id,
-            enforced_scope,
-            record_scope,
-            accepted,
-            initial_record,
-            narrowed_record,
-        ),
-    )
+    writer
+        .write_event(
+            "info",
+            "scope.narrowing",
+            &scope_narrowing_log_fields(
+                id,
+                enforced_scope,
+                record_scope,
+                accepted,
+                initial_record,
+                narrowed_record,
+            ),
+        )
+        .map_err(|err| err.to_string())
 }

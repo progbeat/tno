@@ -47,6 +47,11 @@ fn parser_handles_json_answer_and_free_form_evidence() {
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
     .is_err());
+    assert!(parse_evaluator_response(
+        r#"{"answer":"yes\u2028no","evidence":"bad","scope":["."]}"#,
+        &parse_check_config(check_config_yaml()).unwrap().agent,
+    )
+    .is_err());
     assert_eq!(
         parse_evaluator_response(
             r#"{"answer":"a","evidence":"option a applies","scope":["."]}"#,
@@ -56,8 +61,26 @@ fn parser_handles_json_answer_and_free_form_evidence() {
         .answer,
         "a"
     );
+    assert_eq!(
+        parse_evaluator_response(
+            r#"{"answer":"Rust","evidence":"Cargo.toml shows a Rust crate","scope":["Cargo.toml"]}"#,
+            &parse_check_config(check_config_yaml()).unwrap().agent,
+        )
+        .unwrap()
+        .answer,
+        "Rust"
+    );
+    assert_eq!(
+        parse_evaluator_response(
+            r#"{"answer":"maybe","evidence":"question asks for this exact answer","scope":["."]}"#,
+            &parse_check_config(check_config_yaml()).unwrap().agent,
+        )
+        .unwrap()
+        .answer,
+        "maybe"
+    );
     assert!(parse_evaluator_response(
-        r#"{"answer":"maybe","evidence":"unsupported answer","scope":["."]}"#,
+        r#"{"answer":"yes","evidence":"ok","scope":["."]} trailing prose"#,
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
     .is_err());

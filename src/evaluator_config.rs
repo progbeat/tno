@@ -1,10 +1,12 @@
 use crate::check_validation::codex_reasoning_effort;
+use crate::config_types::AgentConfig;
 use crate::hash::full_scope;
 use crate::scope::{effective_ignore_patterns, normalize_repo_path};
-use crate::types::AgentConfig;
+use crate::thread_reuse_config::{thread_reuse_config, ThreadReuseConfig};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::env;
+use std::path::Path;
 
 pub(crate) fn evaluator_thread_config(
     agent: &AgentConfig,
@@ -166,19 +168,27 @@ pub(crate) fn enabled_plugins_config(agent: &AgentConfig) -> Value {
     Value::Object(plugins)
 }
 
-pub(crate) fn app_server_args(load_plugins: bool, agent: &AgentConfig) -> Vec<String> {
+pub(crate) fn app_server_args(
+    root: &Path,
+    load_plugins: bool,
+    agent: &AgentConfig,
+) -> Result<Vec<String>, String> {
     let mut args = vec!["app-server".to_string()];
     if !load_plugins {
         args.push("--disable".to_string());
         args.push("plugins".to_string());
     }
-    args.extend(app_server_startup_config_args(agent));
+    args.extend(app_server_startup_config_args(root, agent)?);
     args.push("--listen".to_string());
     args.push("stdio://".to_string());
-    args
+    Ok(args)
 }
 
-pub(crate) fn app_server_startup_config_args(agent: &AgentConfig) -> Vec<String> {
+pub(crate) fn app_server_startup_config_args(
+    root: &Path,
+    agent: &AgentConfig,
+) -> Result<Vec<String>, String> {
+    let thread_reuse = thread_reuse_config(root)?;
     let mut args = Vec::new();
     push_config_arg(&mut args, "default_permissions=\"canon_check\"");
     push_config_arg(&mut args, "history.persistence=\"none\"");
@@ -190,7 +200,18 @@ pub(crate) fn app_server_startup_config_args(agent: &AgentConfig) -> Vec<String>
     }
     push_config_arg(&mut args, "permissions.canon_check.network.enabled=false");
     push_config_arg(&mut args, &app_server_startup_filesystem_arg(agent));
-    args
+    push_config_arg(
+        &mut args,
+        &thread_reuse_carryover_token_target_arg(&thread_reuse),
+    );
+    Ok(args)
+}
+
+pub(crate) fn thread_reuse_carryover_token_target_arg(config: &ThreadReuseConfig) -> String {
+    format!(
+        "thread_reuse.carryover_token_target=[{},{}]",
+        config.carryover_token_target.min, config.carryover_token_target.max
+    )
 }
 
 pub(crate) fn app_server_model_key(model: Option<&str>) -> String {

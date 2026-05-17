@@ -1,6 +1,8 @@
 use crate::check_result::report_output_skipped_count;
-use crate::logging::{append_json_string_array, push_json_control_escape};
-use crate::types::{CheckRecord, CheckRunReport, ObservedAnswerState, ParsedAnswer};
+use crate::check_types::{
+    is_line_break_char, CheckRecord, CheckRunReport, ObservedAnswerState, ParsedAnswer,
+};
+use crate::logging::push_json_control_escape;
 use std::io::Write;
 use std::time::Duration;
 
@@ -81,10 +83,12 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
     output.push_str(&format!("{}. {}\n", record.display_id, status));
     // This is the spec's `<escaped question>` line, not an extra line beyond
     // the six-line failed and five-line error layouts.
-    output.push_str(&escape_check_output_text(&record.prompt));
+    output.push_str(&escape_check_output_text(record.prompt_text()));
     output.push('\n');
     output.push_str("Expected: ");
-    output.push_str(&escape_check_output_text(&record.expected));
+    output.push_str(&escape_check_output_text(
+        record.expected_text().unwrap_or(""),
+    ));
     output.push('\n');
     output.push_str("Observed: ");
     output.push_str(&escape_check_output_text(&record.observed));
@@ -146,6 +150,8 @@ pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -
 
 pub(crate) fn pad_summary_line(inner: &str) -> String {
     const WIDTH: usize = 80;
+    // Reserve at least one `=` on each side even when the outcome text is
+    // wider than the usual summary width.
     let width = WIDTH.max(inner.len() + 2);
     let padding = width - inner.len();
     let left = padding / 2;
@@ -157,13 +163,17 @@ pub(crate) fn record_requires_human_review(record: &CheckRecord) -> bool {
     // Restricted-scope `idk` records are retried at full scope before output.
     // Any `idk` that reaches final check rendering is therefore the
     // human-review state described by the check-output contract.
-    ObservedAnswerState::from_observed(&record.observed).requires_human_review()
+    record
+        .expected_text()
+        .map(|expected| {
+            ObservedAnswerState::from_expected_and_observed(expected, &record.observed)
+                .requires_human_review()
+        })
+        .unwrap_or(true)
 }
 
 pub(crate) fn compact_json_string_array(values: &[String]) -> String {
-    let mut output = String::new();
-    append_json_string_array(&mut output, values);
-    output
+    serde_json::to_string(values).expect("serializing a JSON string array cannot fail")
 }
 
 pub(crate) fn escape_check_output_text(value: &str) -> String {
@@ -173,13 +183,19 @@ pub(crate) fn escape_check_output_text(value: &str) -> String {
             '\n' => output.push_str("\\n"),
             '\r' => output.push_str("\\r"),
             '\t' => output.push_str("\\t"),
-            ch if ch.is_control() => {
-                let mut escaped = String::new();
-                push_json_control_escape(&mut escaped, ch);
-                output.push_str(&escaped);
+            ch if is_line_break_char(ch) || ch.is_control() => {
+                push_check_output_unicode_escape(&mut output, ch);
             }
             ch => output.push(ch),
         }
     }
     output
+}
+
+fn push_check_output_unicode_escape(output: &mut String, ch: char) {
+    if (ch as u32) <= 0xff {
+        push_json_control_escape(output, ch as u8);
+    } else {
+        output.push_str(&format!("\\u{:04x}", ch as u32));
+    }
 }

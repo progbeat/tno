@@ -1,8 +1,9 @@
-use crate::history::HistoryCache;
+use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
+use crate::config_types::AgentConfig;
+use crate::history::{HistoryCache, ReusableHistoryLookupKey};
 use crate::scope::sanitize_scope_for_hash;
-use crate::scope_hash::{ScopeHashCache, ScopeHashSource};
+use crate::scope_hash::ScopeHashCache;
 use crate::time::parse_record_timestamp;
-use crate::types::{AgentConfig, CheckRecord, ObservedAnswerState, SelectedExpectation};
 use std::path::Path;
 
 #[cfg(test)]
@@ -13,44 +14,72 @@ pub(crate) fn reusable_history_record(
 ) -> Result<Option<CheckRecord>, String> {
     let mut scope_hash_cache = ScopeHashCache::new();
     let mut history_cache = HistoryCache::new();
-    reusable_history_record_for_source(
+    reusable_history_record_with_cache(
         root,
         agent,
         expectation,
-        ScopeHashSource::Index,
         &mut history_cache,
         &mut scope_hash_cache,
     )
 }
 
-pub(crate) fn reusable_history_record_for_source(
+pub(crate) fn reusable_history_record_with_cache(
     root: &Path,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
-    source: ScopeHashSource,
     history_cache: &mut HistoryCache,
     scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<Option<CheckRecord>, String> {
-    scan_latest_history_records(root, expectation, history_cache, |mut record| {
-        let Some(scope) = sanitized_reusable_history_scope(&record) else {
-            return Ok(HistoryRecordScan::Continue);
-        };
-        let Some(current_hash) =
-            scope_hash_cache.scope_hash_for_source(root, agent, &scope, source)?
-        else {
-            return Ok(HistoryRecordScan::Continue);
-        };
-        if current_hash == record.scope_hash {
-            record.id = expectation.id.clone();
-            record.display_id = expectation.display_id.clone();
-            record.scope = scope;
-            record.number = expectation.number;
-            record.prompt = expectation.q.clone();
-            record.expected = expectation.a.clone();
-            return Ok(HistoryRecordScan::Done(Some(record)));
-        }
-        Ok(HistoryRecordScan::Continue)
-    })
+    // This is the answer-cache lookup described by the Cache spec: scan answer
+    // history newest-to-oldest and accept only the first record whose stored
+    // scopeHash still matches the current staged contents for that scope.
+    let key = ReusableHistoryLookupKey::new(root, expectation);
+    if let Some(record) = history_cache.reusable_records.get(&key).cloned() {
+        return Ok(record);
+    }
+    let reusable_record =
+        latest_history_record_matching_hash(root, expectation, history_cache, |scope| {
+            scope_hash_cache
+                .staged_scope_hash(root, agent, scope)
+                .map(Some)
+        })?;
+    history_cache
+        .reusable_records
+        .insert(key, reusable_record.clone());
+    Ok(reusable_record)
+}
+
+pub(crate) fn latest_history_record_matching_hash(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+    mut current_hash_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
+) -> Result<Option<CheckRecord>, String> {
+    // The hash match is deliberately tested before answer-shape validation so
+    // the cache lookup follows the Cache spec's "first matching scopeHash"
+    // rule. The final validation only protects readers from legacy history
+    // records that predate the current "answers only" write contract.
+    let matched_record =
+        scan_latest_history_records(root, expectation, history_cache, |mut record| {
+            let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
+                return Ok(HistoryRecordScan::Continue);
+            };
+            let Some(current_hash) = current_hash_for_scope(&scope)? else {
+                return Ok(HistoryRecordScan::Continue);
+            };
+            if current_hash == record.scope_hash {
+                record.scope = scope;
+                return Ok(HistoryRecordScan::Done(Some(record)));
+            }
+            Ok(HistoryRecordScan::Continue)
+        })?;
+    let Some(record) = matched_record else {
+        return Ok(None);
+    };
+    if !is_reusable_history_record_for_expected(&record, &expectation.a) {
+        return Ok(None);
+    }
+    Ok(Some(record_with_current_expectation(record, expectation)))
 }
 
 pub(crate) fn cooldown_history_record(
@@ -77,8 +106,10 @@ pub(crate) fn cooldown_history_record(
         if now.saturating_sub(timestamp) >= cooldown.seconds {
             return Ok(HistoryRecordScan::Done(None));
         }
-        // Cooldown is deliberately independent of scopeHash. It is the
-        // spec-defined exception to exact cache lookup for expensive checks.
+        // Cooldown is not an answer-cache lookup and callers must not return
+        // this record as a cached observed result. It is only the Cooldown spec's
+        // selected-set filter: a fresh latest pass removes the expectation from
+        // this invocation before exact-cache lookup or evaluator interrogation.
         Ok(HistoryRecordScan::Done(Some(record)))
     })
 }
@@ -91,13 +122,14 @@ pub(crate) fn latest_history_scope_with_cache(
 ) -> Result<Option<Vec<String>>, String> {
     // This returns only an enforced-scope seed for a fresh interrogation. It is
     // not a cached check result and does not let callers skip evaluator work.
-    // The seed still has to come from answer history; legacy human-review
-    // records are not answer records and must not narrow fresh interrogation.
+    // The Interrogation Policy defines this seed as the latest answer-history
+    // scope, regardless of whether that answer still matches the current staged
+    // tree for cache reuse.
     scan_latest_history_records(root, expectation, history_cache, |record| {
-        Ok(match sanitized_reusable_history_scope(&record) {
-            Some(scope) => HistoryRecordScan::Done(Some(scope)),
-            None => HistoryRecordScan::Continue,
-        })
+        let Some(scope) = sanitized_reusable_history_scope(&record, &expectation.a) else {
+            return Ok(HistoryRecordScan::Continue);
+        };
+        Ok(HistoryRecordScan::Done(Some(scope)))
     })
 }
 
@@ -122,13 +154,35 @@ fn scan_latest_history_records<T>(
     Ok(None)
 }
 
-fn sanitized_reusable_history_scope(record: &CheckRecord) -> Option<Vec<String>> {
-    if !is_reusable_history_record(record) {
+fn sanitized_reusable_history_scope(record: &CheckRecord, expected: &str) -> Option<Vec<String>> {
+    if !is_reusable_history_record_for_expected(record, expected) {
         return None;
     }
     sanitize_scope_for_hash(&record.scope).ok()
 }
 
+fn record_with_current_expectation(
+    mut record: CheckRecord,
+    expectation: &SelectedExpectation,
+) -> CheckRecord {
+    // The reusable lookup cache stores the raw matching history record. Current
+    // display metadata is applied after lookup so moving or editing an
+    // expectation during the same operation cannot make the cached value stale.
+    record.id = expectation.id.clone();
+    record.display_id = expectation.display_id.clone();
+    record.number = expectation.number;
+    record.prompt = Some(expectation.q.clone());
+    record.expected = Some(expectation.a.clone());
+    record
+}
+
 pub(crate) fn is_reusable_history_record(record: &CheckRecord) -> bool {
-    ObservedAnswerState::from_observed(&record.observed).is_reusable_history()
+    record
+        .expected_text()
+        .is_some_and(|expected| is_reusable_history_record_for_expected(record, expected))
+}
+
+fn is_reusable_history_record_for_expected(record: &CheckRecord, expected: &str) -> bool {
+    ObservedAnswerState::from_expected_and_observed(expected, &record.observed)
+        .is_reusable_history()
 }

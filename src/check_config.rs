@@ -1,7 +1,7 @@
 use crate::check_config_expansion::{expand_raw_check_config, CheckConfigSource};
 use crate::check_validation::validate_check_config;
+use crate::config_types::{CheckConfig, RawCheckConfig};
 use crate::repo_inspection::RepoInspectionCache;
-use crate::types::{CheckConfig, RawCheckConfig};
 use std::path::Path;
 
 #[cfg(test)]

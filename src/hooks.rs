@@ -82,12 +82,10 @@ pub(crate) fn preflight_git_hooks_path_state(state: &HookInstallState) -> Result
         if existing == GIT_HOOKS_PATH {
             return Ok(());
         }
-        if existing != GIT_HOOKS_PATH {
-            return Err(format!(
-                "git core.hooksPath is already set to {}; set it to {} manually if desired",
-                existing, GIT_HOOKS_PATH
-            ));
-        }
+        return Err(format!(
+            "git core.hooksPath is already set to {}; set it to {} manually if desired",
+            existing, GIT_HOOKS_PATH
+        ));
     }
     Ok(())
 }
@@ -100,9 +98,9 @@ pub(crate) fn install_pre_commit_hook_with_state(
     root: &Path,
     state: &HookInstallState,
 ) -> Result<(), String> {
-    // Hook installation writes Git integration configuration, not canon-owned
-    // persistent state. Internal cache, logs, and note state stay under the
-    // repository's `git rev-parse --git-path canon` directory.
+    // The hook script is canon-owned persistent state, so it lives under the
+    // repository's `.git/canon` state area. The only Git-owned mutation here is
+    // the local core.hooksPath pointer that tells Git where to find it.
     let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
     if let Some(parent) = hook_path.parent() {
         ensure_dir(parent)?;

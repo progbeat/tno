@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn hook_install_creates_reusable_pre_commit_hook() {
-    let root = temp_home("hook-install");
+    let root = git_project("hook-install");
     run_hook_install(&root).unwrap();
     let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
     assert!(!root.join(CHECK_PATH).exists());

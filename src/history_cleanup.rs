@@ -1,9 +1,13 @@
+use crate::check_selection::ExpectationIdentity;
+#[cfg(test)]
+use crate::config_types::CheckConfig;
+#[cfg(test)]
 use crate::hash::expectation_id;
-use crate::types::CheckConfig;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
+#[cfg(test)]
 pub(crate) fn active_expectation_ids(config: &CheckConfig) -> BTreeSet<String> {
     config
         .expectations
@@ -12,20 +16,20 @@ pub(crate) fn active_expectation_ids(config: &CheckConfig) -> BTreeSet<String> {
         .collect()
 }
 
+pub(crate) fn active_expectation_ids_from_identities(
+    identities: &[ExpectationIdentity],
+) -> BTreeSet<String> {
+    identities
+        .iter()
+        .map(|identity| identity.id.clone())
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct CacheCleanupStats {
     pub(crate) sampled: bool,
     pub(crate) removed: usize,
     pub(crate) kept: usize,
-}
-
-pub(crate) fn maybe_cleanup_stale_cache_dirs(
-    cache_dir: &Path,
-    config: &CheckConfig,
-) -> Result<CacheCleanupStats, String> {
-    let mut stats = cleanup_stale_cache_dirs(cache_dir, &active_expectation_ids(config))?;
-    stats.sampled = true;
-    Ok(stats)
 }
 
 pub(crate) fn cleanup_stale_cache_dirs(

@@ -1,11 +1,11 @@
 use crate::check_interrogation::interrogate_expectation_with_model;
 use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
 use crate::check_preflight::check_interrupted;
+use crate::check_types::{InterrogationResult, SelectedExpectation};
+use crate::config_types::AgentConfig;
 use crate::evaluator_turn::{is_model_technical_failure, model_label};
+use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::logging::DiagnosticLogWriter;
-use crate::types::{
-    AgentConfig, EvaluatorError, EvaluatorRunner, InterrogationResult, SelectedExpectation,
-};
 use serde_json::json;
 
 pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
@@ -57,6 +57,11 @@ pub(crate) fn run_with_model_fallbacks<T>(
             Err(err) if is_model_technical_failure(&err) => {
                 let next_model = models.get(model_index + 1);
                 if next_model.is_some() {
+                    // Fallback attempts are the technical-failure exception to
+                    // normal same-scope thread reuse. The failing model may
+                    // have caused the app server to retire every live thread,
+                    // so the next model must start from fresh sessions.
+                    state.clear_thread_sessions();
                     state.mark_model_unavailable(model.as_deref());
                 }
                 write_model_fallback_events(
@@ -91,26 +96,30 @@ pub(crate) fn write_model_fallback_events(
     let Some(writer) = diagnostic_log.as_deref_mut() else {
         return Ok(());
     };
-    writer.write_event(
-        "warn",
-        "model.failure",
-        &[
-            ("id", json!(expectation_id)),
-            ("model", json!(model_label(model))),
-            ("error", json!(error)),
-        ],
-    )?;
-    if let Some(next_model) = next_model {
-        writer.write_event(
+    writer
+        .write_event(
             "warn",
-            "model.fallback",
+            "model.failure",
             &[
                 ("id", json!(expectation_id)),
-                ("from", json!(model_label(model))),
-                ("to", json!(model_label(Some(next_model)))),
-                ("reason", json!(error)),
+                ("model", json!(model_label(model))),
+                ("error", json!(error)),
             ],
-        )?;
+        )
+        .map_err(|err| err.to_string())?;
+    if let Some(next_model) = next_model {
+        writer
+            .write_event(
+                "warn",
+                "model.fallback",
+                &[
+                    ("id", json!(expectation_id)),
+                    ("from", json!(model_label(model))),
+                    ("to", json!(model_label(Some(next_model)))),
+                    ("reason", json!(error)),
+                ],
+            )
+            .map_err(|err| err.to_string())?;
     }
     Ok(())
 }

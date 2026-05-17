@@ -29,8 +29,8 @@ expectations:
             display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Fail,
-            prompt: expectation.q.clone(),
-            expected: expectation.a.clone(),
+            prompt: Some(expectation.q.clone()),
+            expected: Some(expectation.a.clone()),
             observed: "no".to_string(),
             evidence: "exact cached failure".to_string(),
             scope: full_scope(),
@@ -67,8 +67,8 @@ fn check_runner_skips_cached_pass_without_result_output() {
             display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Pass,
-            prompt: expectation.q.clone(),
-            expected: expectation.a.clone(),
+            prompt: Some(expectation.q.clone()),
+            expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
             evidence: "cached pass".to_string(),
             scope: full_scope(),
@@ -118,8 +118,8 @@ fn check_runner_deselects_cached_pass_when_no_selectors_are_given() {
             display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: CheckResult::Pass,
-            prompt: expectation.q.clone(),
-            expected: expectation.a.clone(),
+            prompt: Some(expectation.q.clone()),
+            expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
             evidence: "cached pass".to_string(),
             scope: full_scope(),
@@ -237,5 +237,42 @@ expectations:
     assert_eq!(report.selected + report.skipped, config.expectations.len());
     assert_eq!(report_output_skipped_count(&report), 1);
     assert_eq!(runner.starts, 0);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_ignore_cooldown_runs_fresh_cooldown_pass() {
+    let root = git_project("check-cooldown-ignore-cooldown");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#,
+    )
+    .unwrap();
+    let mut options = check_options(&config, &[], false, true);
+    options.ignore_cooldown = true;
+    let expectation = options.selected[0].clone();
+    let old_hash = "old-scope".to_string();
+    let mut record = expectation_record(&config.agent, &expectation, "pass", "yes", old_hash);
+    record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
+    append_history_record(&root, &expectation, &record).unwrap();
+    let mut runner = FakeRunner::new(&[&answer("yes", "fresh answer", &["."])]);
+
+    let report =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(report.records.len(), 1);
+    assert_eq!(report.selected, 1);
+    assert_eq!(report.skipped, 0);
+    assert_eq!(report.silent, 0);
+    assert_eq!(runner.starts, 1);
     let _ = fs::remove_dir_all(root);
 }

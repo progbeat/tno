@@ -1,22 +1,23 @@
-use crate::fs_util::{ensure_dir, replace_file_with_temp};
+use crate::fs_util::{
+    crossed_size_compaction_bucket, ensure_dir, for_each_nonempty_line, replace_file_with_temp,
+};
 use crate::notes_cli::INDEX_LOCK_STALE_AFTER_SECS;
 use crate::notes_header::validate_note_key;
-use crate::types::Config;
+use crate::project_types::Config;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Duration;
 
-#[cfg(test)]
-use crate::fs_util::for_each_nonempty_line;
+pub(crate) const INDEX_COMPACT_MIN_BYTES: u64 = 64 * 1024;
 
 pub(crate) fn upsert_index(config: &Config, hash: &str, key: &str) -> Result<(), String> {
     validate_index_entry(hash, key)?;
     ensure_dir(&config.root)?;
     let _lock = lock_index(config)?;
     let path = config.root.join("index.tsv");
-    append_index_entry(&path, hash, key)
+    append_index_record(&path, Some(hash), key)
 }
 
 pub(crate) fn remove_index(config: &Config, _hash: &str, key: &str) -> Result<(), String> {
@@ -24,7 +25,7 @@ pub(crate) fn remove_index(config: &Config, _hash: &str, key: &str) -> Result<()
     ensure_dir(&config.root)?;
     let _lock = lock_index(config)?;
     let path = config.root.join("index.tsv");
-    append_index_tombstone(&path, key)
+    append_index_record(&path, None, key)
 }
 
 pub(crate) struct IndexLock {
@@ -96,6 +97,10 @@ pub(crate) fn lock_index(config: &Config) -> Result<IndexLock, String> {
 
 #[cfg(test)]
 pub(crate) fn read_index(path: &Path) -> Result<Vec<(String, String)>, String> {
+    read_materialized_index(path)
+}
+
+fn read_materialized_index(path: &Path) -> Result<Vec<(String, String)>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -146,28 +151,66 @@ pub(crate) fn validate_index_entry(hash: &str, key: &str) -> Result<(), String> 
     validate_note_key(key)
 }
 
-fn append_index_entry(path: &Path, hash: &str, key: &str) -> Result<(), String> {
-    validate_index_entry(hash, key)
-        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-    append_index_record(path, hash, key)
-}
+fn append_index_record(path: &Path, hash: Option<&str>, key: &str) -> Result<(), String> {
+    match hash {
+        Some(hash) => validate_index_entry(hash, key),
+        None => validate_note_key(key),
+    }
+    .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
 
-fn append_index_tombstone(path: &Path, key: &str) -> Result<(), String> {
-    validate_note_key(key).map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-    append_index_record(path, "", key)
-}
-
-fn append_index_record(path: &Path, hash: &str, key: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         ensure_dir(parent)?;
     }
+    let previous_size = fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
-    writeln!(file, "{}\t{}", hash, key)
-        .map_err(|err| format!("failed to write {}: {}", path.display(), err))
+    let hash = hash.unwrap_or("");
+    writeln!(&mut file, "{}\t{}", hash, key)
+        .and_then(|()| file.flush())
+        .map_err(|err| format!("failed to append {}: {}", path.display(), err))?;
+    maybe_compact_index(path, previous_size)
+}
+
+fn maybe_compact_index(path: &Path, previous_size: u64) -> Result<(), String> {
+    let size = fs::metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?
+        .len();
+    if !crossed_size_compaction_bucket(previous_size, size, INDEX_COMPACT_MIN_BYTES) {
+        return Ok(());
+    }
+    let entries = read_materialized_index(path)?;
+    let content = render_materialized_index(&entries, path)?;
+    // Rewrite only after obsolete append records are at least as large as the
+    // live index. The full rewrite is then paid for by bytes appended since the
+    // previous compact form, while the on-disk log stays practically bounded by
+    // the current retained note-key set.
+    if content.len().saturating_mul(2) > size as usize {
+        return Ok(());
+    }
+    if content.is_empty() {
+        return match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!("failed to delete {}: {}", path.display(), err)),
+        };
+    }
+    write_file_atomically(path, &content)
+}
+
+fn render_materialized_index(entries: &[(String, String)], path: &Path) -> Result<Vec<u8>, String> {
+    let mut content = Vec::new();
+    for (hash, key) in entries {
+        validate_index_entry(hash, key)
+            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+        writeln!(&mut content, "{}\t{}", hash, key)
+            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+    }
+    Ok(content)
 }
 
 pub(crate) fn write_file_atomically(path: &Path, content: &[u8]) -> Result<(), String> {

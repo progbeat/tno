@@ -1,23 +1,25 @@
 use crate::app_server::LazyAppServerRunner;
-use crate::check::run_check_with_runner;
+use crate::check::{run_check_with_runner_and_caches, CheckRunCaches};
 use crate::check_command_args::parse_check_command_args;
-use crate::check_lazy_reset::apply_lazy_full_scope_reset_or_warn;
+use crate::check_command_finish::{finish_check_report, CheckReportFinishContext};
+use crate::check_interrogation_state::CheckRuntime;
 use crate::check_output::write_summary_line;
 use crate::check_preflight::install_sigint_handler;
 use crate::check_query_command::run_check_query_command;
 use crate::check_reporting::{
-    collect_and_print_check_token_usage, write_check_finish_event, write_check_finish_report_event,
+    collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
     CheckFinishStats,
 };
-use crate::check_selection::parse_check_options;
+use crate::check_selection::{expectation_identities, parse_check_options_with_identities};
+use crate::check_types::{CheckRecord, CheckRunReport};
 use crate::check_validation::check_config_loads_plugins;
 use crate::cli::CommandError;
-use crate::git::resolve_git_path;
-use crate::history_cleanup::maybe_cleanup_stale_cache_dirs;
+use crate::config_types::CheckConfig;
+use crate::history_cleanup::{active_expectation_ids_from_identities, cleanup_stale_cache_dirs};
 use crate::logging::DiagnosticLogWriter;
 use crate::repo_inspection::RepoInspectionCache;
+use crate::scope_hash::ScopeHashCache;
 use crate::staged_worktree::StagedWorktreeView;
-use crate::types::{CheckConfig, CheckRecord};
 use crate::{CHECK_INTERRUPTED, GIT_CANON_CACHE_DIR};
 use serde_json::json;
 use std::ffi::OsString;
@@ -39,78 +41,61 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let config = match repo_cache.load_check_config(root, &command.config_path) {
         Ok(config) => config,
         Err(err) => {
-            diagnostic_log.write_event(
-                "info",
-                "check.start",
-                &[
-                    ("query", json!(command.query.is_some())),
-                    ("selected", json!(Vec::<String>::new())),
-                ],
-            )?;
-            write_check_finish_event(
+            return fail_check_before_selection(
                 &mut diagnostic_log,
+                Some(command.query.is_some()),
                 command.query.is_some(),
-                CheckFinishStats {
-                    errors: 1,
-                    ..CheckFinishStats::default()
-                },
-                Some(&err),
-            )?;
-            return Err(err.into());
+                1,
+                err,
+            )
         }
     };
     if let Some(question) = command.query.as_deref() {
         return run_check_query_command(root, &config, question, diagnostic_log)
             .map_err(CommandError::from);
     }
+    // Compute expectation identities once for this command. Selector parsing,
+    // initial skipped-set construction, and stale-cache cleanup all use this
+    // same derived data instead of re-hashing the config in separate phases.
+    let identities = match expectation_identities(&config) {
+        Ok(identities) => identities,
+        Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, 0, err),
+    };
     // Check-specific options are parsed with the active config so selectors can
     // be resolved against expectation IDs.
-    let options = match parse_check_options(&config, &command.option_args) {
-        Ok(options) => options,
-        Err(err) => {
-            diagnostic_log.write_event(
-                "info",
-                "check.start",
-                &[("selected", json!(Vec::<String>::new()))],
-            )?;
-            write_check_finish_event(
-                &mut diagnostic_log,
-                false,
-                CheckFinishStats::default(),
-                Some(&err),
-            )?;
-            return Err(err.into());
-        }
-    };
-    diagnostic_log.write_event(
-        "info",
-        "check.start",
-        &[(
-            "selected",
-            json!(options
-                .selected
-                .iter()
-                .map(|expectation| expectation.id.clone())
-                .collect::<Vec<_>>()),
-        )],
+    let options =
+        match parse_check_options_with_identities(&config, &identities, &command.option_args) {
+            Ok(options) => options,
+            Err(err) => {
+                return fail_check_before_selection(&mut diagnostic_log, None, false, 0, err)
+            }
+        };
+    write_check_start_event(
+        &mut diagnostic_log,
+        None,
+        options
+            .selected
+            .iter()
+            .map(|expectation| expectation.id.clone())
+            .collect(),
     )?;
-    let mut execution = prepare_check_execution(root, &config, &mut diagnostic_log, false, 0)
+    let mut check_caches = CheckRunCaches::new();
+    let mut execution = prepare_check_execution(
+        root,
+        &config,
+        &mut diagnostic_log,
+        false,
+        0,
+        &mut check_caches.scope_hash,
+    )
+    .map_err(CommandError::from)?;
+    let cache_dir = repo_cache
+        .git_path(root, GIT_CANON_CACHE_DIR)
         .map_err(CommandError::from)?;
-    let cache_dir = resolve_git_path(root, GIT_CANON_CACHE_DIR).map_err(CommandError::from)?;
-    let cleanup = match maybe_cleanup_stale_cache_dirs(&cache_dir, &config) {
+    let active_ids = active_expectation_ids_from_identities(&identities);
+    let cleanup = match cleanup_stale_cache_dirs(&cache_dir, &active_ids) {
         Ok(cleanup) => cleanup,
-        Err(err) => {
-            write_check_finish_event(
-                &mut diagnostic_log,
-                false,
-                CheckFinishStats {
-                    errors: 1,
-                    ..CheckFinishStats::default()
-                },
-                Some(&err),
-            )?;
-            return Err(err.into());
-        }
+        Err(err) => return fail_check_after_start(&mut diagnostic_log, false, 1, err),
     };
     if cleanup.sampled {
         diagnostic_log.write_event(
@@ -129,78 +114,129 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     // selected expectation; that helper renders the public human-readable
     // check-output record (`P. OK`, `P. FAILED`, or `P. ERROR`) and flushes it
     // before the next expectation starts.
-    let records_result = run_check_with_runner(
+    let runtime = CheckRuntime {
         root,
-        execution.staged_view.snapshot_root(),
-        &config,
+        snapshot_root: execution.staged_view.snapshot_root(),
+        config: &config,
+    };
+    let records_result = run_check_with_runner_and_caches(
+        runtime,
         &options,
         &mut execution.runner,
         Some(&mut diagnostic_log),
         Some(&mut result_output),
+        &mut check_caches,
     );
     if let Err(err) = result_output.flush() {
         let err = format!("failed to flush check result to stdout: {}", err);
-        write_check_finish_event(
-            &mut diagnostic_log,
-            false,
-            CheckFinishStats {
-                errors: 1,
-                ..CheckFinishStats::default()
-            },
-            Some(&err),
-        )?;
-        return Err(err.into());
+        return fail_check_after_start(&mut diagnostic_log, false, 1, err);
     }
-    let usage =
-        match collect_and_print_check_token_usage(&mut execution.runner, &mut diagnostic_log) {
-            Ok(usage) => usage,
-            Err(err) => {
-                write_check_finish_event(
-                    &mut diagnostic_log,
-                    false,
-                    CheckFinishStats {
-                        errors: 1,
-                        ..CheckFinishStats::default()
-                    },
-                    Some(&err),
-                )?;
-                return Err(err.into());
-            }
-        };
-    let report = match records_result {
-        Ok(report) => report,
-        Err(err) => {
-            let report = err.report;
-            apply_lazy_full_scope_reset_or_warn(
-                root,
-                &config,
-                usage,
-                &report.non_selected,
-                &mut diagnostic_log,
-            );
-            write_check_finish_report_event(&mut diagnostic_log, false, &report, Some(&err.error))?;
-            // The summary line is computed from the final report and elapsed
-            // time here. Per-expectation records have already been flushed as
-            // they were produced inside `run_check_with_runner`.
-            write_summary_line(&mut result_output, &report, started.elapsed())?;
-            return Err(CommandError::CheckFailed);
-        }
+    let completed = match records_result {
+        Ok(report) => CompletedCheckRun {
+            report,
+            error: None,
+        },
+        Err(err) => CompletedCheckRun {
+            report: err.report,
+            error: Some(err.error),
+        },
     };
-    apply_lazy_full_scope_reset_or_warn(
-        root,
-        &config,
+    let usage = match collect_check_token_usage(&mut execution.runner).and_then(|usage| {
+        // Token usage is the next public stderr piece after per-expectation
+        // output. Print and flush it immediately; the following stdout summary
+        // is then rendered and flushed before internal finish logging resumes.
+        print_token_usage_summary(Some(usage))?;
+        Ok(usage)
+    }) {
+        Ok(usage) => usage,
+        Err(err) => return fail_check_after_start(&mut diagnostic_log, false, 1, err),
+    };
+    // The summary line is rendered only here, after the required stderr token
+    // usage line has already been flushed, so its elapsed time and public order
+    // match the check-output contract.
+    write_summary_line(&mut *result_output, &completed.report, started.elapsed())?;
+    finish_check_report(
+        CheckReportFinishContext {
+            root,
+            config: &config,
+            identities: &identities,
+            diagnostic_log: &mut diagnostic_log,
+            result_output: &mut *result_output,
+            check_caches: &mut check_caches,
+        },
         usage,
-        &report.non_selected,
-        &mut diagnostic_log,
-    );
-    write_check_finish_report_event(&mut diagnostic_log, false, &report, None)?;
-    // The summary line does not exist until the final report exists. This call
-    // renders that newly computed stdout piece and flushes it immediately.
-    write_summary_line(&mut result_output, &report, started.elapsed())?;
-    if report.records.iter().all(CheckRecord::passed) {
+        &completed.report,
+        completed.error.as_deref(),
+    )?;
+    if completed.error.is_none() && completed.report.records.iter().all(CheckRecord::passed) {
         Ok(())
     } else {
         Err(CommandError::CheckFailed)
+    }
+}
+
+struct CompletedCheckRun {
+    report: CheckRunReport,
+    error: Option<String>,
+}
+
+fn write_check_start_event(
+    diagnostic_log: &mut DiagnosticLogWriter,
+    query: Option<bool>,
+    selected: Vec<String>,
+) -> Result<(), CommandError> {
+    let mut fields = Vec::new();
+    if let Some(query) = query {
+        fields.push(("query", json!(query)));
+    }
+    fields.push(("selected", json!(selected)));
+    diagnostic_log
+        .write_event("info", "check.start", &fields)
+        .map_err(CommandError::from)
+}
+
+fn fail_check_before_selection(
+    diagnostic_log: &mut DiagnosticLogWriter,
+    start_query: Option<bool>,
+    finish_query: bool,
+    errors: usize,
+    err: String,
+) -> Result<(), CommandError> {
+    write_check_start_event(diagnostic_log, start_query, Vec::new())?;
+    fail_check_after_start(diagnostic_log, finish_query, errors, err)
+}
+
+fn fail_check_after_start(
+    diagnostic_log: &mut DiagnosticLogWriter,
+    query: bool,
+    errors: usize,
+    err: String,
+) -> Result<(), CommandError> {
+    // Keep the finish-event writer stringly-typed so preflight setup failures
+    // can share it without converting their own Result type through CommandError.
+    write_check_error_finish_event(diagnostic_log, query, errors, &err)
+        .map_err(CommandError::from)?;
+    Err(err.into())
+}
+
+fn write_check_error_finish_event(
+    diagnostic_log: &mut DiagnosticLogWriter,
+    query: bool,
+    errors: usize,
+    err: &str,
+) -> Result<(), String> {
+    write_check_finish_event(
+        diagnostic_log,
+        query,
+        check_finish_error_stats(errors),
+        Some(err),
+    )
+}
+
+fn check_finish_error_stats(errors: usize) -> CheckFinishStats {
+    CheckFinishStats {
+        errors,
+        ..CheckFinishStats::default()
     }
 }
 
@@ -215,17 +251,19 @@ pub(crate) fn prepare_check_execution(
     diagnostic_log: &mut DiagnosticLogWriter,
     query: bool,
     errors_on_failure: usize,
+    scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<PreparedCheckExecution, String> {
     // Materialize the staged Git snapshot outside the real working tree so
     // evaluator sessions cannot observe unstaged or untracked project content.
-    let staged_view = match StagedWorktreeView::apply(root) {
+    let staged_view = match StagedWorktreeView::apply_with_scope_hash_cache(root, scope_hash_cache)
+    {
         Ok(staged_view) => staged_view,
         Err(err) => {
             write_prepare_check_failure(diagnostic_log, query, errors_on_failure, &err)?;
             return Err(err);
         }
     };
-    let runner = LazyAppServerRunner::new(check_config_loads_plugins(config), &config.agent);
+    let runner = LazyAppServerRunner::new(root, check_config_loads_plugins(config), &config.agent);
     Ok(PreparedCheckExecution {
         staged_view,
         runner,
@@ -238,13 +276,5 @@ fn write_prepare_check_failure(
     errors_on_failure: usize,
     err: &str,
 ) -> Result<(), String> {
-    write_check_finish_event(
-        diagnostic_log,
-        query,
-        CheckFinishStats {
-            errors: errors_on_failure,
-            ..CheckFinishStats::default()
-        },
-        Some(err),
-    )
+    write_check_error_finish_event(diagnostic_log, query, errors_on_failure, err)
 }

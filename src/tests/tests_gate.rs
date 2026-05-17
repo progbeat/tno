@@ -301,10 +301,9 @@ fn gate_accepts_failure_already_present_on_head() {
     commit_all(&root, "add check config");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
-    let head_hash =
-        scope_hash_for_source(&root, &config.agent, &full_scope(), ScopeHashSource::Head)
-            .unwrap()
-            .unwrap();
+    let head_hash = gate_head_tree_fingerprint(&root, &full_scope())
+        .unwrap()
+        .unwrap();
     append_history_record(
         &root,
         &expectation,

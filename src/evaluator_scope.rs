@@ -1,5 +1,5 @@
+use crate::config_types::AgentConfig;
 use crate::scope::{is_denied_path, normalize_repo_path, sanitize_scope};
-use crate::types::AgentConfig;
 
 #[cfg(test)]
 use serde_json::Value;
@@ -25,6 +25,9 @@ pub(crate) fn parse_scope_strings(
     scope: &[String],
     agent: &AgentConfig,
 ) -> Result<Vec<String>, String> {
+    // Scope parsing is deliberately limited to representation and access
+    // checks. Whether a narrowed scope is sufficient for the answer is tested
+    // later by running an independent interrogation under that proposed scope.
     let mut parsed = Vec::new();
     for raw in scope {
         let normalized = normalize_repo_path(raw)?;

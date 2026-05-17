@@ -148,26 +148,38 @@ fn turn_timeout_resets_after_app_server_progress() {
 }
 
 #[test]
-fn token_usage_update_is_rendered_like_codex_summary() {
+fn token_usage_update_keeps_raw_app_server_usage() {
     let message = json!({
         "method": "thread/tokenUsage/updated",
         "params": {
+            "threadId": "thread-1",
             "turnId": "turn-1",
             "tokenUsage": {
+                "total": {
+                    "totalTokens": 100000,
+                    "inputTokens": 90000,
+                    "cachedInputTokens": 400000,
+                    "outputTokens": 10000,
+                    "reasoningOutputTokens": 5000
+                },
                 "last": {
                     "totalTokens": 69748,
                     "inputTokens": 63574,
                     "cachedInputTokens": 361216,
                     "outputTokens": 6174,
                     "reasoningOutputTokens": 2911
-                }
+                },
+                "modelContextWindow": 200000
             }
         }
     });
-    let (turn_id, usage) = token_usage_update(&message).unwrap();
-    assert_eq!(turn_id, "turn-1");
+    let update = token_usage_update(&message).unwrap();
+    assert_eq!(update.thread_id, "thread-1");
+    assert_eq!(update.turn_id, "turn-1");
+    assert_eq!(update.sequence, 0);
+    assert_eq!(update.token_usage, message["params"]["tokenUsage"]);
     assert_eq!(
-        render_token_usage_summary(usage),
+        render_token_usage_summary(update.last_usage),
         "Token usage: total=69,748 input=63,574 (+ 361,216 cached) output=6,174 (reasoning 2,911)"
     );
     assert_eq!(
@@ -177,10 +189,192 @@ fn token_usage_update_is_rendered_like_codex_summary() {
 }
 
 #[test]
+fn token_usage_updates_are_kept_ordered_and_summed_by_last_usage() {
+    let first = json!({
+        "method": "thread/tokenUsage/updated",
+        "params": {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "tokenUsage": {
+                "total": {
+                    "totalTokens": 10,
+                    "inputTokens": 7,
+                    "cachedInputTokens": 3,
+                    "outputTokens": 3,
+                    "reasoningOutputTokens": 1
+                },
+                "last": {
+                    "totalTokens": 10,
+                    "inputTokens": 7,
+                    "cachedInputTokens": 3,
+                    "outputTokens": 3,
+                    "reasoningOutputTokens": 1
+                },
+                "modelContextWindow": 200000
+            }
+        }
+    });
+    let second = json!({
+        "method": "thread/tokenUsage/updated",
+        "params": {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "tokenUsage": {
+                "total": {
+                    "totalTokens": 16,
+                    "inputTokens": 11,
+                    "cachedInputTokens": 5,
+                    "outputTokens": 5,
+                    "reasoningOutputTokens": 2
+                },
+                "last": {
+                    "totalTokens": 6,
+                    "inputTokens": 4,
+                    "cachedInputTokens": 2,
+                    "outputTokens": 2,
+                    "reasoningOutputTokens": 1
+                },
+                "modelContextWindow": 200000
+            }
+        }
+    });
+    let mut usage_by_turn = BTreeMap::new();
+    let mut updates_by_turn = BTreeMap::new();
+    record_token_usage_update(
+        &mut usage_by_turn,
+        &mut updates_by_turn,
+        token_usage_update(&first).unwrap(),
+    );
+    record_token_usage_update(
+        &mut usage_by_turn,
+        &mut updates_by_turn,
+        token_usage_update(&second).unwrap(),
+    );
+
+    assert_eq!(
+        usage_by_turn["turn-1"],
+        TokenUsage {
+            total_tokens: 16,
+            input_tokens: 11,
+            cached_input_tokens: 5,
+            output_tokens: 5,
+            reasoning_output_tokens: 2
+        }
+    );
+    let updates = &updates_by_turn["turn-1"];
+    assert_eq!(updates.len(), 2);
+    assert_eq!(updates[0].sequence, 1);
+    assert_eq!(updates[1].sequence, 2);
+    assert_eq!(updates[0].token_usage, first["params"]["tokenUsage"]);
+    assert_eq!(updates[1].token_usage, second["params"]["tokenUsage"]);
+}
+
+#[test]
+fn thread_reuse_policy_rolls_back_when_carryover_exits_target_range() {
+    let target = parse_carryover_token_target("10000,30000").unwrap();
+    let previous = TokenUsage {
+        input_tokens: 9_000,
+        output_tokens: 999,
+        ..TokenUsage::default()
+    };
+    let current_inside = TokenUsage {
+        input_tokens: 20_000,
+        output_tokens: 10_000,
+        ..TokenUsage::default()
+    };
+    let current_too_large = TokenUsage {
+        input_tokens: 30_000,
+        output_tokens: 1,
+        ..TokenUsage::default()
+    };
+
+    assert_eq!(carryover_tokens(previous), 9_999);
+    assert!(!thread_reuse_policy_should_rollback(
+        carryover_tokens(previous),
+        carryover_tokens(current_inside),
+        target,
+    ));
+    assert!(thread_reuse_policy_should_rollback(
+        carryover_tokens(current_inside),
+        carryover_tokens(previous),
+        target,
+    ));
+    assert!(thread_reuse_policy_should_rollback(
+        carryover_tokens(previous),
+        carryover_tokens(current_too_large),
+        target,
+    ));
+}
+
+#[test]
+fn ephemeral_history_rollback_failure_retires_thread() {
+    let err = EvaluatorError::failure(
+        EvaluatorFailureKind::UnknownAppServer,
+        r#"app-server thread/rollback failed: {"code":-32600,"message":"thread rollback requires persisted thread history"}"#,
+    );
+    assert!(rollback_requires_persisted_history(&err));
+    assert!(!rollback_requires_persisted_history(
+        &EvaluatorError::message("app-server thread/rollback failed: other failure")
+    ));
+}
+
+#[test]
+fn context_compaction_events_are_kept_raw_and_ordered() {
+    let first = json!({
+        "method": "item/started",
+        "params": {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "item": {
+                "id": "item-1",
+                "type": "contextCompaction"
+            }
+        }
+    });
+    let second = json!({
+        "method": "item/completed",
+        "params": {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "item": {
+                "id": "item-1",
+                "type": "contextCompaction",
+                "summary": "compacted context"
+            }
+        }
+    });
+    let mut events_by_turn = BTreeMap::new();
+    record_context_compaction_event(
+        &mut events_by_turn,
+        context_compaction_event(&first).unwrap(),
+    );
+    record_context_compaction_event(
+        &mut events_by_turn,
+        context_compaction_event(&second).unwrap(),
+    );
+
+    let events = &events_by_turn["turn-1"];
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].sequence, 1);
+    assert_eq!(events[1].sequence, 2);
+    assert_eq!(events[0].thread_id, "thread-1");
+    assert_eq!(events[0].turn_id, "turn-1");
+    assert_eq!(events[0].method, "item/started");
+    assert_eq!(events[0].event, first);
+    assert_eq!(events[1].event, second);
+}
+
+#[test]
 fn long_summary_padding_keeps_required_surrounding_spaces() {
     let inner = " 123456789 failed, 456789 errors, 789123 passed, 101112 skipped in 123456789.00s ";
     assert!(inner.len() >= 80);
     let line = pad_summary_line(inner);
+    assert!(line.starts_with("= "));
+    assert!(line.ends_with(" ="));
+
+    let nearly_wide = format!(" {} ", "x".repeat(77));
+    assert_eq!(nearly_wide.len(), 79);
+    let line = pad_summary_line(&nearly_wide);
     assert!(line.starts_with("= "));
     assert!(line.ends_with(" ="));
 }

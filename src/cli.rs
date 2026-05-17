@@ -8,11 +8,12 @@ use crate::check_command::run_check_command;
 use crate::evaluator::print_help;
 use crate::gate::run_gate_command;
 use crate::hooks::{run_hook_command, run_init};
+use crate::logging::DiagnosticLogError;
 use crate::notes::{append_note, delete_note, ensure_note, read_note, write_note};
 use crate::notes_cli::{arg_to_string, collect_text_or_stdin, require_key, run_rg};
 use crate::output::{write_stderr_line, write_stdout_line};
 use crate::project::{git_project_root, print_root, project_root_or_current};
-use crate::types::Config;
+use crate::project_types::Config;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CommandError {
@@ -54,6 +55,12 @@ impl NoteCommand {
 impl From<String> for CommandError {
     fn from(message: String) -> CommandError {
         CommandError::Message(Cow::Owned(message))
+    }
+}
+
+impl From<DiagnosticLogError> for CommandError {
+    fn from(err: DiagnosticLogError) -> CommandError {
+        CommandError::Message(Cow::Owned(err.to_string()))
     }
 }
 

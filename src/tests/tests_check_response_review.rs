@@ -38,7 +38,7 @@ fn check_runner_marks_unparseable_after_response_parse_fails() {
     assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
     assert!(records.records[0].evidence.contains("response: <empty>"));
     assert_eq!(runner.prompts.len(), 1);
-    let log = fs::read_to_string(diagnostic_log.path).unwrap();
+    let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(log.contains(r#""event":"review.required""#));
     assert!(log.contains(r#""reason":"unparseable evaluator response""#));
     assert!(read_history_records(&root, &options.selected[0])
@@ -105,7 +105,7 @@ fn check_runner_requires_human_review_when_evidence_stays_empty() {
     assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
     assert!(records.records[0].evidence.contains("evidence was empty"));
     assert_eq!(runner.prompts.len(), 1);
-    let log = fs::read_to_string(diagnostic_log.path).unwrap();
+    let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(log.contains(r#""event":"review.required""#));
     assert!(log.contains(r#""reason":"empty evaluator evidence""#));
     assert!(read_history_records(&root, &options.selected[0])

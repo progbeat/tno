@@ -1,12 +1,11 @@
 use crate::check_generator_paths::expand_generator_paths;
-use crate::check_generator_templates::validate_generator_template;
 use crate::check_validation::normalize_agent_ignore_pattern_for_config;
-use crate::git::read_staged_file_content;
-use crate::repo_inspection::RepoInspectionCache;
-use crate::types::{
+use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, RawCheckConfig, RawExpectationItem,
     RawGeneratorExpectation, RawIncludeExpectation,
 };
+use crate::git::read_staged_file_content;
+use crate::repo_inspection::RepoInspectionCache;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -101,7 +100,6 @@ impl RawExpectationExpansion<'_> {
         item: RawGeneratorExpectation,
     ) -> Result<(), String> {
         let item_number = index + 1;
-        validate_generator_template(&item.q_template, item_number)?;
         let files = self.expand_paths(config_path, &item.path, item_number, "path")?;
         for file in files {
             if !self.expanded_paths.insert(file.clone()) {
@@ -112,7 +110,7 @@ impl RawExpectationExpansion<'_> {
             }
             let content = self.read_expanded_file(&file)?;
             self.expectations.push(Expectation {
-                q: item.q_template.replace("{content}", &content),
+                q: render_generator_question(&item.q_template, &content),
                 a: item.a.clone(),
                 cooldown: item.cooldown.clone(),
                 thinking: item.thinking.clone(),
@@ -136,8 +134,7 @@ impl RawExpectationExpansion<'_> {
             self.include_stack.push(file.clone());
             let result = (|| {
                 let content = self.read_expanded_file(&file)?;
-                let included: Vec<RawExpectationItem> = serde_yaml::from_str(&content)
-                    .map_err(|err| format!("failed to parse {}: {}", file, err))?;
+                let included = self.parse_included_items(&file, &content)?;
                 self.expand_items(Path::new(&file), included)
             })();
             self.include_stack.pop();
@@ -163,12 +160,6 @@ impl RawExpectationExpansion<'_> {
             Some(cache) => cache.generator_paths(root, config_path, path, self.source.is_staged()),
             None => expand_generator_paths(root, config_path, path, self.source.is_staged()),
         }?;
-        if files.is_empty() {
-            return Err(format!(
-                "expectation {} {} matched no files: {}",
-                item_number, label, path
-            ));
-        }
         Ok(files)
     }
 
@@ -192,4 +183,23 @@ impl RawExpectationExpansion<'_> {
             }
         }
     }
+
+    fn parse_included_items(
+        &mut self,
+        file: &str,
+        content: &str,
+    ) -> Result<Vec<RawExpectationItem>, String> {
+        match self.cache.as_deref_mut() {
+            Some(cache) => cache.included_expectation_items(file, content),
+            None => serde_yaml::from_str(content)
+                .map_err(|err| format!("failed to parse {}: {}", file, err)),
+        }
+    }
+}
+
+fn render_generator_question(template: &str, content: &str) -> String {
+    // The expectations spec defines generator rendering as plain `{content}`
+    // substitution: no placeholder leaves the template unchanged, and repeated
+    // placeholders all receive the matched file contents.
+    template.replace("{content}", content)
 }

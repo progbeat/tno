@@ -136,7 +136,7 @@ fn check_config_rejects_untracked_custom_config() {
 }
 
 #[test]
-fn staged_custom_config_rejects_untracked_includes() {
+fn staged_custom_config_ignores_unmatched_includes() {
     let root = git_project("check-config-staged-custom-include");
     commit_all(&root, "initial");
     fs::create_dir_all(root.join("checks/expects")).unwrap();
@@ -158,6 +158,8 @@ agent:
   plugins: []
 expectations:
   - include: "expects/*.yml"
+  - q: "Local?"
+    a: "no"
 "#,
     )
     .unwrap();
@@ -173,11 +175,12 @@ expectations:
     );
     let mut cache = RepoInspectionCache::new();
 
-    let err = cache
+    let config = cache
         .load_check_config(&root, Path::new("checks/check.yml"))
-        .unwrap_err();
+        .unwrap();
 
-    assert!(err.contains("include matched no files"), "{err}");
+    assert_eq!(config.expectations.len(), 1);
+    assert_eq!(config.expectations[0].q, "Local?");
     let _ = fs::remove_dir_all(root);
 }
 

@@ -19,9 +19,11 @@ fn history_path_uses_expectation_id_directory() {
 #[test]
 fn history_record_required_fields_are_written_first() {
     let record = sample_record(1, "pass");
-    let line = render_check_log_record(&record);
+    let line = render_check_log_record(&record).unwrap();
     let json: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(json["id"], expectation_id("Question?", "yes"));
+    assert!(json.get("display_id").is_none());
+    assert!(json.get("displayId").is_none());
     assert_eq!(json["prompt"], "Question?");
     assert_eq!(json["expected"], "yes");
 
@@ -68,19 +70,47 @@ fn stale_cache_cleanup_removes_inactive_expectation_entries() {
 }
 
 #[test]
-fn malformed_history_json_lines_fail_explicitly() {
-    let root = git_project("history-malformed-json");
+fn history_reader_skips_malformed_lines() {
+    let root = git_project("history-skips-malformed-json");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
     let path = history_path(&root, &expectation).unwrap();
     ensure_dir(path.parent().unwrap()).unwrap();
-    fs::write(&path, "{not json}\n").unwrap();
+    fs::write(
+        &path,
+        format!(
+            "{{not json}}\n{}\n",
+            render_check_log_record(&sample_record(1, "pass"))
+                .unwrap()
+                .trim_end()
+        ),
+    )
+    .unwrap();
 
-    let error = read_history_records(&root, &expectation).unwrap_err();
+    let records = read_history_records(&root, &expectation).unwrap();
 
-    assert!(error.contains("invalid history JSON"));
-    assert!(error.contains("line 1"));
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].observed, "yes");
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn history_parser_accepts_legacy_required_prefix_records() {
+    let line = serde_json::to_string(&json!({
+        "timestamp": "1970-01-01T00:00:00Z",
+        "result": "pass",
+        "observed": "yes",
+        "evidence": "cached answer",
+        "scope": ["."],
+        "scopeHash": "AAAAAAAAAAAAAAAAAAAA"
+    }))
+    .unwrap();
+
+    let record = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap();
+
+    assert_eq!(record.prompt, None);
+    assert_eq!(record.expected, None);
+    assert_eq!(record.observed, "yes");
 }
 
 #[test]
@@ -111,6 +141,17 @@ fn append_history_record_updates_in_memory_cache() {
 }
 
 #[test]
+fn history_compaction_uses_one_in_fifteen_chance() {
+    assert!(should_compact_history_for_seed(0));
+    assert!(!should_compact_history_for_seed(1));
+    let hits = (0..(HISTORY_COMPACT_CHANCE_DENOMINATOR * 10))
+        .filter(|seed| should_compact_history_for_seed(*seed))
+        .count() as u64;
+    assert_eq!(hits, 10);
+    let _ = should_compact_history();
+}
+
+#[test]
 fn compact_history_replaces_file_after_writing_latest_lines() {
     let root = git_project("history-compact");
     let path = root.join(".git/canon/cache/example/history.jsonl");
@@ -119,7 +160,10 @@ fn compact_history_replaces_file_after_writing_latest_lines() {
         .map(|number| {
             let mut record = sample_record(number, "pass");
             record.evidence = format!("record {number}");
-            serde_json::to_string(&record).unwrap()
+            render_check_log_record(&record)
+                .unwrap()
+                .trim_end()
+                .to_string()
         })
         .collect::<Vec<_>>();
     fs::write(&path, format!("{}\n", records.join("\n"))).unwrap();
@@ -148,7 +192,10 @@ fn compact_history_drops_malformed_lines_and_keeps_latest_valid_records() {
     lines.extend((1..=7).map(|number| {
         let mut record = sample_record(number, "pass");
         record.evidence = format!("record {number}");
-        serde_json::to_string(&record).unwrap()
+        render_check_log_record(&record)
+            .unwrap()
+            .trim_end()
+            .to_string()
     }));
     fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
 
@@ -175,7 +222,9 @@ fn compact_history_drops_non_record_json_objects() {
         &path,
         format!(
             "{{\"n\":1}}\n{}\n",
-            serde_json::to_string(&sample_record(1, "pass")).unwrap()
+            render_check_log_record(&sample_record(1, "pass"))
+                .unwrap()
+                .trim_end()
         ),
     )
     .unwrap();

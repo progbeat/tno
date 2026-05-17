@@ -1,4 +1,4 @@
-use crate::fs_util::ensure_dir;
+use crate::fs_util::{crossed_size_compaction_bucket, ensure_dir};
 use crate::hash::hash_key;
 use crate::notes_header::{
     header, initial_content, normalize_body, validate_note_key, verify_note_key,
@@ -10,14 +10,14 @@ use crate::notes_restore::{
     restore_note_after_index_failure,
 };
 use crate::output::write_stdout;
+use crate::project_types::{Config, Note};
 use crate::time::unix_timestamp;
-use crate::types::{Config, Note};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
-use std::path::Path;
 
 const NOTE_LOG_MARKER: &str = "<!-- canon log v1 -->";
+pub(crate) const NOTE_LOG_COMPACT_MIN_BYTES: u64 = 64 * 1024;
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "op")]
@@ -28,27 +28,28 @@ enum NoteRecord {
     Append { timestamp: u64, text: String },
 }
 
+enum NoteTextOperation {
+    Write,
+    Append,
+}
+
 pub(crate) fn ensure_note(config: &Config, key: &str) -> Result<Note, String> {
-    ensure_dir(&config.root)?;
-    let note = note_for_key(config, key)?;
-    if note.path.exists() {
-        verify_note_key(&note.path, key)?;
+    let (note, existed) = writable_note_state(config, key)?;
+    if existed {
         return Ok(note);
     } else {
         let content = initial_content(key, &note.hash);
         write_file_atomically(&note.path, content.as_bytes())?;
     }
-    if let Err(index_err) = upsert_index(config, &note.hash, key) {
-        return Err(error_with_restore_context(
-            index_err,
-            restore_note_after_index_failure(&note.path, None),
-        ));
-    }
+    upsert_note_index_after_create(config, key, &note)?;
     Ok(note)
 }
 
 pub(crate) fn note_for_key(config: &Config, key: &str) -> Result<Note, String> {
     validate_note_key(key)?;
+    // A distinct key names retained user data, not a cache entry. Repeated
+    // writes/appends to a bounded retained key set are compacted in place; the
+    // retained set itself changes only when the user creates or deletes notes.
     let hash = hash_key(key);
     let path = config.root.join(format!("{}.md", hash));
     Ok(Note {
@@ -63,47 +64,57 @@ pub(crate) fn read_note(config: &Config, key: &str) -> Result<(), String> {
     if !note.path.exists() {
         return Err(format!("canon not found for key: {}", key));
     }
-    let content = fs::read_to_string(&note.path)
-        .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
+    let content = read_note_data(&note, |path| fs::read_to_string(path))?;
     verify_note_key_from_first_line(&note.path, content.lines().next().unwrap_or(""), key)?;
     write_stdout(&materialize_note_content(&note, &content)?)
 }
 
 pub(crate) fn write_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
-    append_note_record(
-        config,
-        key,
-        NoteRecord::Write {
-            text: normalize_body(text),
-        },
-    )
+    record_note_text(config, key, text, NoteTextOperation::Write)
 }
 
 pub(crate) fn append_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
-    append_note_record(
-        config,
-        key,
-        NoteRecord::Append {
+    record_note_text(config, key, text, NoteTextOperation::Append)
+}
+
+fn record_note_text(
+    config: &Config,
+    key: &str,
+    text: &str,
+    operation: NoteTextOperation,
+) -> Result<(), String> {
+    let text = normalize_body(text);
+    let record = match operation {
+        NoteTextOperation::Write => NoteRecord::Write { text },
+        NoteTextOperation::Append => NoteRecord::Append {
             timestamp: unix_timestamp()?,
-            text: normalize_body(text),
+            text,
         },
-    )
+    };
+    append_note_record(config, key, record)
 }
 
 fn append_note_record(config: &Config, key: &str, record: NoteRecord) -> Result<(), String> {
-    ensure_dir(&config.root)?;
-    let note = note_for_key(config, key)?;
-    let record_content = encode_note_record(&record)?;
-    if note.path.exists() {
-        verify_note_key(&note.path, key)?;
-        upsert_index(config, &note.hash, key)?;
-        append_to_file(&note.path, record_content.as_bytes())?;
-        return Ok(());
+    let (note, existed) = writable_note_state(config, key)?;
+    match record {
+        NoteRecord::Append { timestamp, text } if existed => {
+            let previous_size =
+                append_note_log_record(&note.path, &NoteRecord::Append { timestamp, text })?;
+            maybe_compact_note_log(&note, previous_size)?;
+        }
+        record => {
+            // Replacement writes and first appends both persist the complete
+            // note body; existing-note appends take the amortized log path.
+            write_compacted_note_record(&note, record)?;
+        }
     }
+    if !existed {
+        upsert_note_index_after_create(config, key, &note)?;
+    }
+    Ok(())
+}
 
-    let mut content = initial_content(key, &note.hash);
-    content.push_str(&record_content);
-    write_file_atomically(&note.path, content.as_bytes())?;
+fn upsert_note_index_after_create(config: &Config, key: &str, note: &Note) -> Result<(), String> {
     if let Err(index_err) = upsert_index(config, &note.hash, key) {
         return Err(error_with_restore_context(
             index_err,
@@ -113,10 +124,75 @@ fn append_note_record(config: &Config, key: &str, record: NoteRecord) -> Result<
     Ok(())
 }
 
-fn encode_note_record(record: &NoteRecord) -> Result<String, String> {
-    let json = serde_json::to_string(record)
-        .map_err(|err| format!("failed to encode note record: {}", err))?;
-    Ok(format!("\n{}\n{}\n", NOTE_LOG_MARKER, json))
+fn append_note_log_record(path: &std::path::Path, record: &NoteRecord) -> Result<u64, String> {
+    let previous_size = fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let mut line = serde_json::to_string(record).map_err(|err| {
+        format!(
+            "failed to encode note record for {}: {}",
+            path.display(),
+            err
+        )
+    })?;
+    line.push('\n');
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
+    file.write_all(b"\n")
+        .and_then(|()| file.write_all(NOTE_LOG_MARKER.as_bytes()))
+        .and_then(|()| file.write_all(b"\n"))
+        .and_then(|()| file.write_all(line.as_bytes()))
+        .and_then(|()| file.flush())
+        .map_err(|err| format!("failed to append {}: {}", path.display(), err))?;
+    Ok(previous_size)
+}
+
+fn write_compacted_note_record(note: &Note, record: NoteRecord) -> Result<(), String> {
+    let content = compacted_note_content(note, None, record)?;
+    write_file_atomically(&note.path, content.as_bytes())
+}
+
+fn maybe_compact_note_log(note: &Note, previous_size: u64) -> Result<(), String> {
+    let size = fs::metadata(&note.path)
+        .map_err(|err| format!("failed to inspect {}: {}", note.path.display(), err))?
+        .len();
+    if !crossed_size_compaction_bucket(previous_size, size, NOTE_LOG_COMPACT_MIN_BYTES) {
+        return Ok(());
+    }
+    let content = read_note_data(note, |path| fs::read_to_string(path))?;
+    let Some((log_start, _)) = find_note_log(note, &content)? else {
+        return Ok(());
+    };
+    let log_bytes = content.len().saturating_sub(log_start);
+    // Compact only after the appended log is at least as large as the retained
+    // materialized prefix, so the rewrite is amortized by accumulated appends.
+    if log_bytes < log_start {
+        return Ok(());
+    }
+    let compacted = materialize_note_content(note, &content)?;
+    if compacted.len() < content.len() {
+        write_file_atomically(&note.path, compacted.as_bytes())?;
+    }
+    Ok(())
+}
+
+// `write` records produce a compact replacement file. `append` records for an
+// existing note are persisted by appending a small private log entry. Once the
+// accumulated log is large enough to pay for a rewrite, it is compacted back
+// into the visible note text.
+fn compacted_note_content(
+    note: &Note,
+    current: Option<&str>,
+    record: NoteRecord,
+) -> Result<String, String> {
+    let mut output = match current {
+        Some(content) => materialize_note_content(note, content)?,
+        None => String::new(),
+    };
+    apply_note_record(note, &mut output, record);
+    Ok(output)
 }
 
 pub(crate) fn materialize_note_content(note: &Note, content: &str) -> Result<String, String> {
@@ -126,30 +202,38 @@ pub(crate) fn materialize_note_content(note: &Note, content: &str) -> Result<Str
 
     let mut output = content[..log_start].to_string();
     for record in records {
-        match record {
-            NoteRecord::Write { text } => {
-                output = format!(
-                    "{}{}\n",
-                    header(&note.key, &note.hash),
-                    normalize_body(&text)
-                );
-            }
-            NoteRecord::Append { timestamp, text } => {
-                if output.is_empty() {
-                    output = initial_content(&note.key, &note.hash);
-                }
-                if !output.ends_with('\n') {
-                    output.push('\n');
-                }
-                output.push_str(&format!(
-                    "\n## {}\n\n{}\n",
-                    timestamp,
-                    normalize_body(&text)
-                ));
-            }
-        }
+        apply_note_record(note, &mut output, record);
     }
     Ok(output)
+}
+
+fn apply_note_record(note: &Note, output: &mut String, record: NoteRecord) {
+    match record {
+        NoteRecord::Write { text } => {
+            *output = replacement_note_content(note, &text);
+        }
+        NoteRecord::Append { timestamp, text } => {
+            if output.is_empty() {
+                *output = initial_content(&note.key, &note.hash);
+            }
+            append_note_section(output, timestamp, &text);
+        }
+    }
+}
+
+fn replacement_note_content(note: &Note, text: &str) -> String {
+    format!(
+        "{}{}\n",
+        header(&note.key, &note.hash),
+        normalize_body(text)
+    )
+}
+
+fn append_note_section(output: &mut String, timestamp: u64, text: &str) {
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push_str(&format!("\n## {}\n\n{}\n", timestamp, normalize_body(text)));
 }
 
 fn find_note_log(note: &Note, content: &str) -> Result<Option<(usize, Vec<NoteRecord>)>, String> {
@@ -187,21 +271,10 @@ fn parse_note_log_records(note: &Note, text: &str) -> Result<Option<Vec<NoteReco
     Ok((!records.is_empty()).then_some(records))
 }
 
-fn append_to_file(path: &Path, content: &[u8]) -> Result<(), String> {
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(path)
-        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
-    file.write_all(content)
-        .map_err(|err| format!("failed to write {}: {}", path.display(), err))
-}
-
 pub(crate) fn delete_note(config: &Config, key: &str) -> Result<(), String> {
-    let note = note_for_key(config, key)?;
-    if note.path.exists() {
-        verify_note_key(&note.path, key)?;
-        let original = fs::read(&note.path)
-            .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
+    let (note, existed) = note_existing_state(config, key)?;
+    if existed {
+        let original = read_note_data(&note, |path| fs::read(path))?;
         fs::remove_file(&note.path)
             .map_err(|err| format!("failed to delete {}: {}", note.path.display(), err))?;
         if let Err(index_err) = remove_index(config, &note.hash, key) {
@@ -214,4 +287,25 @@ pub(crate) fn delete_note(config: &Config, key: &str) -> Result<(), String> {
         remove_index(config, &note.hash, key)?;
     }
     Ok(())
+}
+
+fn writable_note_state(config: &Config, key: &str) -> Result<(Note, bool), String> {
+    ensure_dir(&config.root)?;
+    note_existing_state(config, key)
+}
+
+fn read_note_data<T>(
+    note: &Note,
+    read: impl FnOnce(&std::path::Path) -> std::io::Result<T>,
+) -> Result<T, String> {
+    read(&note.path).map_err(|err| format!("failed to read {}: {}", note.path.display(), err))
+}
+
+fn note_existing_state(config: &Config, key: &str) -> Result<(Note, bool), String> {
+    let note = note_for_key(config, key)?;
+    let existed = note.path.exists();
+    if existed {
+        verify_note_key(&note.path, key)?;
+    }
+    Ok((note, existed))
 }

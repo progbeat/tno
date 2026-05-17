@@ -28,10 +28,13 @@ pub(crate) fn parse_check_config(yaml: &str) -> Result<CheckConfig, String> {
 
 pub(crate) struct FakeRunner {
     pub(crate) answers: VecDeque<Result<String, EvaluatorError>>,
+    pub(crate) turn_usages: VecDeque<Option<EvaluatorTurnUsage>>,
+    pub(crate) last_turn_usage: Option<EvaluatorTurnUsage>,
     pub(crate) prompts: Vec<String>,
     pub(crate) sessions: Vec<String>,
     pub(crate) ask_models: Vec<Option<String>>,
     pub(crate) ask_thinking: Vec<String>,
+    pub(crate) start_instructions: Vec<String>,
     pub(crate) start_roots: Vec<PathBuf>,
     pub(crate) start_ignores: Vec<Vec<String>>,
     pub(crate) start_models: Vec<Option<String>>,
@@ -48,10 +51,13 @@ impl FakeRunner {
                 .iter()
                 .map(|answer| Ok((*answer).to_string()))
                 .collect(),
+            turn_usages: VecDeque::new(),
+            last_turn_usage: None,
             prompts: Vec::new(),
             sessions: Vec::new(),
             ask_models: Vec::new(),
             ask_thinking: Vec::new(),
+            start_instructions: Vec::new(),
             start_roots: Vec::new(),
             start_ignores: Vec::new(),
             start_models: Vec::new(),
@@ -68,10 +74,13 @@ impl FakeRunner {
                 .into_iter()
                 .map(|answer| answer.map(str::to_string))
                 .collect(),
+            turn_usages: VecDeque::new(),
+            last_turn_usage: None,
             prompts: Vec::new(),
             sessions: Vec::new(),
             ask_models: Vec::new(),
             ask_thinking: Vec::new(),
+            start_instructions: Vec::new(),
             start_roots: Vec::new(),
             start_ignores: Vec::new(),
             start_models: Vec::new(),
@@ -87,13 +96,14 @@ impl EvaluatorRunner for FakeRunner {
     fn start_session(
         &mut self,
         root: &Path,
-        _instructions: &str,
+        instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
         thinking: &str,
         scope: &[String],
     ) -> Result<String, EvaluatorError> {
         self.starts += 1;
+        self.start_instructions.push(instructions.to_string());
         self.start_roots.push(root.to_path_buf());
         self.start_ignores.push(effective_ignore_patterns(agent));
         self.start_models
@@ -115,9 +125,14 @@ impl EvaluatorRunner for FakeRunner {
         self.prompts.push(prompt.to_string());
         self.ask_models.push(model.map(str::to_string));
         self.ask_thinking.push(thinking.to_string());
+        self.last_turn_usage = self.turn_usages.pop_front().unwrap_or(None);
         self.answers
             .pop_front()
             .unwrap_or_else(|| Err("fake runner has no answer".into()))
+    }
+
+    fn take_last_turn_usage(&mut self) -> Option<EvaluatorTurnUsage> {
+        self.last_turn_usage.take()
     }
 }
 
@@ -162,12 +177,16 @@ pub(crate) fn check_options(
         &selectors.iter().map(OsString::from).collect::<Vec<_>>(),
     )
     .unwrap();
+    let non_selected = initial_non_selected_expectations(config, &selected).unwrap();
     let skipped = config.expectations.len().saturating_sub(selected.len());
     CheckOptions {
         selected,
+        non_selected,
         skipped,
         check_all: !stop_after_non_pass,
         ignore_cache,
+        ignore_cooldown: false,
+        break_after_tokens: None,
     }
 }
 
@@ -207,8 +226,8 @@ pub(crate) fn sample_record(number: usize, result: &str) -> CheckRecord {
         display_id: id[..1].to_string(),
         number,
         result: check_result_from_label(result),
-        prompt,
-        expected,
+        prompt: Some(prompt),
+        expected: Some(expected),
         observed: if result == "pass" { "yes" } else { "no" }.to_string(),
         evidence: "README.md has evidence".to_string(),
         scope: vec![".".to_string()],
@@ -230,8 +249,8 @@ pub(crate) fn expectation_record(
         display_id: expectation.display_id.clone(),
         number: expectation.number,
         result: check_result_from_label(result),
-        prompt: expectation.q.clone(),
-        expected: expectation.a.clone(),
+        prompt: Some(expectation.q.clone()),
+        expected: Some(expectation.a.clone()),
         observed: observed.to_string(),
         evidence: "cached answer".to_string(),
         scope: full_scope(),

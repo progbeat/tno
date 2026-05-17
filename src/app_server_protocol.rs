@@ -1,5 +1,6 @@
 use crate::evaluator_turn::EvaluatorFailureKind;
-use crate::types::{EvaluatorError, TokenUsage};
+use crate::evaluator_types::EvaluatorError;
+use crate::token_usage_types::{ContextCompactionEvent, TokenUsage, TokenUsageUpdate};
 use crate::APP_SERVER_TURN_TIMEOUT_SECS;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -87,14 +88,54 @@ impl TokenUsage {
     }
 }
 
-pub(crate) fn token_usage_update(message: &Value) -> Option<(String, TokenUsage)> {
+pub(crate) fn token_usage_update(message: &Value) -> Option<TokenUsageUpdate> {
     if message.get("method").and_then(Value::as_str) != Some("thread/tokenUsage/updated") {
         return None;
     }
     let params = message.get("params")?;
+    let thread_id = params.get("threadId").and_then(Value::as_str)?.to_string();
     let turn_id = params.get("turnId").and_then(Value::as_str)?.to_string();
-    let usage = params.get("tokenUsage")?.get("last")?;
-    Some((turn_id, parse_token_usage(usage)?))
+    let token_usage = params.get("tokenUsage")?.clone();
+    let last_usage = parse_token_usage(token_usage.get("last")?)?;
+    parse_token_usage(token_usage.get("total")?)?;
+    Some(TokenUsageUpdate {
+        sequence: 0,
+        thread_id,
+        turn_id,
+        token_usage,
+        last_usage,
+    })
+}
+
+pub(crate) fn context_compaction_event(message: &Value) -> Option<ContextCompactionEvent> {
+    let method = message.get("method").and_then(Value::as_str)?;
+    let params = message.get("params")?;
+    let is_compaction_item = params
+        .get("item")
+        .and_then(|item| item.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(is_compaction_item_type);
+    let method_mentions_compaction = method.to_ascii_lowercase().contains("compact");
+    if !is_compaction_item && !method_mentions_compaction {
+        return None;
+    }
+    let thread_id = string_at_path(params, &["threadId"])
+        .or_else(|| string_at_path(params, &["thread", "id"]))?
+        .to_string();
+    let turn_id = string_at_path(params, &["turnId"])
+        .or_else(|| string_at_path(params, &["turn", "id"]))?
+        .to_string();
+    Some(ContextCompactionEvent {
+        sequence: 0,
+        thread_id,
+        turn_id,
+        method: method.to_string(),
+        event: message.clone(),
+    })
+}
+
+fn is_compaction_item_type(kind: &str) -> bool {
+    matches!(kind, "contextCompaction" | "compacted")
 }
 
 pub(crate) fn turn_started_id(message: &Value) -> Option<String> {
@@ -199,11 +240,7 @@ pub(crate) fn value_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a V
 }
 
 pub(crate) fn string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
-    let mut current = value;
-    for key in path {
-        current = current.get(*key)?;
-    }
-    current.as_str()
+    value_at_path(value, path).and_then(Value::as_str)
 }
 
 pub(crate) fn turn_text(delta_text: String, completed_text: String) -> String {
@@ -220,10 +257,10 @@ pub(crate) fn append_completed_agent_text(message: &Value, output: &mut String) 
     };
     if let Some(item) = params.get("item") {
         if is_assistant_message_item(item) {
-            append_assistant_item_text(item, output);
+            append_message_payload_text(item, output);
         }
     } else if message.get("method").and_then(Value::as_str) == Some("item/agentMessage/completed") {
-        append_agent_message_completed_text(params, output);
+        append_message_payload_text(params, output);
     }
 }
 
@@ -236,20 +273,11 @@ pub(crate) fn is_assistant_message_item(item: &Value) -> bool {
             .unwrap_or(false)
 }
 
-pub(crate) fn append_assistant_item_text(item: &Value, output: &mut String) {
-    if let Some(text) = item.get("text").and_then(Value::as_str) {
+pub(crate) fn append_message_payload_text(payload: &Value, output: &mut String) {
+    if let Some(text) = payload.get("text").and_then(Value::as_str) {
         output.push_str(text);
     }
-    if let Some(content) = item.get("content").and_then(Value::as_array) {
-        append_content_text_parts(content, output);
-    }
-}
-
-pub(crate) fn append_agent_message_completed_text(params: &Value, output: &mut String) {
-    if let Some(text) = params.get("text").and_then(Value::as_str) {
-        output.push_str(text);
-    }
-    if let Some(content) = params.get("content").and_then(Value::as_array) {
+    if let Some(content) = payload.get("content").and_then(Value::as_array) {
         append_content_text_parts(content, output);
     }
 }

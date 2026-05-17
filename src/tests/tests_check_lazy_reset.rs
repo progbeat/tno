@@ -1,24 +1,24 @@
 use super::*;
 
 #[test]
-fn lazy_full_scope_reset_invalidates_only_sampled_non_selected_history() {
+fn lazy_full_scope_reset_prunes_only_sampled_narrowed_history() {
     let root = git_project("check-lazy-reset-history");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectations = check_options(&config, &[], false, true).selected;
     let first_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
-    let second_hash = first_hash.clone();
+    let second_scope = vec!["README.md".to_string()];
+    let second_hash = staged_scope_hash(&root, &config.agent, &second_scope).unwrap();
     append_history_record(
         &root,
         &expectations[0],
         &expectation_record(&config.agent, &expectations[0], "pass", "yes", first_hash),
     )
     .unwrap();
-    append_history_record(
-        &root,
-        &expectations[1],
-        &expectation_record(&config.agent, &expectations[1], "pass", "no", second_hash),
-    )
-    .unwrap();
+    let mut narrowed_record =
+        expectation_record(&config.agent, &expectations[1], "pass", "no", second_hash);
+    narrowed_record.scope = second_scope;
+    append_history_record(&root, &expectations[1], &narrowed_record).unwrap();
+    let reset_history_path = history_path(&root, &expectations[1]).unwrap();
 
     assert!(reset_non_selected_expectation_histories(&root, &[expectations[1].clone()]).is_empty());
 
@@ -26,12 +26,19 @@ fn lazy_full_scope_reset_invalidates_only_sampled_non_selected_history() {
         read_history_records(&root, &expectations[0]).unwrap().len(),
         1
     );
+    assert!(!reset_history_path.exists());
     let reset_records = read_history_records(&root, &expectations[1]).unwrap();
     assert!(reset_records.is_empty());
-    assert!(
-        reusable_history_record(&root, &config.agent, &expectations[1])
-            .unwrap()
-            .is_none()
+    let mut history_cache = HistoryCache::new();
+    assert_eq!(
+        latest_history_scope_with_cache(
+            &root,
+            &config.agent,
+            &expectations[1],
+            &mut history_cache,
+        )
+        .unwrap(),
+        None
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -39,7 +46,89 @@ fn lazy_full_scope_reset_invalidates_only_sampled_non_selected_history() {
 #[test]
 fn lazy_full_scope_reset_count_uses_token_ratio_and_candidate_cap() {
     assert_eq!(lazy_full_scope_reset_count(0, 10, 1, 5), 0);
+    assert_eq!(lazy_full_scope_reset_count(400, 10, 1, 5), 2);
     assert_eq!(lazy_full_scope_reset_count(1_000, 10, 1, 3), 3);
+}
+
+#[test]
+fn lazy_full_scope_reset_plan_samples_only_narrowed_history() {
+    let root = git_project("check-lazy-reset-candidates");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectations = check_options(&config, &[], false, true).selected;
+    append_history_record(
+        &root,
+        &expectations[0],
+        &expectation_record(
+            &config.agent,
+            &expectations[0],
+            "pass",
+            "yes",
+            staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        ),
+    )
+    .unwrap();
+    let narrowed_scope = vec!["README.md".to_string()];
+    let mut narrowed_record = expectation_record(
+        &config.agent,
+        &expectations[1],
+        "pass",
+        "no",
+        staged_scope_hash(&root, &config.agent, &narrowed_scope).unwrap(),
+    );
+    narrowed_record.scope = narrowed_scope;
+    append_history_record(&root, &expectations[1], &narrowed_record).unwrap();
+
+    let plan =
+        plan_lazy_full_scope_reset(&root, &config.agent, u64::MAX, &expectations, 0).unwrap();
+
+    assert_eq!(plan.expectations.len(), 1);
+    assert_eq!(plan.expectations[0].id, expectations[1].id);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn lazy_full_scope_reset_preserves_existing_full_scope_pass_when_resetting_narrowed_scope() {
+    let root = git_project("check-lazy-reset-preserve-full-pass");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &[], false, true).selected[0].clone();
+    append_history_record(
+        &root,
+        &expectation,
+        &expectation_record(
+            &config.agent,
+            &expectation,
+            "pass",
+            "yes",
+            staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        ),
+    )
+    .unwrap();
+    let narrowed_scope = vec!["README.md".to_string()];
+    let mut narrowed_record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        staged_scope_hash(&root, &config.agent, &narrowed_scope).unwrap(),
+    );
+    narrowed_record.scope = narrowed_scope;
+    append_history_record(&root, &expectation, &narrowed_record).unwrap();
+
+    assert!(
+        reset_non_selected_expectation_histories(&root, std::slice::from_ref(&expectation))
+            .is_empty()
+    );
+
+    let records = read_history_records(&root, &expectation).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].scope, full_scope());
+    let mut history_cache = HistoryCache::new();
+    assert_eq!(
+        latest_history_scope_with_cache(&root, &config.agent, &expectation, &mut history_cache,)
+            .unwrap(),
+        Some(full_scope())
+    );
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -76,6 +165,31 @@ expectations:
 }
 
 #[test]
+fn project_size_estimate_reads_staged_colon_prefixed_paths() {
+    let root = git_project("check-lazy-reset-colon-path");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let baseline = estimate_staged_project_size_tokens(&root, &config.agent).unwrap();
+    let path = ":notes.txt";
+    fs::write(root.join(path), "12345678").unwrap();
+    let add = Command::new("git")
+        .args(["--literal-pathspecs", "add", "--", path])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    assert_eq!(
+        estimate_staged_project_size_tokens(&root, &config.agent).unwrap(),
+        baseline + 2
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn lazy_full_scope_reset_does_not_create_missing_history_files() {
     let root = git_project("check-lazy-reset-missing-history");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -89,8 +203,8 @@ fn lazy_full_scope_reset_does_not_create_missing_history_files() {
 }
 
 #[test]
-fn lazy_full_scope_reset_removes_cooldown_pass() {
-    let root = git_project("check-lazy-reset-cooldown");
+fn lazy_full_scope_reset_preserves_full_scope_cooldown_pass() {
+    let root = git_project("check-lazy-reset-full-cooldown");
     let config = parse_check_config(
         r#"
 version: 1
@@ -115,15 +229,15 @@ expectations:
     );
     record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
+    let reset_history_path = history_path(&root, &expectation).unwrap();
 
     assert!(
         reset_non_selected_expectation_histories(&root, std::slice::from_ref(&expectation))
             .is_empty()
     );
 
-    assert!(read_history_records(&root, &expectation)
-        .unwrap()
-        .is_empty());
+    assert!(reset_history_path.exists());
+    assert_eq!(read_history_records(&root, &expectation).unwrap().len(), 1);
     let mut history_cache = HistoryCache::new();
     assert!(cooldown_history_record(
         &root,
@@ -133,7 +247,7 @@ expectations:
         unix_timestamp().unwrap(),
     )
     .unwrap()
-    .is_none());
+    .is_some());
     let _ = fs::remove_dir_all(root);
 }
 

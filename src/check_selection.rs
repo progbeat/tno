@@ -1,53 +1,130 @@
-use crate::check_order_state::latest_recorded_non_pass_timestamp;
+use crate::check_order_state::latest_recorded_non_pass_timestamp_with_cache;
+use crate::check_types::{CheckOptions, Cooldown, SelectedExpectation};
+use crate::config_types::{AgentConfig, CheckConfig};
 use crate::hash::expectation_id;
 use crate::history::HistoryCache;
 use crate::history_reuse::cooldown_history_record;
 use crate::time::parse_record_timestamp;
-use crate::types::{AgentConfig, CheckConfig, CheckOptions, Cooldown, SelectedExpectation};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::Path;
 
+#[cfg(test)]
 pub(crate) fn parse_check_options(
     config: &CheckConfig,
     args: &[OsString],
 ) -> Result<CheckOptions, String> {
+    let identities = expectation_identities(config)?;
+    parse_check_options_with_identities(config, &identities, args)
+}
+
+pub(crate) fn parse_check_options_with_identities(
+    config: &CheckConfig,
+    identities: &[ExpectationIdentity],
+    args: &[OsString],
+) -> Result<CheckOptions, String> {
     let mut check_all = false;
     let mut ignore_cache = false;
+    let mut ignore_cooldown = false;
+    let mut break_after_tokens = None;
     let mut selectors = Vec::new();
-    for arg in args {
-        if arg.to_str() == Some("--all") {
+    let mut parsing_options = true;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if parsing_options && arg.to_str() == Some("--") {
+            parsing_options = false;
+        } else if parsing_options && arg.to_str() == Some("--all") {
             if check_all {
                 return Err("duplicate --all".to_string());
             }
             check_all = true;
-        } else if arg.to_str() == Some("--ignore-cache") {
+        } else if parsing_options && arg.to_str() == Some("--ignore-cache") {
             if ignore_cache {
                 return Err("duplicate --ignore-cache".to_string());
             }
             ignore_cache = true;
+        } else if parsing_options && arg.to_str() == Some("--ignore-cooldown") {
+            if ignore_cooldown {
+                return Err("duplicate --ignore-cooldown".to_string());
+            }
+            ignore_cooldown = true;
+        } else if parsing_options && arg.to_str() == Some("--break-after-tokens") {
+            if break_after_tokens.is_some() {
+                return Err("duplicate --break-after-tokens".to_string());
+            }
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or_else(|| "--break-after-tokens requires a token limit".to_string())?;
+            let value = value
+                .to_str()
+                .ok_or_else(|| "--break-after-tokens must be valid UTF-8".to_string())?;
+            break_after_tokens = Some(parse_break_after_tokens(value)?);
+        } else if parsing_options
+            && arg
+                .to_str()
+                .and_then(|text| text.strip_prefix("--break-after-tokens="))
+                .is_some()
+        {
+            if break_after_tokens.is_some() {
+                return Err("duplicate --break-after-tokens".to_string());
+            }
+            let value = arg
+                .to_str()
+                .and_then(|text| text.strip_prefix("--break-after-tokens="))
+                .unwrap_or_default();
+            break_after_tokens = Some(parse_break_after_tokens(value)?);
         } else {
             selectors.push(arg.clone());
         }
+        index += 1;
     }
-    let selected = select_expectations(config, &selectors)?;
+    let selected = select_expectations_with_identities(config, identities, &selectors)?;
+    let non_selected =
+        initial_non_selected_expectations_with_identities(config, identities, &selected)?;
     let skipped = config.expectations.len().saturating_sub(selected.len());
     Ok(CheckOptions {
         selected,
+        non_selected,
         skipped,
         check_all,
         ignore_cache,
+        ignore_cooldown,
+        break_after_tokens,
     })
 }
 
+fn parse_break_after_tokens(value: &str) -> Result<u64, String> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("--break-after-tokens must be a positive integer".to_string());
+    }
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| "--break-after-tokens value is too large".to_string())?;
+    if parsed == 0 {
+        return Err("--break-after-tokens must be greater than zero".to_string());
+    }
+    Ok(parsed)
+}
+
+#[cfg(test)]
 pub(crate) fn select_expectations(
     config: &CheckConfig,
     args: &[OsString],
 ) -> Result<Vec<SelectedExpectation>, String> {
-    // This expands command-line expectation selectors into the candidate set.
-    // The final selected set is resolved later, after cooldown and reusable
-    // passing cache-hit deselection.
     let identities = expectation_identities(config)?;
+    select_expectations_with_identities(config, &identities, args)
+}
+
+pub(crate) fn select_expectations_with_identities(
+    config: &CheckConfig,
+    identities: &[ExpectationIdentity],
+    args: &[OsString],
+) -> Result<Vec<SelectedExpectation>, String> {
+    // This expands command-line expectation selectors into the candidate set.
+    // The final selected set is resolved later, after cooldown selection
+    // filtering and reusable passing exact-cache deselection.
     let mut selected_indexes = Vec::new();
     if args.is_empty() {
         selected_indexes.extend(0..config.expectations.len());
@@ -60,7 +137,7 @@ pub(crate) fn select_expectations(
             if text.is_empty() {
                 return Err("expectation selector must not be empty".to_string());
             }
-            let matches = matching_expectation_indexes(&identities, text);
+            let matches = matching_expectation_indexes(identities, text);
             let index = match matches.as_slice() {
                 [] => return Err(format!("unknown expectation selector: {}", text)),
                 [index] => *index,
@@ -76,7 +153,9 @@ pub(crate) fn select_expectations(
     selected_indexes
         .into_iter()
         .map(|index| -> Result<SelectedExpectation, String> {
-            let identity = &identities[index];
+            let identity = identities
+                .get(index)
+                .ok_or_else(|| "expectation identity count mismatch".to_string())?;
             let expectation = &config.expectations[index];
             Ok(SelectedExpectation {
                 number: index + 1,
@@ -95,15 +174,24 @@ pub(crate) fn select_expectations(
         .collect::<Result<Vec<_>, _>>()
 }
 
+#[cfg(test)]
 pub(crate) fn initial_non_selected_expectations(
     config: &CheckConfig,
+    selected: &[SelectedExpectation],
+) -> Result<Vec<SelectedExpectation>, String> {
+    let identities = expectation_identities(config)?;
+    initial_non_selected_expectations_with_identities(config, &identities, selected)
+}
+
+pub(crate) fn initial_non_selected_expectations_with_identities(
+    config: &CheckConfig,
+    identities: &[ExpectationIdentity],
     selected: &[SelectedExpectation],
 ) -> Result<Vec<SelectedExpectation>, String> {
     let selected_ids = selected
         .iter()
         .map(|expectation| expectation.id.clone())
         .collect::<BTreeSet<_>>();
-    let identities = expectation_identities(config)?;
     Ok(config
         .expectations
         .iter()
@@ -193,9 +281,12 @@ pub(crate) fn final_selected_expectations(
     now: u64,
 ) -> Result<FinalSelection, FinalSelectionError> {
     // CLI selector filtering happens before this shared final-selection step.
-    // After cooldown removes a matching expectation here, both `canon check`
-    // and `canon gate` treat it as non-selected; gate's pseudocode loop receives
-    // the resulting `selected_expectations` set as its input parameter.
+    // Cooldown is a selection filter, not an answer-cache hit: a fresh latest
+    // pass removes a matching expectation before exact-cache lookup and before
+    // any evaluator result can be reused as the observed answer. Both
+    // `canon check` and `canon gate` then treat it as non-selected; gate's
+    // pseudocode loop receives the resulting `selected_expectations` set as its
+    // input parameter.
     let mut remaining = Vec::new();
     let mut skipped = Vec::new();
     for expectation in selected {
@@ -222,7 +313,11 @@ pub(crate) fn order_expectations_by_latest_non_pass(
         .map(|(index, expectation)| {
             let latest = latest_history_non_pass_timestamp(root, &expectation, history_cache)?
                 .into_iter()
-                .chain(latest_recorded_non_pass_timestamp(root, &expectation)?)
+                .chain(latest_recorded_non_pass_timestamp_with_cache(
+                    root,
+                    &expectation,
+                    history_cache,
+                )?)
                 .max();
             Ok(OrderedExpectation {
                 expectation,
