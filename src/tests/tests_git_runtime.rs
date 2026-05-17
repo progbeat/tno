@@ -74,7 +74,9 @@ fn staged_worktree_view_exposes_git_status_and_diff() {
     commit_all(&root, "initial");
     fs::write(root.join("README.md"), "staged\n").unwrap();
     fs::write(root.join("ADDED.md"), "added\n").unwrap();
+    #[cfg(unix)]
     let literal_added = ":(literal)added.md";
+    #[cfg(unix)]
     fs::write(root.join(literal_added), "literal added\n").unwrap();
     fs::remove_file(root.join("src/main.rs")).unwrap();
     Command::new("git")
@@ -82,16 +84,12 @@ fn staged_worktree_view_exposes_git_status_and_diff() {
         .current_dir(&root)
         .output()
         .unwrap();
+    let mut add_args = vec!["add", "--", "README.md", "ADDED.md", "src/main.rs"];
+    #[cfg(unix)]
+    add_args.insert(4, literal_added);
     Command::new("git")
         .arg("--literal-pathspecs")
-        .args([
-            "add",
-            "--",
-            "README.md",
-            "ADDED.md",
-            literal_added,
-            "src/main.rs",
-        ])
+        .args(add_args)
         .current_dir(&root)
         .output()
         .unwrap();
@@ -117,6 +115,7 @@ fn staged_worktree_view_exposes_git_status_and_diff() {
         let status = String::from_utf8_lossy(&status.stdout);
         assert!(status.lines().any(|line| line == " M README.md"));
         assert!(status.lines().any(|line| line == " A ADDED.md"));
+        #[cfg(unix)]
         assert!(status.lines().any(|line| line == " A :(literal)added.md"));
         assert!(status.lines().any(|line| line.contains("new-name.txt")));
         assert!(status.lines().any(|line| line.contains("old-name.txt")));

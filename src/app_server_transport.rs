@@ -1,6 +1,6 @@
 use crate::app_server::{AppServerRunner, ThreadTurnCarryover};
 use crate::app_server_protocol::{
-    app_server_error_value, app_server_failure_from_value, app_server_message,
+    agent_message_delta, app_server_error_value, app_server_failure_from_value, app_server_message,
     append_completed_agent_text, context_compaction_event, token_usage_update, turn_idle_timed_out,
     turn_started_id, turn_text,
 };
@@ -18,6 +18,20 @@ use std::io::Write;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
+pub(crate) struct AppServerTurnRequest {
+    thread_id: String,
+    params: Value,
+}
+
+impl AppServerTurnRequest {
+    pub(crate) fn new(thread_id: impl Into<String>, params: Value) -> AppServerTurnRequest {
+        AppServerTurnRequest {
+            thread_id: thread_id.into(),
+            params,
+        }
+    }
+}
+
 impl AppServerRunner {
     pub(crate) fn send_request(
         &mut self,
@@ -25,11 +39,24 @@ impl AppServerRunner {
         params: Value,
     ) -> Result<Value, EvaluatorError> {
         let id = self.send_json_rpc_request(method, &params, "request")?;
+        let mut last_activity = Instant::now();
         loop {
             if check_interrupted() {
                 return Err("interrupted".into());
             }
-            let message = self.read_message()?;
+            let Some(message) = self.read_message_or_timeout()? else {
+                if turn_idle_timed_out(last_activity, Instant::now()) {
+                    return Err(EvaluatorError::failure(
+                        EvaluatorFailureKind::TurnTimeout,
+                        format!(
+                            "app-server {} timed out after {} seconds without response",
+                            method, APP_SERVER_TURN_TIMEOUT_SECS
+                        ),
+                    ));
+                }
+                continue;
+            };
+            last_activity = Instant::now();
             self.record_app_server_events(&message);
             let envelope = app_server_message(&message).map_err(app_server_protocol_error)?;
             if envelope.id == Some(id) {
@@ -49,19 +76,16 @@ impl AppServerRunner {
     pub(crate) fn send_turn_request(
         &mut self,
         method: &str,
-        params: Value,
+        request: AppServerTurnRequest,
     ) -> Result<String, EvaluatorError> {
         self.last_turn_usage = None;
-        let id = self.send_json_rpc_request(method, &params, "request")?;
+        let id = self.send_json_rpc_request(method, &request.params, "request")?;
+        let thread_id = request.thread_id;
 
         let mut saw_response = false;
         let mut saw_completed = false;
         let mut text = String::new();
         let mut completed_text = String::new();
-        let thread_id = params
-            .get("threadId")
-            .and_then(Value::as_str)
-            .map(str::to_string);
         let mut last_activity = Instant::now();
         let mut turn_id: Option<String> = None;
         let mut pending_error: Option<Value> = None;
@@ -71,7 +95,7 @@ impl AppServerRunner {
             self.maybe_interrupt_turn(
                 &mut interrupted,
                 &mut interrupt_sent,
-                thread_id.as_deref(),
+                Some(thread_id.as_str()),
                 turn_id.as_deref(),
             )?;
             let Some(message) = self.read_message_or_timeout()? else {
@@ -94,28 +118,34 @@ impl AppServerRunner {
                 self.maybe_interrupt_turn(
                     &mut interrupted,
                     &mut interrupt_sent,
-                    thread_id.as_deref(),
+                    Some(thread_id.as_str()),
                     turn_id.as_deref(),
                 )?;
             }
             if envelope.id == Some(id) {
-                if let Some(error) = envelope.error.as_ref() {
-                    return Err(app_server_failure_from_value(method, error));
+                if let Some(error) = envelope
+                    .error
+                    .as_ref()
+                    .cloned()
+                    .or_else(|| pending_error.take())
+                {
+                    return Err(self.fail_turn_request(
+                        method,
+                        &error,
+                        &thread_id,
+                        turn_id.as_deref(),
+                    ));
                 }
                 saw_response = true;
                 if saw_completed {
-                    return self.finish_turn_request(text, completed_text, turn_id);
+                    return self.finish_turn_request(text, completed_text, &thread_id, turn_id);
                 }
                 continue;
             }
             match envelope.method.as_deref() {
                 Some("item/agentMessage/delta") => {
-                    if let Some(delta) = message
-                        .get("params")
-                        .and_then(|params| params.get("delta"))
-                        .and_then(Value::as_str)
-                    {
-                        text.push_str(delta);
+                    if let Some(delta) = agent_message_delta(&message) {
+                        text.push_str(&delta);
                     }
                 }
                 Some("item/completed") | Some("item/agentMessage/completed") => {
@@ -128,11 +158,16 @@ impl AppServerRunner {
                     if let Some(error) =
                         app_server_error_value(&message).or_else(|| pending_error.take())
                     {
-                        return Err(app_server_failure_from_value(method, &error));
+                        return Err(self.fail_turn_request(
+                            method,
+                            &error,
+                            &thread_id,
+                            turn_id.as_deref(),
+                        ));
                     }
                     saw_completed = true;
                     if saw_response {
-                        return self.finish_turn_request(text, completed_text, turn_id);
+                        return self.finish_turn_request(text, completed_text, &thread_id, turn_id);
                     }
                 }
                 Some("error") => {
@@ -142,7 +177,12 @@ impl AppServerRunner {
                 }
                 Some(_) => {
                     if let Some(error) = app_server_error_value(&message) {
-                        return Err(app_server_failure_from_value(method, &error));
+                        return Err(self.fail_turn_request(
+                            method,
+                            &error,
+                            &thread_id,
+                            turn_id.as_deref(),
+                        ));
                     }
                 }
                 _ => {}
@@ -154,51 +194,57 @@ impl AppServerRunner {
         &mut self,
         text: String,
         completed_text: String,
+        thread_id: &str,
         turn_id: Option<String>,
     ) -> Result<String, EvaluatorError> {
-        self.drain_token_usage_updates();
-        let mut completed_turn_usage = None;
-        if let Some(turn_id) = turn_id {
-            let usage = self
-                .token_usage_by_turn
-                .get(&turn_id)
-                .copied()
-                .unwrap_or_default();
-            let updates = self
-                .token_usage_updates_by_turn
-                .get(&turn_id)
-                .cloned()
-                .unwrap_or_default();
-            let compaction_events = self
-                .context_compaction_events_by_turn
-                .get(&turn_id)
-                .cloned()
-                .unwrap_or_default();
-            if !updates.is_empty() || !compaction_events.is_empty() {
-                let thread_id = updates
-                    .first()
-                    .map(|update| update.thread_id.clone())
-                    .or_else(|| {
-                        compaction_events
-                            .first()
-                            .map(|event| event.thread_id.clone())
-                    });
-                if let Some(thread_id) = thread_id {
-                    completed_turn_usage = Some(EvaluatorTurnUsage {
-                        thread_id,
-                        turn_id,
-                        usage,
-                        token_usage_updates: updates,
-                        context_compaction_events: compaction_events,
-                    });
-                }
-            }
-        }
+        self.drain_token_usage_updates()?;
+        let completed_turn_usage = turn_id
+            .as_deref()
+            .map(|turn_id| self.turn_usage_for_turn(thread_id, turn_id));
         if let Some(turn_usage) = completed_turn_usage {
             self.apply_thread_reuse_policy(&turn_usage)?;
             self.last_turn_usage = Some(turn_usage);
         }
         Ok(turn_text(text, completed_text))
+    }
+
+    fn fail_turn_request(
+        &mut self,
+        method: &str,
+        error: &Value,
+        thread_id: &str,
+        turn_id: Option<&str>,
+    ) -> EvaluatorError {
+        if let Err(err) = self.drain_token_usage_updates() {
+            return err;
+        }
+        self.last_turn_usage = turn_id.map(|turn_id| self.turn_usage_for_turn(thread_id, turn_id));
+        app_server_failure_from_value(method, error)
+    }
+
+    fn turn_usage_for_turn(&self, thread_id: &str, turn_id: &str) -> EvaluatorTurnUsage {
+        let usage = self
+            .token_usage_by_turn
+            .get(turn_id)
+            .copied()
+            .unwrap_or_default();
+        let updates = self
+            .token_usage_updates_by_turn
+            .get(turn_id)
+            .cloned()
+            .unwrap_or_default();
+        let compaction_events = self
+            .context_compaction_events_by_turn
+            .get(turn_id)
+            .cloned()
+            .unwrap_or_default();
+        EvaluatorTurnUsage {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            usage,
+            token_usage_updates: updates,
+            context_compaction_events: compaction_events,
+        }
     }
 
     fn apply_thread_reuse_policy(
@@ -213,61 +259,47 @@ impl AppServerRunner {
             turn_id: turn_usage.turn_id.clone(),
             tokens: carryover_tokens(turn_usage.usage),
         };
-        let should_rollback = {
-            let turns = self
-                .turn_carryover_by_thread
-                .entry(turn_usage.thread_id.clone())
-                .or_default();
-            let should_rollback = turns.last().is_some_and(|previous| {
+        let should_rollback = self
+            .turn_carryover_by_thread
+            .get(&turn_usage.thread_id)
+            .and_then(|turns| turns.last())
+            .is_some_and(|previous| {
                 thread_reuse_policy_should_rollback(
                     previous.tokens,
                     current.tokens,
                     self.carryover_token_target,
                 )
             });
-            turns.push(current);
-            should_rollback
+        let rollback_applied = if should_rollback {
+            self.rollback_latest_thread_turn(&turn_usage.thread_id)?;
+            true
+        } else {
+            false
         };
-        if should_rollback {
-            match self.rollback_latest_thread_turn(&turn_usage.thread_id)? {
-                ThreadRollbackOutcome::RolledBack => {
-                    if let Some(turns) =
-                        self.turn_carryover_by_thread.get_mut(&turn_usage.thread_id)
-                    {
-                        turns.pop();
-                    }
-                }
-                ThreadRollbackOutcome::UnsupportedByEphemeralHistory => {
-                    // Evaluator threads are intentionally ephemeral and keep no
-                    // persisted history. Some app-server versions reject
-                    // thread/rollback for those threads, so the equivalent
-                    // future-state operation is to retire this session and
-                    // avoid carrying any of its turns into later questions.
-                    self.turn_carryover_by_thread.remove(&turn_usage.thread_id);
-                    self.retired_sessions.insert(turn_usage.thread_id.clone());
-                }
-            }
+        // Mirror the remote thread after the fallible rollback request has
+        // succeeded. A rollback failure exits above without changing local
+        // carryover state; a successful rollback applies the same push/pop
+        // transition locally as the app-server applied remotely.
+        let turns = self
+            .turn_carryover_by_thread
+            .entry(turn_usage.thread_id.clone())
+            .or_default();
+        turns.push(current);
+        if rollback_applied {
+            turns.pop();
         }
         Ok(())
     }
 
-    fn rollback_latest_thread_turn(
-        &mut self,
-        thread_id: &str,
-    ) -> Result<ThreadRollbackOutcome, EvaluatorError> {
-        match self.send_request(
+    fn rollback_latest_thread_turn(&mut self, thread_id: &str) -> Result<(), EvaluatorError> {
+        self.send_request(
             "thread/rollback",
             json!({
                 "threadId": thread_id,
                 "numTurns": 1
             }),
-        ) {
-            Ok(_) => Ok(ThreadRollbackOutcome::RolledBack),
-            Err(err) if rollback_requires_persisted_history(&err) => {
-                Ok(ThreadRollbackOutcome::UnsupportedByEphemeralHistory)
-            }
-            Err(err) => Err(err),
-        }
+        )
+        .map(|_| ())
     }
 
     fn maybe_interrupt_turn(
@@ -330,16 +362,6 @@ impl AppServerRunner {
         Ok(id)
     }
 
-    fn read_message(&mut self) -> Result<Value, EvaluatorError> {
-        loop {
-            match self.read_message_or_timeout()? {
-                Some(message) => return Ok(message),
-                None if check_interrupted() => return Err("interrupted".into()),
-                None => {}
-            }
-        }
-    }
-
     fn read_message_or_timeout(&mut self) -> Result<Option<Value>, EvaluatorError> {
         match self.messages.recv_timeout(Duration::from_millis(100)) {
             Ok(result) => result.map(Some).map_err(EvaluatorError::message),
@@ -379,12 +401,14 @@ impl AppServerRunner {
         }
     }
 
-    pub(crate) fn drain_token_usage_updates(&mut self) {
+    pub(crate) fn drain_token_usage_updates(&mut self) -> Result<(), EvaluatorError> {
         loop {
             match self.messages.recv_timeout(Duration::from_millis(50)) {
                 Ok(Ok(message)) => self.record_app_server_events(&message),
-                Ok(Err(_)) => return,
-                Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => return,
+                Ok(Err(err)) => return Err(EvaluatorError::message(err)),
+                Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {
+                    return Ok(());
+                }
             }
         }
     }
@@ -421,7 +445,7 @@ pub(crate) fn record_token_usage_update(
 }
 
 pub(crate) fn carryover_tokens(usage: TokenUsage) -> u64 {
-    usage.input_tokens.saturating_add(usage.output_tokens)
+    usage.input_tokens + usage.output_tokens
 }
 
 pub(crate) fn thread_reuse_policy_should_rollback(
@@ -430,17 +454,6 @@ pub(crate) fn thread_reuse_policy_should_rollback(
     target: CarryoverTokenTarget,
 ) -> bool {
     previous_carryover_tokens >= target.min || current_carryover_tokens > target.max
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ThreadRollbackOutcome {
-    RolledBack,
-    UnsupportedByEphemeralHistory,
-}
-
-pub(crate) fn rollback_requires_persisted_history(err: &EvaluatorError) -> bool {
-    err.message_str()
-        .contains("thread rollback requires persisted thread history")
 }
 
 fn app_server_protocol_error(error: String) -> EvaluatorError {

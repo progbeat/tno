@@ -13,7 +13,9 @@ use serde_json::json;
 pub(crate) fn collect_check_token_usage(
     runner: &mut LazyAppServerRunner,
 ) -> Result<TokenUsage, String> {
-    runner.drain_token_usage_updates();
+    runner
+        .drain_token_usage_updates()
+        .map_err(|err| err.to_string())?;
     Ok(runner.token_usage().unwrap_or_default())
 }
 

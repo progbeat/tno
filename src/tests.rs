@@ -9,7 +9,7 @@ use crate::app_server_protocol::{
 };
 use crate::app_server_transport::{
     carryover_tokens, record_context_compaction_event, record_token_usage_update,
-    rollback_requires_persisted_history, thread_reuse_policy_should_rollback,
+    thread_reuse_policy_should_rollback,
 };
 use crate::check::run_check_with_runner;
 use crate::check_cache::{
@@ -107,7 +107,7 @@ use crate::evaluator_response_cache::{response_excerpt, EvaluatorResponseParseCa
 use crate::evaluator_scope::parse_scope_json;
 use crate::evaluator_scope::parse_scope_strings;
 use crate::evaluator_turn::{
-    ask_once, effective_thinking, evaluator_models, is_context_window_failure,
+    ask_and_log, ask_once, effective_thinking, evaluator_models, is_context_window_failure,
     is_model_technical_failure, model_label, record_from_response,
     session_failure_invalidates_thread, token_usage_log_fields, EvaluatorFailureKind,
     EvaluatorTurnContext,

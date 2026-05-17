@@ -59,8 +59,8 @@ impl AppServerRunner {
         let mut command = Command::new("codex");
         command.args(app_server_args(root, load_plugins, agent)?);
         // `canon check` can itself run inside a Codex thread. The evaluator
-        // app-server must create independent ephemeral threads, not attach to
-        // the parent conversation through inherited thread identity.
+        // app-server must create independent invocation-local threads, not
+        // attach to the parent conversation through inherited thread identity.
         command.env_remove("CODEX_THREAD_ID");
         #[cfg(unix)]
         command.process_group(0);

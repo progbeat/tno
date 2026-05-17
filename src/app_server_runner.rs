@@ -1,4 +1,5 @@
 use crate::app_server::{AppServerRunner, LazyAppServerRunner};
+use crate::app_server_transport::AppServerTurnRequest;
 use crate::check_validation::codex_reasoning_effort;
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
@@ -28,24 +29,29 @@ impl LazyAppServerRunner {
         }
     }
 
-    pub(crate) fn drain_token_usage_updates(&mut self) {
+    pub(crate) fn drain_token_usage_updates(&mut self) -> Result<(), EvaluatorError> {
         if let Some(inner) = self.inner.as_mut() {
-            inner.drain_token_usage_updates();
+            inner.drain_token_usage_updates()?;
         }
+        Ok(())
     }
 
-    fn retire_inner_after_model_failure(&mut self, err: &EvaluatorError) {
+    fn retire_inner_after_model_failure(
+        &mut self,
+        err: &EvaluatorError,
+    ) -> Result<(), EvaluatorError> {
         if !is_model_technical_failure(err) {
-            return;
+            return Ok(());
         }
         if let Some(inner) = self.inner.as_mut() {
-            inner.drain_token_usage_updates();
+            inner.drain_token_usage_updates()?;
             if let Some(usage) = inner.token_usage() {
                 self.retired_token_usage = self.retired_token_usage.add(usage);
             }
         }
         self.sessions.clear();
         self.inner = None;
+        Ok(())
     }
 }
 
@@ -68,7 +74,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
                 Ok(session_id)
             }
             Err(err) => {
-                self.retire_inner_after_model_failure(&err);
+                self.retire_inner_after_model_failure(&err)?;
                 Err(err)
             }
         }
@@ -90,7 +96,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
             .ok_or_else(|| EvaluatorError::message("app-server runner is not initialized"))?
             .ask(session_id, prompt, model, thinking);
         if let Err(err) = &result {
-            self.retire_inner_after_model_failure(err);
+            self.retire_inner_after_model_failure(err)?;
         }
         result
     }
@@ -129,7 +135,11 @@ impl EvaluatorRunner for AppServerRunner {
             developer_instructions: instructions,
             approval_policy: "never",
             config: evaluator_thread_config(agent, scope, model, thinking),
-            ephemeral: true,
+            // App-server rollback is defined over materialized thread history.
+            // Canon still keeps evaluator thread IDs invocation-local: they are
+            // stored only in InterrogationState and never written to canon
+            // history for reuse by a later `canon check`.
+            ephemeral: false,
             // Evaluator threads must not inherit the parent Codex conversation:
             // canon questions about "your dev instructions" refer only to the
             // rendered evaluator developerInstructions parameter below.
@@ -168,7 +178,7 @@ impl EvaluatorRunner for AppServerRunner {
             request["effort"] = Value::String(effort.to_string());
         }
         request["outputSchema"] = evaluator_response_output_schema();
-        self.send_turn_request("turn/start", request)
+        self.send_turn_request("turn/start", AppServerTurnRequest::new(session_id, request))
     }
 
     fn take_last_turn_usage(&mut self) -> Option<EvaluatorTurnUsage> {

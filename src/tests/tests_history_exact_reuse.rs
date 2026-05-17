@@ -362,6 +362,7 @@ fn scope_hash_handles_newline_paths_without_line_splitting() {
 }
 
 #[test]
+#[cfg(unix)]
 fn scope_hash_treats_git_pathspec_magic_as_literal_path() {
     let root = git_project("history-scope-hash-literal-pathspec");
     let config = parse_check_config(check_config_yaml()).unwrap();

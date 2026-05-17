@@ -165,6 +165,7 @@ expectations:
 }
 
 #[test]
+#[cfg(unix)]
 fn project_size_estimate_reads_staged_colon_prefixed_paths() {
     let root = git_project("check-lazy-reset-colon-path");
     let config = parse_check_config(check_config_yaml()).unwrap();

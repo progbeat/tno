@@ -203,7 +203,28 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
             ],
         )?;
     }
-    let response = runner.ask(turn.session_id, prompt, turn.model, turn.thinking)?;
+    let response = match runner.ask(turn.session_id, prompt, turn.model, turn.thinking) {
+        Ok(response) => response,
+        Err(err) => {
+            let turn_usage = runner.take_last_turn_usage();
+            if let Some(writer) = diagnostic_log.as_deref_mut() {
+                let raw_response = json!({
+                    "sessionId": turn.session_id,
+                    "error": err.message_str(),
+                });
+                let mut fields = vec![
+                    ("id", json!(expectation_id)),
+                    ("attempt", json!(attempt)),
+                    ("reason", json!(reason)),
+                    ("error", json!(err.message_str())),
+                    ("response", raw_response),
+                ];
+                append_turn_usage_fields(&mut fields, turn_usage.as_ref());
+                writer.write_event("error", "agent.response", &fields)?;
+            }
+            return Err(err);
+        }
+    };
     let turn_usage = runner.take_last_turn_usage();
     let response_usage = turn_usage.as_ref().map(|turn_usage| turn_usage.usage);
     if let Some(writer) = diagnostic_log.as_deref_mut() {
@@ -217,21 +238,7 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
             ("reason", json!(reason)),
             ("response", raw_response),
         ];
-        if let Some(EvaluatorTurnUsage {
-            thread_id,
-            turn_id,
-            token_usage_updates,
-            context_compaction_events,
-            ..
-        }) = turn_usage.as_ref()
-        {
-            fields.push(("threadId", json!(thread_id)));
-            fields.push(("turnId", json!(turn_id)));
-            fields.push(("tokenUsageUpdates", json!(token_usage_updates)));
-            if !context_compaction_events.is_empty() {
-                fields.push(("contextCompactionEvents", json!(context_compaction_events)));
-            }
-        }
+        append_turn_usage_fields(&mut fields, turn_usage.as_ref());
         writer.write_event("info", "agent.response", &fields)?;
     }
     let context_compacted = turn_usage
@@ -242,6 +249,27 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
         usage: response_usage,
         context_compacted,
     })
+}
+
+fn append_turn_usage_fields(
+    fields: &mut Vec<(&'static str, Value)>,
+    turn_usage: Option<&EvaluatorTurnUsage>,
+) {
+    if let Some(EvaluatorTurnUsage {
+        thread_id,
+        turn_id,
+        token_usage_updates,
+        context_compaction_events,
+        ..
+    }) = turn_usage
+    {
+        fields.push(("threadId", json!(thread_id)));
+        fields.push(("turnId", json!(turn_id)));
+        fields.push(("tokenUsageUpdates", json!(token_usage_updates)));
+        if !context_compaction_events.is_empty() {
+            fields.push(("contextCompactionEvents", json!(context_compaction_events)));
+        }
+    }
 }
 
 #[derive(Serialize)]

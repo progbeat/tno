@@ -29,6 +29,25 @@ pub(crate) fn app_server_message(value: &Value) -> Result<AppServerMessage, Stri
     Ok(message)
 }
 
+#[derive(Deserialize)]
+struct AgentMessageDeltaMessage {
+    method: Option<String>,
+    params: Option<AgentMessageDeltaParams>,
+}
+
+#[derive(Deserialize)]
+struct AgentMessageDeltaParams {
+    delta: Option<String>,
+}
+
+pub(crate) fn agent_message_delta(value: &Value) -> Option<String> {
+    let message = serde_json::from_value::<AgentMessageDeltaMessage>(value.clone()).ok()?;
+    if message.method.as_deref() != Some("item/agentMessage/delta") {
+        return None;
+    }
+    message.params?.delta
+}
+
 pub(crate) fn app_server_failure_kind(error: &Value) -> EvaluatorFailureKind {
     let code = serde_json::from_value::<AppServerErrorFields>(error.clone())
         .ok()

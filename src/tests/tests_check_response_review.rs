@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn failed_evaluator_turn_writes_response_log_with_usage() {
+    let root = git_project("failed-turn-response-log");
+    let mut runner = FakeRunner::new_results(vec![Err(EvaluatorError::failure(
+        EvaluatorFailureKind::ContextWindow,
+        "context window exceeded",
+    ))]);
+    runner.turn_usages.push_back(Some(EvaluatorTurnUsage {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        usage: TokenUsage {
+            total_tokens: 10,
+            input_tokens: 7,
+            cached_input_tokens: 2,
+            output_tokens: 3,
+            reasoning_output_tokens: 1,
+        },
+        token_usage_updates: vec![TokenUsageUpdate {
+            sequence: 1,
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            token_usage: json!({"last": {"totalTokens": 10}}),
+            last_usage: TokenUsage {
+                total_tokens: 10,
+                input_tokens: 7,
+                cached_input_tokens: 2,
+                output_tokens: 3,
+                reasoning_output_tokens: 1,
+            },
+        }],
+        context_compaction_events: Vec::new(),
+    }));
+    let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
+    let turn = EvaluatorTurnContext {
+        session_id: "session-1",
+        model: None,
+        thinking: "low",
+    };
+    let mut diagnostic_log_ref = Some(&mut diagnostic_log);
+
+    let err = match ask_and_log(
+        &mut runner,
+        &turn,
+        "Question?",
+        &mut diagnostic_log_ref,
+        Some("id-1"),
+        1,
+        "initial",
+    ) {
+        Ok(_) => panic!("expected evaluator failure"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.kind(), Some(EvaluatorFailureKind::ContextWindow));
+    let log = fs::read_to_string(diagnostic_log.path()).unwrap();
+    let response = log
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|event| event["event"] == "agent.response")
+        .unwrap();
+    assert_eq!(response["level"].as_str(), Some("error"));
+    assert_eq!(response["error"].as_str(), Some("context window exceeded"));
+    assert_eq!(response["threadId"].as_str(), Some("thread-1"));
+    assert_eq!(response["turnId"].as_str(), Some("turn-1"));
+    assert_eq!(response["tokenUsageUpdates"][0]["sequence"], json!(1));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_requires_human_review_for_unparseable_response() {
     let root = git_project("check-unparseable-first-response");
     let config = parse_check_config(check_config_yaml()).unwrap();

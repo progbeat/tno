@@ -307,18 +307,6 @@ fn thread_reuse_policy_rolls_back_when_carryover_exits_target_range() {
 }
 
 #[test]
-fn ephemeral_history_rollback_failure_retires_thread() {
-    let err = EvaluatorError::failure(
-        EvaluatorFailureKind::UnknownAppServer,
-        r#"app-server thread/rollback failed: {"code":-32600,"message":"thread rollback requires persisted thread history"}"#,
-    );
-    assert!(rollback_requires_persisted_history(&err));
-    assert!(!rollback_requires_persisted_history(
-        &EvaluatorError::message("app-server thread/rollback failed: other failure")
-    ));
-}
-
-#[test]
 fn context_compaction_events_are_kept_raw_and_ordered() {
     let first = json!({
         "method": "item/started",
