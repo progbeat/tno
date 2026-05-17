@@ -34,6 +34,10 @@ pub(crate) fn finish_check_report(
     report: &CheckRunReport,
     error: Option<&str>,
 ) -> Result<(), CommandError> {
+    // Per-expectation output, the public token-usage line, and the public
+    // summary are written and flushed before this finish step is called. This
+    // function only handles pieces that become computable after those steps:
+    // the optional pass-improvement notice and structured finish log records.
     write_pass_improvement_notice_if_needed(
         context.root,
         context.config,

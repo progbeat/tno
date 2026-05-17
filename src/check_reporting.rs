@@ -21,6 +21,9 @@ pub(crate) fn write_check_token_usage_event(
     diagnostic_log: &mut DiagnosticLogWriter,
     usage: TokenUsage,
 ) -> Result<(), String> {
+    // End-of-run usage is reported here. Per-thread lifecycle details are
+    // logged by `check_interrogation.rs`, while per-turn raw request/response
+    // and usage updates are logged by `evaluator_turn.rs`.
     diagnostic_log
         .write_event("info", "token.usage", &token_usage_log_fields(usage))
         .map_err(|err| err.to_string())?;

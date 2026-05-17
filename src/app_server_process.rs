@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 
@@ -16,6 +16,8 @@ use std::thread::{self, JoinHandle};
 use std::io;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::process::ExitStatus;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 

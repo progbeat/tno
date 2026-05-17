@@ -32,6 +32,7 @@ fn check_runner_hides_expected_answers_and_reuses_session() {
     assert!(log
         .lines()
         .any(|line| line.contains(r#""event":"thread.reuse""#)
+            && line.contains(r#""baseInstructions":"#)
             && line.contains(r#""developerInstructions":"#)));
     assert_eq!(runner.starts, 1);
     assert_eq!(runner.start_roots, vec![root.clone()]);

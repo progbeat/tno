@@ -5,6 +5,7 @@ use crate::evaluator::{
     evaluator_response_output_schema, evaluator_turn_input, render_evaluator_turn_input,
 };
 use crate::evaluator_config::evaluator_thread_config;
+use crate::evaluator_prompt::EVALUATOR_BASE_INSTRUCTIONS;
 use crate::evaluator_turn::is_model_technical_failure;
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
@@ -13,8 +14,6 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 const EVALUATOR_SESSION_START_SOURCE: &str = "clear";
-const EVALUATOR_BASE_INSTRUCTIONS: &str =
-    "You are a read-only canon evaluator. Answer the current turn using only this thread's developer instructions, current turn input, and permitted project files.";
 
 impl LazyAppServerRunner {
     pub(crate) fn token_usage(&self) -> Option<TokenUsage> {

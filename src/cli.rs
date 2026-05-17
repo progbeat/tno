@@ -94,6 +94,9 @@ impl std::fmt::Display for CommandError {
 pub(crate) fn main() {
     if let Err(err) = run(env::args_os().skip(1).collect()) {
         if command_error_needs_main_print(&err) {
+            // `run` returns a CommandError only as the terminal result of the
+            // command path. Once that final stderr piece is computed, write it
+            // through the flushing output helper before exiting.
             let _ = write_stderr_line(&format!("canon: {}", err));
         }
         process::exit(1);

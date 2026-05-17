@@ -205,6 +205,10 @@ impl AppServerRunner {
         &mut self,
         turn_usage: &EvaluatorTurnUsage,
     ) -> Result<(), EvaluatorError> {
+        // This transport owns only app-server token accounting and rollback
+        // mechanics. `check_interrogation.rs` owns the human-readable thread
+        // lifecycle log events (`thread.start`/`thread.reuse`) that expose the
+        // effective base and developer instructions for each evaluator thread.
         let current = ThreadTurnCarryover {
             turn_id: turn_usage.turn_id.clone(),
             tokens: carryover_tokens(turn_usage.usage),

@@ -3,7 +3,7 @@ use crate::check_interrogation_state::{evaluator_session_key, CheckRuntime, Inte
 use crate::check_model_fallback::write_model_fallback_events;
 use crate::check_types::{InterrogationResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::evaluator_prompt::developer_instructions;
+use crate::evaluator_prompt::{developer_instructions, EVALUATOR_BASE_INSTRUCTIONS};
 use crate::evaluator_response_cache::EvaluatorResponseParseCache;
 use crate::evaluator_turn::{
     ask_once, effective_thinking, is_context_window_failure, model_label,
@@ -200,6 +200,7 @@ fn write_thread_lifecycle_event(
             ("scope", json!(request.enforced_scope)),
             ("model", json!(model_label(request.model))),
             ("thinking", json!(request.thinking)),
+            ("baseInstructions", json!(EVALUATOR_BASE_INSTRUCTIONS)),
             (
                 "developerInstructions",
                 json!(&lifecycle_log.developer_instructions),

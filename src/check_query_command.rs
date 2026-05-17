@@ -81,6 +81,9 @@ pub(crate) fn run_check_query_command(
             return Err(err);
         }
     };
+    // Query token usage is not known until pending app-server usage updates are
+    // drained above. Once known, `print_token_usage_summary` writes and flushes
+    // the stderr line before the internal finish log event is recorded.
     print_token_usage_summary(Some(usage))?;
     write_check_token_usage_event(&mut diagnostic_log, usage)?;
     // Query mode is ad-hoc and has no selected/non-selected expectation set.

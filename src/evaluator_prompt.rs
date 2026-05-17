@@ -7,6 +7,8 @@ const DEVELOPER_INSTRUCTIONS_TEMPLATE: &str =
 // without editing Rust string literals; include_str! wires them into the binary.
 const EVALUATOR_ANSWER_POLICY: &str = include_str!("instructions/evaluator_answer_policy.txt");
 const EVALUATOR_RESPONSE_FORMAT: &str = include_str!("instructions/evaluator_response_format.txt");
+pub(crate) const EVALUATOR_BASE_INSTRUCTIONS: &str =
+    "You are a read-only canon evaluator. Answer the current turn using only this thread's developer instructions, current turn input, and permitted project files.";
 
 pub(crate) fn developer_instructions(agent: &AgentConfig, scope: &[String]) -> String {
     let scope = compact_json_string_array(scope);
