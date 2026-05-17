@@ -31,23 +31,21 @@ Evaluator Codex threads are ephemeral to one `canon check` invocation.
 Withing one invocation, the same Codex thread is reused for all interrogations
 with the same enforced scope.
 
-A fresh interrogation starts from the latest answer history scope for that
-expectation, or `["."]` if no answer history exists.
+A fresh interrogation starts from the latest accepted scope for that
+expectation, or `["."]` if there is no accepted scope yet.
 
-When an interrogation with a restricted scope returns `idk`, `canon check`
-retries with `["."]` scope and does not treat the restricted `idk` as final
-when full-scope evidence can answer.
+When an interrogation returns `idk`, `canon check` retries with `["."]` scope and
+does not treat the restricted `idk` as final when full-scope evidence can answer.
 
-When an interrogation with a full project scope returns `idk`, human review is
-required.
+When an interrogation with a full scope returns `idk`, human review is required.
 
 When the evaluator response is `malformed`, unparseable, or has empty evidence,
 human review is required.
 
 If the evaluator returns a correct or incorrect answer and a strictly narrower scope,
 `canon check` verifies that strict-subset scope with an independent interrogation
-on that narrower scope. The narrowed scope is accepted and written to answer
-history only when the observed answer is unchanged or incorrect.
+on that narrower scope. The narrowed scope is accepted only when the observed answer
+is unchanged or incorrect.
 
 `canon check` uses `agent.model.primary` as the primary evaluator model.
 Configured `agent.model.fallbacks` are tried in order only after technical
