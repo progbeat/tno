@@ -16,7 +16,7 @@ def stochastic_round(x):
 def lazy_full_scope_reset(final_total_tokens, project_size_tokens, non_selected_expectations):
     candidates = [e for e in non_selected_expectations if e.scope != ["."]]
     num_to_reset = min(
-        stochastic_round(0.1 * final_total_tokens / project_size_tokens),
+        stochastic_round(0.05 * final_total_tokens / project_size_tokens),
         len(candidates)
     )
     expectations_to_reset = random.sample(candidates, num_to_reset)
