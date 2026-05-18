@@ -57,6 +57,9 @@ expectations:
   - q: "Does `canon init` create `.canon/check.yml` from an embedded default template and fail without overwriting when `.canon/check.yml` already exists?"
     a: "yes"
 
+  - q: "Does `canon hook install` install a project-portable pre-commit hook that runs `canon gate` in any Git worktree using the configured `CANON_BIN` or `canon` on PATH?"
+    a: "yes"
+
   - q: "Does `canon hook install` add a pre-commit hook?"
     a: "yes"
 
