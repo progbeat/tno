@@ -1,0 +1,15 @@
+- q: "What is this project implemented in?"
+  a: "Rust"
+  cooldown: 20d
+
+- q: "Do your dev instructions include the contents of AGENTS.md?"
+  a: "no"
+  cooldown: 20d
+
+- q: "Is the number of direct `git` subprocesses started by `canon check` bounded by a constant?"
+  a: "yes"
+  cooldown: 20d
+
+- q: "Do restricted file scopes allow ancestor directory access without allowing non-scoped file contents?"
+  a: "yes"
+  cooldown: 1d

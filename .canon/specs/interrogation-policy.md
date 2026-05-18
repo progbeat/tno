@@ -28,8 +28,8 @@ strings.
 
 Evaluator Codex threads are ephemeral to one `canon check` invocation.
 
-Withing one invocation, the same Codex thread is reused for all interrogations
-with the same enforced scope.
+Withing one invocation, the same Codex thread can be reused for interrogations
+with the same enforced scope to improve context retention and reduce token usage.
 
 A fresh interrogation starts from the latest accepted scope for that
 expectation, or `["."]` if there is no accepted scope yet.
