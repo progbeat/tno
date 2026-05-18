@@ -412,7 +412,7 @@ fn git_tree_sort_byte(entry: &EncodedTreeEntry, index: usize) -> u8 {
 }
 
 fn hex_object_id_bytes(object_id: &str) -> Result<Vec<u8>, String> {
-    if object_id.len() % 2 != 0 {
+    if !object_id.len().is_multiple_of(2) {
         return Err(format!("object id has odd hex length: {}", object_id));
     }
     let mut bytes = Vec::with_capacity(object_id.len() / 2);

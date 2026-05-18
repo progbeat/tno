@@ -17,6 +17,7 @@ type GeneratorPathsCacheKey = (PathBuf, PathBuf, String, bool);
 type StagedFileContentCacheKey = (PathBuf, PathBuf);
 type CheckConfigCacheKey = (PathBuf, PathBuf, String);
 type IncludedExpectationsCacheKey = (String, String);
+type StagedBlobContents = BTreeMap<Vec<u8>, Vec<u8>>;
 
 #[derive(Default)]
 pub(crate) struct RepoInspectionCache {
@@ -24,7 +25,7 @@ pub(crate) struct RepoInspectionCache {
     generator_paths: BTreeMap<GeneratorPathsCacheKey, Result<Vec<String>, String>>,
     staged_file_contents: BTreeMap<StagedFileContentCacheKey, Result<String, String>>,
     staged_files: BTreeMap<PathBuf, Result<Vec<StagedTrackedFile>, String>>,
-    staged_blob_contents: BTreeMap<PathBuf, Result<BTreeMap<Vec<u8>, Vec<u8>>, String>>,
+    staged_blob_contents: BTreeMap<PathBuf, Result<StagedBlobContents, String>>,
     #[cfg(test)]
     filesystem_text: BTreeMap<PathBuf, Result<String, String>>,
     check_configs: BTreeMap<CheckConfigCacheKey, Result<CheckConfig, String>>,

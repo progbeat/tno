@@ -69,6 +69,59 @@ fn failed_evaluator_turn_writes_response_log_with_usage() {
 }
 
 #[test]
+fn evaluator_turn_log_writes_aggregate_usage_when_raw_updates_are_absent() {
+    let root = git_project("turn-response-log-aggregate-usage");
+    let mut runner = FakeRunner::new(&[&answer("yes", "evidence", &["."])]);
+    runner.turn_usages.push_back(Some(EvaluatorTurnUsage {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        usage: TokenUsage {
+            total_tokens: 10,
+            input_tokens: 7,
+            cached_input_tokens: 2,
+            output_tokens: 3,
+            reasoning_output_tokens: 1,
+        },
+        token_usage_updates: Vec::new(),
+        context_compaction_events: Vec::new(),
+    }));
+    let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
+    let turn = EvaluatorTurnContext {
+        session_id: "session-1",
+        model: None,
+        thinking: "low",
+    };
+    let mut diagnostic_log_ref = Some(&mut diagnostic_log);
+
+    ask_and_log(
+        &mut runner,
+        &turn,
+        "Question?",
+        &mut diagnostic_log_ref,
+        Some("id-1"),
+        1,
+        "initial",
+    )
+    .unwrap();
+
+    let log = fs::read_to_string(diagnostic_log.path()).unwrap();
+    let response = log
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|event| event["event"] == "agent.response")
+        .unwrap();
+    assert_eq!(response["threadId"].as_str(), Some("thread-1"));
+    assert_eq!(response["turnId"].as_str(), Some("turn-1"));
+    assert!(response.get("tokenUsageUpdates").is_none());
+    assert_eq!(response["tokenUsage"]["totalTokens"], json!(10));
+    assert_eq!(response["tokenUsage"]["inputTokens"], json!(7));
+    assert_eq!(response["tokenUsage"]["cachedInputTokens"], json!(2));
+    assert_eq!(response["tokenUsage"]["outputTokens"], json!(3));
+    assert_eq!(response["tokenUsage"]["reasoningOutputTokens"], json!(1));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_requires_human_review_for_unparseable_response() {
     let root = git_project("check-unparseable-first-response");
     let config = parse_check_config(check_config_yaml()).unwrap();

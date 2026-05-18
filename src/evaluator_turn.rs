@@ -248,6 +248,7 @@ fn append_turn_usage_fields(
     if let Some(EvaluatorTurnUsage {
         thread_id,
         turn_id,
+        usage,
         token_usage_updates,
         context_compaction_events,
         ..
@@ -255,11 +256,25 @@ fn append_turn_usage_fields(
     {
         fields.push(("threadId", json!(thread_id)));
         fields.push(("turnId", json!(turn_id)));
-        fields.push(("tokenUsageUpdates", json!(token_usage_updates)));
+        if token_usage_updates.is_empty() {
+            fields.push(("tokenUsage", token_usage_log_value(*usage)));
+        } else {
+            fields.push(("tokenUsageUpdates", json!(token_usage_updates)));
+        }
         if !context_compaction_events.is_empty() {
             fields.push(("contextCompactionEvents", json!(context_compaction_events)));
         }
     }
+}
+
+fn token_usage_log_value(usage: TokenUsage) -> Value {
+    json!({
+        "totalTokens": usage.total_tokens,
+        "inputTokens": usage.input_tokens,
+        "cachedInputTokens": usage.cached_input_tokens,
+        "outputTokens": usage.output_tokens,
+        "reasoningOutputTokens": usage.reasoning_output_tokens,
+    })
 }
 
 #[derive(Serialize)]
