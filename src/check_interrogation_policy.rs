@@ -26,6 +26,17 @@ pub(crate) struct ScopedInterrogation<'a> {
     pub(crate) enforced_scope: &'a mut Vec<String>,
 }
 
+impl<'a> ScopedInterrogation<'a> {
+    fn call(&self) -> InterrogationCall<'_> {
+        InterrogationCall {
+            root: self.root,
+            runtime: self.runtime,
+            expectation: self.expectation,
+            scope: self.enforced_scope,
+        }
+    }
+}
+
 pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     call: ScopedInterrogation<'_>,
     runner: &mut R,
@@ -35,12 +46,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     break_after_tokens: Option<u64>,
 ) -> Result<InterrogationResult, String> {
     let mut interrogation = interrogate_or_error_record(
-        InterrogationCall {
-            root: call.root,
-            runtime: call.runtime,
-            expectation: call.expectation,
-            scope: call.enforced_scope,
-        },
+        call.call(),
         runner,
         diagnostic_log,
         interrogation_state,
@@ -56,12 +62,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
         // non-answer.
         *call.enforced_scope = full_scope();
         interrogation = interrogate_or_error_record(
-            InterrogationCall {
-                root: call.root,
-                runtime: call.runtime,
-                expectation: call.expectation,
-                scope: call.enforced_scope,
-            },
+            call.call(),
             runner,
             diagnostic_log,
             interrogation_state,

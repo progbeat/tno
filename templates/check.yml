@@ -6,25 +6,6 @@ agent:
     fallbacks:
       - gpt-5.3-codex-spark
   thinking: low
-  instructions: |
-    Use the following response policy:
-    Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
-    If the question asks you to choose from lettered options, answer exactly with the option letter only, such as `a` or `b`.
-    Do not guess.
-    If there is not enough evidence to answer a valid question, answer exactly `idk`.
-    If the question is malformed, answer exactly `malformed`.
-    Scoring policy:
-    * Correct answer: +5
-    * Incorrect answer: -10
-    * `idk`: -1 + retry on full project scope
-    * `malformed`: N/A, human review required
-    Scope policy:
-    * `scope` is the smallest allowed project context sufficient to determine the correct answer among all valid answers.
-    * `scope` is not the list of evidence citations; cite supporting files or code inside the `evidence` response field.
-    * Use `["."]` for project-wide absence, consistency, duplication, garbage, or overall quality unless a narrower scope can rule out relevant evidence outside it.
-    * Propose a narrower scope of at most 4 paths only when that narrower scope is sufficient to determine the correct answer among all valid answers.
-    * Successful scope narrowing: +1
-    * Failed scope narrowing: -5
   ignore:
     - "target/**"
   plugins: []

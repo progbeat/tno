@@ -232,6 +232,49 @@ expectations:
 }
 
 #[test]
+fn staged_custom_config_expands_staged_path_generators() {
+    let root = git_project("check-config-staged-custom-path-generator");
+    commit_all(&root, "initial");
+    fs::create_dir_all(root.join("checks/specs")).unwrap();
+    fs::write(root.join("checks/specs/a.md"), "staged spec").unwrap();
+    fs::write(
+        root.join("checks/check.yml"),
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - path: "specs/*.md"
+    q_template: "{content}"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    let output = Command::new("git")
+        .args(["add", "checks/check.yml", "checks/specs/a.md"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::write(root.join("checks/specs/a.md"), "worktree spec").unwrap();
+    let mut cache = RepoInspectionCache::new();
+
+    let config = cache
+        .load_check_config(&root, Path::new("checks/check.yml"))
+        .unwrap();
+
+    assert_eq!(config.expectations.len(), 1);
+    assert_eq!(config.expectations[0].q, "staged spec");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_config_staged_delete_does_not_fall_back_to_worktree() {
     let root = git_project("check-config-staged-delete");
     write_check_config(&root);

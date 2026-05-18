@@ -9,7 +9,7 @@ use crate::app_server_protocol::{
 };
 use crate::app_server_transport::{
     carryover_tokens, record_context_compaction_event, record_token_usage_update,
-    thread_reuse_policy_should_rollback,
+    thread_reuse_policy_should_retire,
 };
 use crate::check::run_check_with_runner;
 use crate::check_cache::{
@@ -111,10 +111,7 @@ use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::fs_util::{ensure_dir, for_each_nonempty_line, replace_file_with_temp};
 use crate::gate::*;
 use crate::git::git_path_from_raw_bytes;
-use crate::git::{
-    read_staged_file_bytes_from_raw_path, read_staged_file_content, resolve_git_path,
-    staged_tracked_path_bytes,
-};
+use crate::git::resolve_git_path;
 use crate::hash::{expectation_id, fnv64_with_seed, full_scope, hash_120, hash_key};
 use crate::history::{history_file_name, read_history_records};
 use crate::history::{
@@ -171,8 +168,7 @@ use crate::scope::{
 };
 use crate::scope_hash::ScopeHashCache;
 use crate::scope_hash::{
-    gate_head_tree_fingerprint, hash_scope_entries, normalize_index_metadata, staged_scope_entries,
-    staged_scope_hash,
+    gate_head_tree_fingerprint, normalize_index_metadata, staged_scope_entries, staged_scope_hash,
 };
 use crate::staged_worktree::snapshot_parent_outside_worktree;
 use crate::staged_worktree::StagedWorktreeView;
@@ -181,7 +177,7 @@ use crate::thread_reuse_config::{
 };
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use crate::token_usage_types::{
-    ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
+    reference_token_cost, ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
 };
 use crate::{
     AGENTS_PATH, APP_SERVER_TURN_TIMEOUT_SECS, CHECK_PATH, DEFAULT_AGENTS_TEMPLATE,
@@ -234,6 +230,7 @@ mod tests_evaluator_prompt;
 mod tests_gate;
 mod tests_generator_config;
 mod tests_git_runtime;
+mod tests_hash;
 mod tests_history_cached_check;
 mod tests_history_cooldown;
 mod tests_history_exact_reuse;

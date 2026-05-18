@@ -17,7 +17,7 @@ pub(crate) enum DiagnosticLogError {
         message: String,
     },
     Io(PathIoError),
-    Rename(DiagnosticLogRenameError),
+    Rename(PathIoError),
     Json {
         description: &'static str,
         source: serde_json::Error,
@@ -93,50 +93,16 @@ impl Error for DiagnosticLogError {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct DiagnosticLogRenameError {
-    from: PathBuf,
-    to: PathBuf,
-    kind: io::ErrorKind,
-    source: io::Error,
-}
-
-impl DiagnosticLogRenameError {
-    pub(crate) fn new(from: &Path, to: &Path, source: io::Error) -> DiagnosticLogRenameError {
-        DiagnosticLogRenameError {
-            from: from.to_path_buf(),
-            to: to.to_path_buf(),
-            kind: source.kind(),
-            source,
-        }
-    }
-}
-
-impl fmt::Display for DiagnosticLogRenameError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "failed to rename {} to {} ({:?}): {}",
-            self.from.display(),
-            self.to.display(),
-            self.kind,
-            self.source
-        )
-    }
-}
-
-impl Error for DiagnosticLogRenameError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.source)
-    }
-}
-
 pub(crate) fn log_io_error(
     action: &'static str,
     path: &Path,
     source: io::Error,
 ) -> DiagnosticLogError {
     DiagnosticLogError::Io(PathIoError::new(action, path, source))
+}
+
+pub(crate) fn log_rename_error(from: &Path, to: &Path, source: io::Error) -> DiagnosticLogError {
+    DiagnosticLogError::Rename(PathIoError::rename(from, to, source))
 }
 
 pub(crate) fn external_log_error(action: &'static str, message: String) -> DiagnosticLogError {

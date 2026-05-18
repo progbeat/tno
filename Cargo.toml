@@ -10,6 +10,8 @@ repository = "https://github.com/progbeat/canon"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+sha1 = "0.10"
+sha2 = "0.10"
 
 [profile.release]
 codegen-units = 1

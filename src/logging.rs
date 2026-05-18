@@ -96,7 +96,7 @@ impl DiagnosticLogWriter {
                 ("observed", json!(record.observed)),
                 ("evidence", json!(record.evidence)),
                 ("scope", json!(record.scope)),
-                ("scopeHash", json!(record.scope_hash)),
+                ("scopeTreeOid", json!(record.scope_hash)),
                 ("prompt", json!(record.prompt_text())),
                 ("expected", json!(record.expected_text())),
             ],

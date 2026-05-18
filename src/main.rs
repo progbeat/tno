@@ -40,6 +40,9 @@ pub(crate) struct DiagnosticLogConfig {
 }
 
 #[cfg(unix)]
+// Unix signal and process-group APIs are not exposed by Rust's standard
+// library. The safe wrappers in `check_preflight` and `app_server_process`
+// keep all FFI calls behind return-value checks and narrow safety comments.
 unsafe extern "C" {
     fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
     fn kill(pid: i32, sig: i32) -> i32;
@@ -47,6 +50,8 @@ unsafe extern "C" {
 
 #[cfg(unix)]
 extern "C" fn handle_sigint(_: i32) {
+    // This handler only stores to an atomic flag; it does not allocate, lock,
+    // or touch non-async-signal-safe state.
     CHECK_INTERRUPTED.store(true, Ordering::SeqCst);
 }
 

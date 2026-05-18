@@ -25,7 +25,7 @@ pub(crate) fn cached_record_for_expectation(
 ) -> Result<Option<CheckCacheHit>, String> {
     // The Cache spec's reusable-result lookup lives here. Cooldown filtering
     // has already happened before this call path; every hit returned from here
-    // matched the current staged scopeHash.
+    // matched the current staged scopeTreeOid.
     reusable_history_record_with_cache(root, agent, expectation, history_cache, scope_hash_cache)
         .map(|record| record.map(|record| CheckCacheHit { record }))
 }
@@ -82,7 +82,7 @@ pub(crate) fn write_cache_hit(
                 ("id", json!(hit.record.id)),
                 ("result", json!(hit.record.result)),
                 ("scope", json!(hit.record.scope)),
-                ("scopeHash", json!(hit.record.scope_hash)),
+                ("scopeTreeOid", json!(hit.record.scope_hash)),
             ],
         )
         .map_err(|err| err.to_string())?;

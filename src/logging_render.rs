@@ -33,7 +33,7 @@ pub(crate) fn render_check_log_record(record: &CheckRecord) -> DiagnosticLogResu
         observed: &record.observed,
         evidence: &record.evidence,
         scope: &record.scope,
-        scope_hash: &record.scope_hash,
+        scope_tree_oid: &record.scope_hash,
         id: &record.id,
         prompt: record.prompt_text(),
         expected: record.expected_text(),
@@ -100,8 +100,8 @@ struct HistoryLogRecord<'a> {
     observed: &'a str,
     evidence: &'a str,
     scope: &'a [String],
-    #[serde(rename = "scopeHash")]
-    scope_hash: &'a str,
+    #[serde(rename = "scopeTreeOid")]
+    scope_tree_oid: &'a str,
     id: &'a str,
     #[serde(skip_serializing_if = "str::is_empty")]
     prompt: &'a str,

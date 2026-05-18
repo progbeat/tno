@@ -9,8 +9,6 @@ agent:
     fallbacks:
       - gpt-5.3-codex-spark
   thinking: medium
-  instructions: |
-    Answer from files only.
   ignore:
     - "target/**"
   plugins: []
@@ -30,6 +28,7 @@ pub(crate) struct FakeRunner {
     pub(crate) answers: VecDeque<Result<String, EvaluatorError>>,
     pub(crate) turn_usages: VecDeque<Option<EvaluatorTurnUsage>>,
     pub(crate) last_turn_usage: Option<EvaluatorTurnUsage>,
+    pub(crate) retired_sessions: VecDeque<Vec<String>>,
     pub(crate) prompts: Vec<String>,
     pub(crate) sessions: Vec<String>,
     pub(crate) ask_models: Vec<Option<String>>,
@@ -53,6 +52,7 @@ impl FakeRunner {
                 .collect(),
             turn_usages: VecDeque::new(),
             last_turn_usage: None,
+            retired_sessions: VecDeque::new(),
             prompts: Vec::new(),
             sessions: Vec::new(),
             ask_models: Vec::new(),
@@ -76,6 +76,7 @@ impl FakeRunner {
                 .collect(),
             turn_usages: VecDeque::new(),
             last_turn_usage: None,
+            retired_sessions: VecDeque::new(),
             prompts: Vec::new(),
             sessions: Vec::new(),
             ask_models: Vec::new(),
@@ -126,6 +127,12 @@ impl EvaluatorRunner for FakeRunner {
         self.ask_models.push(model.map(str::to_string));
         self.ask_thinking.push(thinking.to_string());
         self.last_turn_usage = self.turn_usages.pop_front().unwrap_or(None);
+        if let Some(turn_usage) = &self.last_turn_usage {
+            if thread_reuse_policy_should_retire(carryover_tokens(turn_usage.usage)) {
+                self.retired_sessions
+                    .push_back(vec![turn_usage.thread_id.clone()]);
+            }
+        }
         self.answers
             .pop_front()
             .unwrap_or_else(|| Err("fake runner has no answer".into()))
@@ -133,6 +140,10 @@ impl EvaluatorRunner for FakeRunner {
 
     fn take_last_turn_usage(&mut self) -> Option<EvaluatorTurnUsage> {
         self.last_turn_usage.take()
+    }
+
+    fn take_retired_sessions(&mut self) -> Vec<String> {
+        self.retired_sessions.pop_front().unwrap_or_default()
     }
 }
 

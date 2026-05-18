@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 pub(crate) struct PathIoError {
     action: &'static str,
     path: PathBuf,
+    target: Option<PathBuf>,
     kind: io::ErrorKind,
     source: io::Error,
 }
@@ -16,6 +17,17 @@ impl PathIoError {
         PathIoError {
             action,
             path: path.to_path_buf(),
+            target: None,
+            kind: source.kind(),
+            source,
+        }
+    }
+
+    pub(crate) fn rename(from: &Path, to: &Path, source: io::Error) -> PathIoError {
+        PathIoError {
+            action: "rename",
+            path: from.to_path_buf(),
+            target: Some(to.to_path_buf()),
             kind: source.kind(),
             source,
         }
@@ -24,14 +36,26 @@ impl PathIoError {
 
 impl fmt::Display for PathIoError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "failed to {} {} ({:?}): {}",
-            self.action,
-            self.path.display(),
-            self.kind,
-            self.source
-        )
+        if let Some(target) = &self.target {
+            write!(
+                formatter,
+                "failed to {} {} to {} ({:?}): {}",
+                self.action,
+                self.path.display(),
+                target.display(),
+                self.kind,
+                self.source
+            )
+        } else {
+            write!(
+                formatter,
+                "failed to {} {} ({:?}): {}",
+                self.action,
+                self.path.display(),
+                self.kind,
+                self.source
+            )
+        }
     }
 }
 

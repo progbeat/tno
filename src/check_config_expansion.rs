@@ -4,7 +4,6 @@ use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, RawCheckConfig, RawExpectationItem,
     RawGeneratorExpectation, RawIncludeExpectation,
 };
-use crate::git::read_staged_file_content;
 use crate::repo_inspection::RepoInspectionCache;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -170,7 +169,7 @@ impl RawExpectationExpansion<'_> {
         match self.source {
             CheckConfigSource::Staged => match self.cache.as_deref_mut() {
                 Some(cache) => cache.staged_file_content(root, file),
-                None => read_staged_file_content(root, file),
+                None => Err("staged config expansion requires RepoInspectionCache".to_string()),
             },
             #[cfg(test)]
             CheckConfigSource::Worktree => {

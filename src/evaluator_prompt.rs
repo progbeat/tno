@@ -12,13 +12,14 @@ pub(crate) const EVALUATOR_BASE_INSTRUCTIONS: &str =
 
 pub(crate) fn developer_instructions(agent: &AgentConfig, scope: &[String]) -> String {
     let scope = compact_json_string_array(scope);
+    let agent_instructions = custom_agent_instruction_block(agent);
     render_instruction_template(
         DEVELOPER_INSTRUCTIONS_TEMPLATE.trim_end(),
         &[
             ("{{response_format}}", response_format_block()),
             ("{{scope}}", &scope),
             ("{{answer_policy}}", answer_policy()),
-            ("{{agent_instructions}}", agent.instructions.trim()),
+            ("{{agent_instructions}}", &agent_instructions),
         ],
     )
 }
@@ -29,6 +30,18 @@ pub(crate) fn response_format_block() -> &'static str {
 
 fn answer_policy() -> &'static str {
     EVALUATOR_ANSWER_POLICY.trim_end()
+}
+
+fn custom_agent_instruction_block(agent: &AgentConfig) -> String {
+    let instructions = agent.custom_instructions().trim();
+    if instructions.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Project-specific evaluator policy loaded from check.yml:\n{}",
+            instructions
+        )
+    }
 }
 
 fn render_instruction_template(template: &str, replacements: &[(&str, &str)]) -> String {

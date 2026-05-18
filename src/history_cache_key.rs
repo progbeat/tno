@@ -6,11 +6,13 @@ use crate::scope::effective_ignore_patterns;
 pub(crate) fn history_cache_key(agent: &AgentConfig, expectation: &SelectedExpectation) -> String {
     // History directories stay keyed by q/a for stable cleanup semantics.
     // `cacheKey` is emitted for audit/debugging only; reusable cache selection
-    // remains governed by the history record's scope and current scopeHash.
+    // remains governed by the history record's scope and current scopeTreeOid.
     let mut input = Vec::new();
     push_history_cache_key_part(&mut input, "schema", "2");
-    push_history_cache_key_part(&mut input, "instructions", &agent.instructions);
-    for pattern in effective_ignore_patterns(agent) {
+    push_history_cache_key_part(&mut input, "instructions", agent.custom_instructions());
+    let mut ignore_patterns = effective_ignore_patterns(agent);
+    ignore_patterns.sort();
+    for pattern in ignore_patterns {
         push_history_cache_key_part(&mut input, "ignore", &pattern);
     }
     for plugin in &agent.plugins {

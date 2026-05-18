@@ -42,6 +42,24 @@ fn repo_paths_reject_nul_before_process_boundaries() {
 }
 
 #[test]
+fn scope_paths_treat_wildcard_characters_as_literal_filename_bytes() {
+    let config = parse_check_config(check_config_yaml()).unwrap();
+
+    assert_eq!(
+        parse_scope_strings(
+            &["src/what?.rs".to_string(), "data/*literal.txt".to_string()],
+            &config.agent,
+        )
+        .unwrap(),
+        vec!["data/*literal.txt".to_string(), "src/what?.rs".to_string()]
+    );
+    assert_eq!(
+        sanitize_scope_for_hash(&["src/what?.rs".to_string()]).unwrap(),
+        vec!["src/what?.rs".to_string()]
+    );
+}
+
+#[test]
 fn strict_scope_subset_canonicalizes_before_comparing() {
     assert!(!is_strict_scope_subset(
         &[".".to_string(), "src".to_string()],

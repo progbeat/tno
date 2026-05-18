@@ -1,6 +1,6 @@
 use crate::logging_config::{active_log_max_bytes, diagnostic_log_files};
 use crate::logging_error::{
-    log_io_error, DiagnosticLogError, DiagnosticLogRenameError, DiagnosticLogResult,
+    log_io_error, log_rename_error, DiagnosticLogError, DiagnosticLogResult,
 };
 use crate::logging_fs::remove_file_if_exists;
 use crate::DiagnosticLogConfig;
@@ -92,9 +92,7 @@ fn rename_file_if_exists(from: &Path, to: &Path) -> DiagnosticLogResult<()> {
     match fs::rename(from, to) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(DiagnosticLogError::Rename(DiagnosticLogRenameError::new(
-            from, to, err,
-        ))),
+        Err(err) => Err(log_rename_error(from, to, err)),
     }
 }
 

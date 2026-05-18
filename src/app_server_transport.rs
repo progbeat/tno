@@ -1,4 +1,4 @@
-use crate::app_server::{AppServerRunner, ThreadTurnCarryover};
+use crate::app_server::AppServerRunner;
 use crate::app_server_protocol::{
     agent_message_delta, app_server_error_value, app_server_failure_from_value, app_server_message,
     append_completed_agent_text, context_compaction_event, token_usage_update, turn_idle_timed_out,
@@ -7,7 +7,6 @@ use crate::app_server_protocol::{
 use crate::check_preflight::check_interrupted;
 use crate::evaluator_turn::EvaluatorFailureKind;
 use crate::evaluator_types::EvaluatorError;
-use crate::thread_reuse_config::CarryoverTokenTarget;
 use crate::token_usage_types::{
     ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
 };
@@ -17,6 +16,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
+
+const SESSION_RETIRE_CARRYOVER_TOKEN_LIMIT: u64 = 50_000;
 
 pub(crate) struct AppServerTurnRequest {
     thread_id: String,
@@ -202,7 +203,7 @@ impl AppServerRunner {
             .as_deref()
             .map(|turn_id| self.turn_usage_for_turn(thread_id, turn_id));
         if let Some(turn_usage) = completed_turn_usage {
-            self.apply_thread_reuse_policy(&turn_usage)?;
+            self.apply_thread_reuse_policy(&turn_usage);
             self.last_turn_usage = Some(turn_usage);
         }
         Ok(turn_text(text, completed_text))
@@ -247,59 +248,14 @@ impl AppServerRunner {
         }
     }
 
-    fn apply_thread_reuse_policy(
-        &mut self,
-        turn_usage: &EvaluatorTurnUsage,
-    ) -> Result<(), EvaluatorError> {
-        // This transport owns only app-server token accounting and rollback
-        // mechanics. `check_interrogation.rs` owns the human-readable thread
+    fn apply_thread_reuse_policy(&mut self, turn_usage: &EvaluatorTurnUsage) {
+        // This transport owns app-server token accounting and local session
+        // retirement. `check_interrogation.rs` owns the human-readable thread
         // lifecycle log events (`thread.start`/`thread.reuse`) that expose the
         // effective base and developer instructions for each evaluator thread.
-        let current = ThreadTurnCarryover {
-            turn_id: turn_usage.turn_id.clone(),
-            tokens: carryover_tokens(turn_usage.usage),
-        };
-        let should_rollback = self
-            .turn_carryover_by_thread
-            .get(&turn_usage.thread_id)
-            .and_then(|turns| turns.last())
-            .is_some_and(|previous| {
-                thread_reuse_policy_should_rollback(
-                    previous.tokens,
-                    current.tokens,
-                    self.carryover_token_target,
-                )
-            });
-        let rollback_applied = if should_rollback {
-            self.rollback_latest_thread_turn(&turn_usage.thread_id)?;
-            true
-        } else {
-            false
-        };
-        // Mirror the remote thread after the fallible rollback request has
-        // succeeded. A rollback failure exits above without changing local
-        // carryover state; a successful rollback applies the same push/pop
-        // transition locally as the app-server applied remotely.
-        let turns = self
-            .turn_carryover_by_thread
-            .entry(turn_usage.thread_id.clone())
-            .or_default();
-        turns.push(current);
-        if rollback_applied {
-            turns.pop();
+        if thread_reuse_policy_should_retire(carryover_tokens(turn_usage.usage)) {
+            self.retired_sessions.insert(turn_usage.thread_id.clone());
         }
-        Ok(())
-    }
-
-    fn rollback_latest_thread_turn(&mut self, thread_id: &str) -> Result<(), EvaluatorError> {
-        self.send_request(
-            "thread/rollback",
-            json!({
-                "threadId": thread_id,
-                "numTurns": 1
-            }),
-        )
-        .map(|_| ())
     }
 
     fn maybe_interrupt_turn(
@@ -448,12 +404,8 @@ pub(crate) fn carryover_tokens(usage: TokenUsage) -> u64 {
     usage.input_tokens + usage.output_tokens
 }
 
-pub(crate) fn thread_reuse_policy_should_rollback(
-    previous_carryover_tokens: u64,
-    current_carryover_tokens: u64,
-    target: CarryoverTokenTarget,
-) -> bool {
-    previous_carryover_tokens >= target.min || current_carryover_tokens > target.max
+pub(crate) fn thread_reuse_policy_should_retire(current_carryover_tokens: u64) -> bool {
+    current_carryover_tokens > SESSION_RETIRE_CARRYOVER_TOKEN_LIMIT
 }
 
 fn app_server_protocol_error(error: String) -> EvaluatorError {

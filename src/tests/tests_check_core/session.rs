@@ -5,6 +5,7 @@ use crate::logging::DiagnosticLogWriter;
 use crate::tests::{
     answer, check_config_yaml, check_options, git_project, parse_check_config, FakeRunner,
 };
+use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
 use std::fs;
 
 #[test]
@@ -73,6 +74,65 @@ fn check_runner_hides_expected_answers_and_reuses_session() {
 }
 
 #[test]
+fn check_runner_retires_oversized_scope_thread_after_completed_expectation() {
+    let root = git_project("check-runner-retire-oversized-thread");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  model:
+    primary: gpt-5.4-mini
+  thinking: medium
+  instructions: Answer from files only.
+  ignore: []
+  plugins: []
+expectations:
+  - q: "First?"
+    a: "yes"
+  - q: "Second?"
+    a: "no"
+  - q: "Third?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    let options = check_options(&config, &["1", "2", "3"], false, true);
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "first answer", &["."]),
+        &answer("no", "second answer", &["."]),
+        &answer("yes", "third answer", &["."]),
+    ]);
+    runner
+        .turn_usages
+        .push_back(Some(turn_usage("session-1", "turn-1", 1_000, 1_000)));
+    runner
+        .turn_usages
+        .push_back(Some(turn_usage("session-1", "turn-2", 49_000, 1_001)));
+    runner
+        .turn_usages
+        .push_back(Some(turn_usage("session-2", "turn-3", 1_000, 1_000)));
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(records.records.iter().all(CheckRecord::passed));
+    assert_eq!(runner.starts, 2);
+    assert_eq!(
+        runner.sessions,
+        vec![
+            "session-1".to_string(),
+            "session-1".to_string(),
+            "session-2".to_string()
+        ]
+    );
+    assert_eq!(
+        runner.start_scopes,
+        vec![vec![".".to_string()], vec![".".to_string()]]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_applies_thinking_per_turn_when_reusing_scope_thread() {
     let root = git_project("check-thinking-turn");
     let config = parse_check_config(
@@ -111,4 +171,25 @@ expectations:
         vec!["low".to_string(), "high".to_string()]
     );
     let _ = fs::remove_dir_all(root);
+}
+
+fn turn_usage(
+    thread_id: &str,
+    turn_id: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+) -> EvaluatorTurnUsage {
+    EvaluatorTurnUsage {
+        thread_id: thread_id.to_string(),
+        turn_id: turn_id.to_string(),
+        usage: TokenUsage {
+            total_tokens: input_tokens + output_tokens,
+            input_tokens,
+            cached_input_tokens: 0,
+            output_tokens,
+            reasoning_output_tokens: 0,
+        },
+        token_usage_updates: Vec::new(),
+        context_compaction_events: Vec::new(),
+    }
 }

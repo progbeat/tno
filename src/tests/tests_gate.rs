@@ -105,6 +105,32 @@ fn gate_passes_canon_only_change_without_loading_config() {
 }
 
 #[test]
+fn gate_passes_canon_only_deletion_without_loading_config() {
+    let root = git_project("gate-canon-only-delete");
+    commit_all(&root, "initial");
+    fs::create_dir_all(root.join(".canon")).unwrap();
+    fs::write(root.join(CHECK_PATH), "not: [valid").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add invalid canon config");
+    fs::remove_file(root.join(CHECK_PATH)).unwrap();
+    Command::new("git")
+        .args(["add", "-A", ".canon"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    let result = run_gate_command(&root, &[]);
+
+    assert!(result.is_ok());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn gate_fails_mixed_canon_and_non_canon_change() {
     let root = git_project("gate-mixed-canon");
     commit_all(&root, "initial");

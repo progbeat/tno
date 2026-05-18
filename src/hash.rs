@@ -1,11 +1,13 @@
 use crate::{B64_URL, FNV_OFFSET, FNV_PRIME};
 
+const B62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
 pub(crate) fn full_scope() -> Vec<String> {
     vec![".".to_string()]
 }
 
 pub(crate) fn expectation_id(prompt: &str, expected: &str) -> String {
-    hash_120(format!("q\0{}\0a\0{}", prompt, expected).as_bytes())
+    hash_119_base62(format!("q\0{}\0a\0{}", prompt, expected).as_bytes())
 }
 
 pub(crate) fn hash_key(key: &str) -> String {
@@ -24,6 +26,13 @@ pub(crate) fn hash_120(input: &[u8]) -> String {
     bytes[..8].copy_from_slice(&first.to_be_bytes());
     bytes[8..].copy_from_slice(&second.to_be_bytes()[..7]);
     encode_base64url_no_pad(&bytes)
+}
+
+fn hash_119_base62(input: &[u8]) -> String {
+    let first = fnv64_with_seed(FNV_OFFSET, input);
+    let second = fnv64_with_seed(FNV_OFFSET ^ 0x9e37_79b9_7f4a_7c15, input);
+    let value = (((first & 0x7fff_ffff_ffff_ffff) as u128) << 56) | ((second >> 8) as u128);
+    encode_base62_20(value)
 }
 
 pub(crate) fn fnv64_with_seed(seed: u64, input: &[u8]) -> u64 {
@@ -61,4 +70,13 @@ pub(crate) fn encode_60_bits(value: u64) -> String {
         out.push(B64_URL[index] as char);
     }
     out
+}
+
+fn encode_base62_20(mut value: u128) -> String {
+    let mut bytes = [B62[0]; 20];
+    for byte in bytes.iter_mut().rev() {
+        *byte = B62[(value % 62) as usize];
+        value /= 62;
+    }
+    String::from_utf8(bytes.to_vec()).expect("base62 alphabet is valid UTF-8")
 }

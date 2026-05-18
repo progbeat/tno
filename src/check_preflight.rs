@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 pub(crate) fn install_sigint_handler() -> Result<(), String> {
     #[cfg(unix)]
-    unsafe {
+    {
         const SIGHUP: i32 = 1;
         const SIGINT: i32 = 2;
         const SIGTERM: i32 = 15;
@@ -19,8 +19,11 @@ pub(crate) fn install_sigint_handler() -> Result<(), String> {
 }
 
 #[cfg(unix)]
-unsafe fn install_signal_handler(signal_number: i32) -> Result<(), String> {
+fn install_signal_handler(signal_number: i32) -> Result<(), String> {
     const SIG_ERR: usize = usize::MAX;
+    // SAFETY: `handle_sigint` has C ABI and only sets an atomic flag, so it is
+    // valid to register as a simple process signal handler. We check for the
+    // platform SIG_ERR sentinel immediately after the FFI call.
     let previous = unsafe { signal(signal_number, handle_sigint) };
     if previous == SIG_ERR {
         Err(format!(
@@ -52,7 +55,8 @@ pub(crate) fn staged_changed_path_bytes(root: &Path) -> Result<Vec<Vec<u8>>, Str
         .arg("--cached")
         .arg("--name-status")
         .arg("-z")
-        .arg("--diff-filter=ACDMRTUXB")
+        // Gate classification needs every staged path, including deletions
+        // under `.canon/**`, so do not restrict diff status codes here.
         .output()
         .map_err(|err| format!("failed to run git diff: {}", err))?;
     if !output.status.success() {

@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 
 pub(crate) fn ensure_dir(path: &Path) -> Result<(), String> {
@@ -42,6 +42,20 @@ pub(crate) fn replace_file_with_temp(temp_path: &Path, path: &Path) -> Result<()
             err
         )
     })
+}
+
+pub(crate) fn write_temp_file_then_replace(
+    temp_path: &Path,
+    path: &Path,
+    write_content: impl FnOnce(&mut fs::File) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut file = fs::File::create(temp_path)
+        .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+    write_content(&mut file)?;
+    file.flush()
+        .map_err(|err| format!("failed to flush {}: {}", temp_path.display(), err))?;
+    drop(file);
+    replace_file_with_temp(temp_path, path)
 }
 
 pub(crate) fn crossed_size_compaction_bucket(

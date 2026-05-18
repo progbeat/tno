@@ -1,7 +1,11 @@
 use crate::check_config::parse_staged_check_config_content_with_root;
-use crate::check_generator_paths::expand_generator_paths;
+use crate::check_generator_paths::{
+    expand_generator_paths, expand_staged_generator_paths_from_listing,
+};
 use crate::config_types::{CheckConfig, RawExpectationItem};
-use crate::git::{read_staged_file_content, resolve_git_path};
+use crate::git::{
+    git_path_bytes, read_git_blobs, resolve_git_path, staged_tracked_files, StagedTrackedFile,
+};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -19,6 +23,8 @@ pub(crate) struct RepoInspectionCache {
     git_paths: BTreeMap<GitPathCacheKey, Result<PathBuf, String>>,
     generator_paths: BTreeMap<GeneratorPathsCacheKey, Result<Vec<String>, String>>,
     staged_file_contents: BTreeMap<StagedFileContentCacheKey, Result<String, String>>,
+    staged_files: BTreeMap<PathBuf, Result<Vec<StagedTrackedFile>, String>>,
+    staged_blob_contents: BTreeMap<PathBuf, Result<BTreeMap<Vec<u8>, Vec<u8>>, String>>,
     #[cfg(test)]
     filesystem_text: BTreeMap<PathBuf, Result<String, String>>,
     check_configs: BTreeMap<CheckConfigCacheKey, Result<CheckConfig, String>>,
@@ -57,7 +63,11 @@ impl RepoInspectionCache {
         if let Some(cached) = self.generator_paths.get(&key) {
             return cached.clone();
         }
-        let expanded = expand_generator_paths(root, config_path, path, staged);
+        let expanded = if staged {
+            self.expand_staged_generator_paths(root, config_path, path)
+        } else {
+            expand_generator_paths(root, config_path, path, false)
+        };
         self.generator_paths.insert(key, expanded.clone());
         expanded
     }
@@ -72,9 +82,70 @@ impl RepoInspectionCache {
         if let Some(cached) = self.staged_file_contents.get(&key) {
             return cached.clone();
         }
-        let content = read_staged_file_content(root, path);
+        let content = self.staged_file_content_from_batch(root, path);
         self.staged_file_contents.insert(key, content.clone());
         content
+    }
+
+    fn expand_staged_generator_paths(
+        &mut self,
+        root: &Path,
+        config_path: &Path,
+        path: &str,
+    ) -> Result<Vec<String>, String> {
+        let staged_paths = self
+            .staged_files(root)?
+            .into_iter()
+            .filter_map(|file| String::from_utf8(file.path).ok())
+            .collect::<Vec<_>>();
+        expand_staged_generator_paths_from_listing(config_path, path, &staged_paths)
+    }
+
+    fn staged_file_content_from_batch(
+        &mut self,
+        root: &Path,
+        path: &Path,
+    ) -> Result<String, String> {
+        let raw_path = git_path_bytes(path)?;
+        let contents = self.staged_blob_contents(root)?;
+        let content = contents.get(&raw_path).ok_or_else(|| {
+            format!(
+                "failed to read staged {}: path is not in the staged index",
+                path.display()
+            )
+        })?;
+        String::from_utf8(content.clone())
+            .map_err(|_| format!("staged {} must be valid UTF-8", path.display()))
+    }
+
+    fn staged_files(&mut self, root: &Path) -> Result<Vec<StagedTrackedFile>, String> {
+        if let Some(cached) = self.staged_files.get(root) {
+            return cached.clone();
+        }
+        let files = staged_tracked_files(root);
+        self.staged_files.insert(root.to_path_buf(), files.clone());
+        files
+    }
+
+    fn staged_blob_contents(&mut self, root: &Path) -> Result<BTreeMap<Vec<u8>, Vec<u8>>, String> {
+        if let Some(cached) = self.staged_blob_contents.get(root) {
+            return cached.clone();
+        }
+        let files = self.staged_files(root)?;
+        let object_ids = files
+            .iter()
+            .map(|file| file.object_id.clone())
+            .collect::<Vec<_>>();
+        let blobs = read_git_blobs(root, &object_ids)?;
+        let contents = files
+            .into_iter()
+            .zip(blobs)
+            .map(|(file, blob)| (file.path, blob))
+            .collect::<BTreeMap<_, _>>();
+        let result = Ok(contents);
+        self.staged_blob_contents
+            .insert(root.to_path_buf(), result.clone());
+        result
     }
 
     #[cfg(test)]

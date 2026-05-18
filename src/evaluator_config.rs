@@ -39,12 +39,23 @@ pub(crate) fn evaluator_thread_root_permissions(
     } else {
         root_permissions.insert(".".to_string(), "none".to_string());
         for path in scope {
+            allow_scope_ancestor_directories(&mut root_permissions, path);
             root_permissions.insert(path.clone(), "read".to_string());
             root_permissions.insert(format!("{}/**", path), "read".to_string());
         }
     }
     deny_evaluator_project_paths(&mut root_permissions, agent);
     root_permissions
+}
+
+fn allow_scope_ancestor_directories(root_permissions: &mut BTreeMap<String, String>, path: &str) {
+    let mut current = path;
+    while let Some((parent, _)) = current.rsplit_once('/') {
+        root_permissions
+            .entry(parent.to_string())
+            .or_insert_with(|| "read".to_string());
+        current = parent;
+    }
 }
 
 pub(crate) fn evaluator_startup_root_permissions(agent: &AgentConfig) -> BTreeMap<String, String> {

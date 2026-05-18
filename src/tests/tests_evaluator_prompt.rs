@@ -9,7 +9,7 @@ fn evaluator_prompt_is_only_current_question_text() {
     assert!(!prompt.contains(response_format_heading));
     assert!(!prompt.contains("ANSWER: <single-line answer>"));
     assert!(!prompt.contains("Instructions:"));
-    assert!(!prompt.contains(config.agent.instructions.trim()));
+    assert!(config.agent.instructions.is_none());
     assert!(!prompt.contains("Current context:"));
     assert!(!prompt.contains("\nQuestion:\n"));
     assert!(!prompt.contains("QUESTION:"));
@@ -48,14 +48,38 @@ fn evaluator_turn_uses_strict_json_output_schema() {
 }
 
 #[test]
-fn developer_instructions_include_agent_instructions_and_response_format() {
-    let config = parse_check_config(check_config_yaml()).unwrap();
+fn developer_instructions_include_builtin_policy_and_optional_agent_instructions() {
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: Answer from files only.
+  ignore: []
+  plugins: []
+expectations:
+  - q: x
+    a: y
+"#,
+    )
+    .unwrap();
     let instructions = developer_instructions(&config.agent, &full_scope());
     let answer_policy = include_str!("../instructions/evaluator_answer_policy.txt").trim_end();
-    assert!(instructions.contains(config.agent.instructions.trim()));
+    assert!(instructions.contains("Project-specific evaluator policy loaded from check.yml"));
+    assert!(instructions.contains("Answer from files only."));
+    assert!(instructions.contains("Prefer `rg` and `rg --files`"));
+    assert!(instructions.contains("Correct answer: +5"));
     assert!(instructions.contains(response_format_block()));
     assert!(instructions.contains("project-relative refs enclosed in backticks"));
     assert!(instructions.contains(answer_policy));
     assert!(instructions.contains("\"your dev instructions\" mean only this rendered evaluator"));
-    assert!(instructions.contains("does not include the contents of AGENTS.md"));
+    assert!(instructions.contains("excludes repository agent-instruction file contents"));
+}
+
+#[test]
+fn developer_instructions_omit_blank_agent_instruction_section() {
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let instructions = developer_instructions(&config.agent, &full_scope());
+
+    assert!(config.agent.instructions.is_none());
+    assert!(!instructions.contains("Project-specific evaluator policy loaded from check.yml"));
 }

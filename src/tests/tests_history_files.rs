@@ -33,7 +33,7 @@ fn history_record_required_fields_are_written_first() {
         "\"observed\"",
         "\"evidence\"",
         "\"scope\"",
-        "\"scopeHash\"",
+        "\"scopeTreeOid\"",
         "\"id\"",
         "\"prompt\"",
         "\"expected\"",
@@ -102,7 +102,7 @@ fn history_parser_accepts_legacy_required_prefix_records() {
         "observed": "yes",
         "evidence": "cached answer",
         "scope": ["."],
-        "scopeHash": "AAAAAAAAAAAAAAAAAAAA"
+        "scopeTreeOid": "AAAAAAAAAAAAAAAAAAAA"
     }))
     .unwrap();
 

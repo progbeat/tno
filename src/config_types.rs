@@ -23,9 +23,16 @@ pub(crate) struct AgentConfig {
     pub(crate) model: ModelConfig,
     #[serde(default = "default_thinking")]
     pub(crate) thinking: String,
-    pub(crate) instructions: String,
+    #[serde(default)]
+    pub(crate) instructions: Option<String>,
     pub(crate) ignore: Vec<String>,
     pub(crate) plugins: Vec<String>,
+}
+
+impl AgentConfig {
+    pub(crate) fn custom_instructions(&self) -> &str {
+        self.instructions.as_deref().unwrap_or("")
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]

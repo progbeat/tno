@@ -142,7 +142,6 @@ fn gate_pass_with_config(
         caches.scope_hash,
         now,
     )?;
-    let mut has_missing = false;
     for expectation in &selected_expectations {
         let previous = exact_gate_cache_result_for_tree(
             root,
@@ -169,18 +168,18 @@ fn gate_pass_with_config(
                 return Ok(false);
             }
             GateCacheResult::Missing => {
-                has_missing = true;
+                // A missing staged cache record is already a terminal gate
+                // result. Stop here so the pre-commit hook remains a
+                // cache-only fast-fail path; `canon check` is responsible for
+                // filling any other missing records in one evaluator run.
                 emit_failure(GateFailureEvent::Missing(expectation.clone()))?;
+                emit_failure(GateFailureEvent::MissingComplete)?;
+                return Ok(false);
             }
             GateCacheResult::Pass => {}
         }
     }
-
-    if !has_missing {
-        return Ok(true);
-    }
-    emit_failure(GateFailureEvent::MissingComplete)?;
-    Ok(false)
+    Ok(true)
 }
 
 struct GateCaches<'a> {

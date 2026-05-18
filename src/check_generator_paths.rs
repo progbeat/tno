@@ -1,9 +1,7 @@
 use crate::check_validation::validate_relative_config_path;
-use crate::project::command_output_trimmed;
 use crate::scope::normalize_repo_path;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 pub(crate) fn expand_generator_paths(
     root: &Path,
@@ -15,37 +13,27 @@ pub(crate) fn expand_generator_paths(
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new(""));
     let joined = normalize_repo_path(&join_repo_path(config_dir, path))?;
     if staged {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .arg("ls-files")
-            .arg("-z")
-            .arg("--")
-            .arg(&joined)
-            .output()
-            .map_err(|err| format!("failed to expand spec path {}: {}", path, err))?;
-        if !output.status.success() {
-            return Err(format!(
-                "failed to expand spec path {}: {}",
-                path,
-                command_output_trimmed(&output.stderr, "git ls-files stderr")?
-            ));
-        }
-        let mut files = Vec::new();
-        for path in output.stdout.split(|byte| *byte == 0) {
-            if path.is_empty() {
-                continue;
-            }
-            files.push(
-                String::from_utf8(path.to_vec())
-                    .map_err(|_| "git ls-files output must be valid UTF-8".to_string())?,
-            );
-        }
-        files.sort();
-        files.dedup();
-        return Ok(files);
+        return Err("staged generator expansion requires RepoInspectionCache".to_string());
     }
     expand_filesystem_generator_paths(root, &joined)
+}
+
+pub(crate) fn expand_staged_generator_paths_from_listing(
+    config_path: &Path,
+    path: &str,
+    staged_paths: &[String],
+) -> Result<Vec<String>, String> {
+    validate_relative_config_path(path, "expectation generator path")?;
+    let config_dir = config_path.parent().unwrap_or_else(|| Path::new(""));
+    let joined = normalize_repo_path(&join_repo_path(config_dir, path))?;
+    let mut files = staged_paths
+        .iter()
+        .filter(|staged_path| generator_pattern_matches(&joined, staged_path))
+        .cloned()
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+    Ok(files)
 }
 
 pub(crate) fn join_repo_path(config_dir: &Path, path: &str) -> String {
@@ -108,6 +96,27 @@ pub(crate) fn expand_filesystem_generator_paths(
     }
     files.sort();
     Ok(files)
+}
+
+fn generator_pattern_matches(pattern: &str, path: &str) -> bool {
+    let Some(star_index) = pattern.find('*') else {
+        return path == pattern;
+    };
+    let slash_index = pattern[..star_index]
+        .rfind('/')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let dir = &pattern[..slash_index].trim_end_matches('/');
+    let file_pattern = &pattern[slash_index..];
+    let expected_prefix = if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", dir)
+    };
+    let Some(file_name) = path.strip_prefix(&expected_prefix) else {
+        return false;
+    };
+    !file_name.contains('/') && wildcard_match(file_pattern, file_name)
 }
 
 pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {

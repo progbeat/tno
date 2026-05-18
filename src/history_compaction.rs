@@ -1,7 +1,6 @@
-use crate::fs_util::{for_each_nonempty_line, replace_file_with_temp};
+use crate::fs_util::{for_each_nonempty_line, write_temp_file_then_replace};
 use crate::history::parse_history_record_line;
 use crate::{HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS};
-use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -48,18 +47,15 @@ pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
         return Ok(());
     }
     let temp_path = compact_history_temp_path(path)?;
-    let mut file = fs::File::create(&temp_path)
-        .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-    for line in lines {
-        file.write_all(line.as_bytes())
-            .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-        file.write_all(b"\n")
-            .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-    }
-    file.flush()
-        .map_err(|err| format!("failed to flush {}: {}", temp_path.display(), err))?;
-    drop(file);
-    replace_file_with_temp(&temp_path, path)
+    write_temp_file_then_replace(&temp_path, path, |file| {
+        for line in lines {
+            file.write_all(line.as_bytes())
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+            file.write_all(b"\n")
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+        }
+        Ok(())
+    })
 }
 
 pub(crate) fn compact_history_temp_path(path: &Path) -> Result<PathBuf, String> {

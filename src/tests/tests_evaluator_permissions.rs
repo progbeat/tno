@@ -5,7 +5,7 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
     let agent = AgentConfig {
         model: ModelConfig::default(),
         thinking: "low".to_string(),
-        instructions: "Answer from files only.".to_string(),
+        instructions: Some("Answer from files only.".to_string()),
         ignore: vec!["target/**".to_string()],
         plugins: Vec::new(),
     };
@@ -69,7 +69,7 @@ fn restricted_evaluator_scope_is_enforced_by_filesystem_permissions() {
     let agent = AgentConfig {
         model: ModelConfig::default(),
         thinking: "low".to_string(),
-        instructions: "Answer from files only.".to_string(),
+        instructions: Some("Answer from files only.".to_string()),
         ignore: vec!["target/**".to_string()],
         plugins: Vec::new(),
     };
@@ -82,6 +82,16 @@ fn restricted_evaluator_scope_is_enforced_by_filesystem_permissions() {
     assert_eq!(root_permissions[".canon/**"], "none");
     assert_eq!(root_permissions["target"], "none");
     assert_eq!(root_permissions["target/**"], "none");
+
+    let file_scope_permissions =
+        evaluator_thread_root_permissions(&agent, &["src/bin/main.rs".to_string()]);
+    assert_eq!(file_scope_permissions["."], "none");
+    assert_eq!(file_scope_permissions["src"], "read");
+    assert_eq!(file_scope_permissions["src/bin"], "read");
+    assert_eq!(file_scope_permissions["src/bin/main.rs"], "read");
+    assert_eq!(file_scope_permissions["src/bin/main.rs/**"], "read");
+    assert!(!file_scope_permissions.contains_key("src/**"));
+    assert!(!file_scope_permissions.contains_key("src/bin/**"));
 }
 
 #[test]
@@ -179,7 +189,7 @@ fn app_server_startup_config_escapes_toml_control_characters() {
     let agent = AgentConfig {
         model: ModelConfig::default(),
         thinking: "low".to_string(),
-        instructions: "Answer from files only.".to_string(),
+        instructions: Some("Answer from files only.".to_string()),
         ignore: vec![
             "quoted\"path/**".to_string(),
             "control\u{0007}path/**".to_string(),

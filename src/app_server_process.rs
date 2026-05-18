@@ -2,7 +2,6 @@ use crate::app_server::AppServerRunner;
 use crate::config_types::AgentConfig;
 use crate::evaluator_config::app_server_args;
 use crate::evaluator_types::EvaluatorError;
-use crate::thread_reuse_config::thread_reuse_config;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
@@ -55,7 +54,6 @@ impl AppServerRunner {
         load_plugins: bool,
         agent: &AgentConfig,
     ) -> Result<AppServerRunner, EvaluatorError> {
-        let thread_reuse = thread_reuse_config(root)?;
         let mut command = Command::new("codex");
         command.args(app_server_args(root, load_plugins, agent)?);
         // `canon check` can itself run inside a Codex thread. The evaluator
@@ -91,8 +89,6 @@ impl AppServerRunner {
             token_usage_updates_by_turn: BTreeMap::new(),
             context_compaction_events_by_turn: BTreeMap::new(),
             last_turn_usage: None,
-            carryover_token_target: thread_reuse.carryover_token_target,
-            turn_carryover_by_thread: BTreeMap::new(),
             retired_sessions: Default::default(),
         };
         runner.send_request(
@@ -153,6 +149,9 @@ pub(crate) fn terminate_app_server_child(child: &mut Child) -> Result<(), String
 
 #[cfg(unix)]
 pub(crate) fn signal_process_group(process_group: i32, signal_number: i32) -> Result<(), String> {
+    // SAFETY: POSIX `kill` uses a negative pid to address a process group.
+    // The caller passes the child pid as the process-group id after spawning
+    // the app-server child in its own group; the return value is checked.
     let result = unsafe { crate::kill(-process_group, signal_number) };
     if result == 0 {
         Ok(())

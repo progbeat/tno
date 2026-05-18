@@ -189,6 +189,31 @@ fn token_usage_update_keeps_raw_app_server_usage() {
 }
 
 #[test]
+fn reference_token_cost_uses_fixed_reference_weights() {
+    let cost = reference_token_cost(1_000, 400, 30);
+
+    assert!((cost - 0.00094).abs() < f64::EPSILON);
+}
+
+#[test]
+#[should_panic(expected = "cached_input_tokens cannot exceed input_tokens")]
+fn reference_token_cost_rejects_cached_input_above_total_input() {
+    let _ = reference_token_cost(399, 400, 30);
+}
+
+#[test]
+fn token_usage_reference_cost_treats_cached_input_as_additional_input() {
+    let usage = TokenUsage {
+        input_tokens: 600,
+        cached_input_tokens: 400,
+        output_tokens: 30,
+        ..TokenUsage::default()
+    };
+
+    assert!((usage.reference_token_cost() - 0.00094).abs() < f64::EPSILON);
+}
+
+#[test]
 fn token_usage_updates_are_kept_ordered_and_summed_by_last_usage() {
     let first = json!({
         "method": "thread/tokenUsage/updated",
@@ -270,40 +295,25 @@ fn token_usage_updates_are_kept_ordered_and_summed_by_last_usage() {
 }
 
 #[test]
-fn thread_reuse_policy_rolls_back_when_carryover_exits_target_range() {
-    let target = parse_carryover_token_target("10000,30000").unwrap();
-    let previous = TokenUsage {
-        input_tokens: 9_000,
-        output_tokens: 999,
-        ..TokenUsage::default()
-    };
+fn thread_reuse_policy_retires_when_current_carryover_exceeds_50000() {
     let current_inside = TokenUsage {
-        input_tokens: 20_000,
-        output_tokens: 10_000,
+        input_tokens: 49_000,
+        output_tokens: 1_000,
         ..TokenUsage::default()
     };
     let current_too_large = TokenUsage {
-        input_tokens: 30_000,
-        output_tokens: 1,
+        input_tokens: 49_000,
+        output_tokens: 1_001,
         ..TokenUsage::default()
     };
 
-    assert_eq!(carryover_tokens(previous), 9_999);
-    assert!(!thread_reuse_policy_should_rollback(
-        carryover_tokens(previous),
-        carryover_tokens(current_inside),
-        target,
-    ));
-    assert!(thread_reuse_policy_should_rollback(
-        carryover_tokens(current_inside),
-        carryover_tokens(previous),
-        target,
-    ));
-    assert!(thread_reuse_policy_should_rollback(
-        carryover_tokens(previous),
-        carryover_tokens(current_too_large),
-        target,
-    ));
+    assert_eq!(carryover_tokens(current_inside), 50_000);
+    assert!(!thread_reuse_policy_should_retire(carryover_tokens(
+        current_inside
+    )));
+    assert!(thread_reuse_policy_should_retire(carryover_tokens(
+        current_too_large
+    )));
 }
 
 #[test]

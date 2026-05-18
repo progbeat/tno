@@ -74,7 +74,7 @@ pub(crate) fn finalize_query_response(
                 ("observed", json!(finalized.response.answer.clone())),
                 ("evidence", json!(finalized.response.evidence.clone())),
                 ("scope", json!(finalized.response.scope.clone())),
-                ("scopeHash", json!(finalized.scope_hash.clone())),
+                ("scopeTreeOid", json!(finalized.scope_hash.clone())),
             ],
         )?;
     }

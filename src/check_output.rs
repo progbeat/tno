@@ -12,12 +12,7 @@ pub(crate) fn write_and_flush_result_output(
 ) -> Result<(), String> {
     if let Some(writer) = result_output.as_mut() {
         let line = render_check_output_record(record);
-        writer
-            .write_all(line.as_bytes())
-            .map_err(|err| format!("failed to write check result to stdout: {}", err))?;
-        writer
-            .flush()
-            .map_err(|err| format!("failed to flush check result to stdout: {}", err))?;
+        write_stdout_record(*writer, line.as_bytes(), "check result")?;
     }
     Ok(())
 }
@@ -28,12 +23,7 @@ pub(crate) fn write_summary_line(
     elapsed: Duration,
 ) -> Result<(), String> {
     let line = render_check_summary(report, elapsed);
-    result_output
-        .write_all(line.as_bytes())
-        .map_err(|err| format!("failed to write check summary to stdout: {}", err))?;
-    result_output
-        .flush()
-        .map_err(|err| format!("failed to flush check summary to stdout: {}", err))
+    write_stdout_record(result_output, line.as_bytes(), "check summary")
 }
 
 pub(crate) fn write_query_output(
@@ -44,12 +34,20 @@ pub(crate) fn write_query_output(
     // check output contract because query mode has no expectation selector,
     // expected answer, reusable history write, or final check summary.
     let output = render_query_output(answer);
-    result_output
-        .write_all(output.as_bytes())
-        .map_err(|err| format!("failed to write query result to stdout: {}", err))?;
-    result_output
+    write_stdout_record(result_output, output.as_bytes(), "query result")
+}
+
+fn write_stdout_record(
+    writer: &mut dyn Write,
+    bytes: &[u8],
+    description: &str,
+) -> Result<(), String> {
+    writer
+        .write_all(bytes)
+        .map_err(|err| format!("failed to write {} to stdout: {}", description, err))?;
+    writer
         .flush()
-        .map_err(|err| format!("failed to flush query result to stdout: {}", err))
+        .map_err(|err| format!("failed to flush {} to stdout: {}", description, err))
 }
 
 pub(crate) fn render_query_output(answer: &ParsedAnswer) -> String {

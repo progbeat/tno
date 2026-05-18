@@ -164,7 +164,7 @@ pub(crate) struct CheckRecord {
     pub(crate) observed: String,
     pub(crate) evidence: String,
     pub(crate) scope: Vec<String>,
-    #[serde(rename = "scopeHash")]
+    #[serde(rename = "scopeTreeOid", alias = "scopeHash")]
     pub(crate) scope_hash: String,
     #[serde(default)]
     pub(crate) id: String,

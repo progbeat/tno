@@ -7,6 +7,7 @@ fn check_config_accepts_minimal_schema() {
     assert_eq!(config.agent.model.primary.as_deref(), Some("gpt-5.4-mini"));
     assert_eq!(config.agent.model.fallbacks, vec!["gpt-5.3-codex-spark"]);
     assert_eq!(config.agent.thinking, "medium");
+    assert_eq!(config.agent.instructions, None);
     assert_eq!(config.agent.ignore, vec!["target/**"]);
 }
 

@@ -21,9 +21,6 @@ fn sanitize_scope_paths(
     let mut has_full_scope = false;
     for path in scope {
         let path = normalize_repo_path(path)?;
-        if path != "." && (path.contains('*') || path.contains('?')) {
-            return Err(format!("scope paths must not be globs: {}", path));
-        }
         if path != "." && denied_agent.is_some_and(|agent| is_denied_path(agent, &path)) {
             return Err(format!("scope path is denied: {}", path));
         }

@@ -32,7 +32,7 @@ pub(crate) fn reusable_history_record_with_cache(
 ) -> Result<Option<CheckRecord>, String> {
     // This is the answer-cache lookup described by the Cache spec: scan answer
     // history newest-to-oldest and accept only the first record whose stored
-    // scopeHash still matches the current staged contents for that scope.
+    // scopeTreeOid still matches the current staged contents for that scope.
     let key = ReusableHistoryLookupKey::new(root, expectation);
     if let Some(record) = history_cache.reusable_records.get(&key).cloned() {
         return Ok(record);
@@ -56,7 +56,7 @@ pub(crate) fn latest_history_record_matching_hash(
     mut current_hash_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
 ) -> Result<Option<CheckRecord>, String> {
     // The hash match is deliberately tested before answer-shape validation so
-    // the cache lookup follows the Cache spec's "first matching scopeHash"
+    // the cache lookup follows the Cache spec's "first matching scopeTreeOid"
     // rule. The final validation only protects readers from legacy history
     // records that predate the current "answers only" write contract.
     let matched_record =

@@ -262,6 +262,47 @@ expectations:
 }
 
 #[test]
+fn history_cache_key_ignores_agent_ignore_order() {
+    let first_config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore:
+    - "target/**"
+    - "logs/**"
+  plugins: []
+expectations:
+  - q: "First?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    let second_config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore:
+    - "logs/**"
+    - "target/**"
+  plugins: []
+expectations:
+  - q: "First?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    let first_expectation = check_options(&first_config, &["1"], false, true).selected[0].clone();
+    let second_expectation = check_options(&second_config, &["1"], false, true).selected[0].clone();
+
+    assert_eq!(
+        history_cache_key(&first_config.agent, &first_expectation),
+        history_cache_key(&second_config.agent, &second_expectation)
+    );
+}
+
+#[test]
 fn scope_hash_does_not_depend_on_agent_ignore_patterns() {
     let root = git_project("history-scope-hash-ignore-independent");
     let base_config = parse_check_config(
@@ -319,13 +360,88 @@ fn scope_hash_includes_tracked_canon_paths() {
 }
 
 #[test]
-fn scope_hash_uses_length_prefixed_entries_for_normal_paths() {
-    let root = git_project("history-scope-hash-length-prefixed");
-    let entries = staged_scope_entries(&root, &full_scope()).unwrap();
+fn scope_hash_matches_git_write_tree_for_full_scope() {
+    let root = git_project("history-scope-tree-oid-write-tree");
+    let config = parse_check_config(check_config_yaml()).unwrap();
 
-    assert_ne!(
-        hash_scope_entries(&entries),
-        hash_120(entries.join("\n").as_bytes())
+    let output = Command::new("git")
+        .args(["write-tree"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let git_tree = command_output_trimmed(&output.stdout, "git write-tree stdout").unwrap();
+
+    assert_eq!(
+        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        git_tree
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn scope_hash_uses_sha256_for_sha256_git_repositories() {
+    let root = temp_home("history-scope-tree-oid-sha256");
+    let init = Command::new("git")
+        .args(["init", "--object-format=sha256"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    if !init.status.success() {
+        let _ = fs::remove_dir_all(root);
+        return;
+    }
+    for args in [
+        ["config", "core.autocrlf", "false"],
+        ["config", "core.eol", "lf"],
+    ] {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git config failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    fs::write(root.join("README.md"), "hello").unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let add = Command::new("git")
+        .arg("add")
+        .arg(".")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "git add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let config = parse_check_config(check_config_yaml()).unwrap();
+
+    let output = Command::new("git")
+        .args(["write-tree"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let git_tree = command_output_trimmed(&output.stdout, "git write-tree stdout").unwrap();
+
+    assert_eq!(git_tree.len(), 64);
+    assert_eq!(
+        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        git_tree
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -405,5 +521,4 @@ fn scope_hash_entry_encodes_non_utf8_path_bytes() {
     .unwrap();
 
     assert!(entry.contains("\0raw-path-hex:"));
-    assert_ne!(hash_scope_entries(&[entry]), hash_120(b""));
 }

@@ -8,10 +8,12 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
     if config.version != 1 {
         return Err("check.yml version must be 1".to_string());
     }
-    // Prompt rendering also trims instructions; reject visually blank text here
-    // so empty-looking instructions cannot silently disappear at runtime.
-    if !contains_visible_config_text(&config.agent.instructions) {
-        return Err("check.yml agent.instructions must contain visible text".to_string());
+    // Prompt rendering trims optional custom instructions; reject explicitly
+    // blank-looking values so a configured policy cannot silently disappear.
+    if let Some(instructions) = config.agent.instructions.as_deref() {
+        if !contains_visible_config_text(instructions) {
+            return Err("check.yml agent.instructions must contain visible text".to_string());
+        }
     }
     validate_optional_model(config.agent.model.primary.as_deref(), "agent.model.primary")?;
     for (index, model) in config.agent.model.fallbacks.iter().enumerate() {

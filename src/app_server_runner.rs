@@ -135,11 +135,11 @@ impl EvaluatorRunner for AppServerRunner {
             developer_instructions: instructions,
             approval_policy: "never",
             config: evaluator_thread_config(agent, scope, model, thinking),
-            // App-server rollback is defined over materialized thread history.
-            // Canon still keeps evaluator thread IDs invocation-local: they are
-            // stored only in InterrogationState and never written to canon
-            // history for reuse by a later `canon check`.
-            ephemeral: false,
+            // Evaluator threads are invocation-local and ephemeral. Canon still
+            // reuses live thread IDs by scope within this `canon check`, but
+            // oversized carryover is handled by retiring the local session ID
+            // so the next same-scope interrogation starts a fresh thread.
+            ephemeral: true,
             // Evaluator threads must not inherit the parent Codex conversation:
             // canon questions about "your dev instructions" refer only to the
             // rendered evaluator developerInstructions parameter below.

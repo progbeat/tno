@@ -14,7 +14,7 @@ use crate::check_selection::{
     final_selected_expectations, order_expectations_by_latest_non_pass, FinalSelection,
 };
 use crate::check_types::{
-    check_run_error, CheckOptions, CheckRunError, CheckRunReport, NarrowingStats,
+    check_run_error, CheckOptions, CheckRecord, CheckRunError, CheckRunReport, NarrowingStats,
     SelectedExpectation,
 };
 #[cfg(test)]
@@ -225,14 +225,14 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 ));
                 records.push(hit.record);
                 if should_stop {
-                    return Ok(CheckRunReport {
+                    return Ok(check_run_report(
                         records,
                         non_selected,
                         selected,
                         skipped,
                         silent,
                         narrowing,
-                    });
+                    ));
                 }
                 continue;
             }
@@ -310,29 +310,24 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 turn_exceeds_break_after_tokens(&narrowed, options.break_after_tokens);
             context_compaction_hit |= turn_has_context_compaction(&narrowed);
             stop_after_current_expectation |= narrowed.stop_after_current_expectation;
-            if narrowed_scope_is_accepted(&interrogation.record, &narrowed.record) {
+            let accepted = narrowed_scope_is_accepted(&interrogation.record, &narrowed.record);
+            if accepted {
                 narrowing.accepted += 1;
-                run_try!(write_scope_narrowing_event(
-                    &mut diagnostic_log,
-                    &expectation.id,
-                    &enforced_scope,
-                    &record_scope,
-                    true,
-                    &initial_record,
-                    &narrowed.record,
-                ));
-                interrogation = narrowed;
             } else {
                 narrowing.rejected += 1;
-                run_try!(write_scope_narrowing_event(
-                    &mut diagnostic_log,
-                    &expectation.id,
-                    &enforced_scope,
-                    &record_scope,
-                    false,
-                    &initial_record,
-                    &narrowed.record,
-                ));
+            }
+            run_try!(write_scope_narrowing_event(
+                &mut diagnostic_log,
+                &expectation.id,
+                &enforced_scope,
+                &record_scope,
+                accepted,
+                &initial_record,
+                &narrowed.record,
+            ));
+            if accepted {
+                interrogation = narrowed;
+            } else {
                 let enforced_scope_hash = run_try!(caches.scope_hash.staged_scope_hash(
                     root,
                     &config.agent,
@@ -382,24 +377,42 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         ));
         records.push(interrogation.record);
         if should_stop {
-            return Ok(CheckRunReport {
+            return Ok(check_run_report(
                 records,
                 non_selected,
                 selected,
                 skipped,
                 silent,
                 narrowing,
-            });
+            ));
         }
     }
-    Ok(CheckRunReport {
+    Ok(check_run_report(
         records,
         non_selected,
         selected,
         skipped,
         silent,
         narrowing,
-    })
+    ))
+}
+
+fn check_run_report(
+    records: Vec<CheckRecord>,
+    non_selected: Vec<SelectedExpectation>,
+    selected: usize,
+    skipped: usize,
+    silent: usize,
+    narrowing: NarrowingStats,
+) -> CheckRunReport {
+    CheckRunReport {
+        records,
+        non_selected,
+        selected,
+        skipped,
+        silent,
+        narrowing,
+    }
 }
 
 fn mark_expectations_skipped(

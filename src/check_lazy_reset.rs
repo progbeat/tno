@@ -1,7 +1,7 @@
 use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::fs_util::replace_file_with_temp;
-use crate::git::{read_staged_file_bytes_from_raw_path, staged_tracked_path_bytes};
+use crate::fs_util::write_temp_file_then_replace;
+use crate::git::{read_git_blobs, staged_tracked_files};
 use crate::hash::full_scope;
 use crate::history::{read_history_records_from_path, HistoryCache};
 use crate::history_compaction::compact_history_temp_path;
@@ -11,7 +11,6 @@ use crate::logging::DiagnosticLogWriter;
 use crate::scope::{is_denied_path_bytes, sanitize_scope_for_hash};
 use crate::token_usage_types::TokenUsage;
 use serde_json::json;
-use std::fs;
 use std::io::Write;
 use std::path::Path;
 
@@ -123,13 +122,20 @@ pub(crate) fn estimate_staged_project_size_tokens(
     root: &Path,
     agent: &AgentConfig,
 ) -> Result<u64, String> {
+    let staged_files = staged_tracked_files(root)?
+        .into_iter()
+        .filter(|file| !is_denied_path_bytes(agent, &file.path))
+        .collect::<Vec<_>>();
+    let object_ids = staged_files
+        .iter()
+        .map(|file| file.object_id.clone())
+        .collect::<Vec<_>>();
+    // Batch all staged blob reads through one subprocess. The project-size
+    // estimate may scan many staged files, but `canon check` must not spawn a
+    // direct `git` subprocess per file.
+    let contents = read_git_blobs(root, &object_ids)?;
     let mut tokens = 0u64;
-    for path_bytes in staged_tracked_path_bytes(root)? {
-        // The spec excludes ignored content from the project-size estimate.
-        if is_denied_path_bytes(agent, &path_bytes) {
-            continue;
-        }
-        let content = read_staged_file_bytes_from_raw_path(root, &path_bytes)?;
+    for content in contents {
         // `project_size_tokens` covers staged text content; binary blobs do
         // not contribute to the text-token estimate.
         let Ok(text) = std::str::from_utf8(&content) else {
@@ -245,21 +251,18 @@ fn reset_expectation_history_to_full_scope_seed(
     }
 
     // Lazy reset changes only the next interrogation scope seed. Keep the
-    // original scopeHash with the old answer so exact-cache lookup cannot
+    // original scopeTreeOid with the old answer so exact-cache lookup cannot
     // treat a narrowed answer as a reusable full-scope result.
     records[index].scope = full_scope();
     let temp_path = compact_history_temp_path(&path)?;
-    let mut file = fs::File::create(&temp_path)
-        .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-    for record in records {
-        let line = render_check_log_record(&record).map_err(|err| err.to_string())?;
-        file.write_all(line.as_bytes())
-            .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-    }
-    file.flush()
-        .map_err(|err| format!("failed to flush {}: {}", temp_path.display(), err))?;
-    drop(file);
-    replace_file_with_temp(&temp_path, &path)?;
+    write_temp_file_then_replace(&temp_path, &path, |file| {
+        for record in records {
+            let line = render_check_log_record(&record).map_err(|err| err.to_string())?;
+            file.write_all(line.as_bytes())
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+        }
+        Ok(())
+    })?;
     history_cache.records.remove(&path);
     history_cache.reusable_records.clear();
     Ok(())

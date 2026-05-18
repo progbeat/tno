@@ -8,7 +8,6 @@ use serde_json::Value;
 
 use crate::config_types::AgentConfig;
 use crate::evaluator_types::EvaluatorError;
-use crate::thread_reuse_config::CarryoverTokenTarget;
 use crate::token_usage_types::{
     ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
 };
@@ -23,15 +22,7 @@ pub(crate) struct AppServerRunner {
     pub(crate) token_usage_updates_by_turn: BTreeMap<String, Vec<TokenUsageUpdate>>,
     pub(crate) context_compaction_events_by_turn: BTreeMap<String, Vec<ContextCompactionEvent>>,
     pub(crate) last_turn_usage: Option<EvaluatorTurnUsage>,
-    pub(crate) carryover_token_target: CarryoverTokenTarget,
-    pub(crate) turn_carryover_by_thread: BTreeMap<String, Vec<ThreadTurnCarryover>>,
     pub(crate) retired_sessions: BTreeSet<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ThreadTurnCarryover {
-    pub(crate) turn_id: String,
-    pub(crate) tokens: u64,
 }
 
 pub(crate) struct LazyAppServerRunner {
