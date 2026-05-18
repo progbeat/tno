@@ -16,3 +16,7 @@ def thread_reuse_policy(thread):
     if carryover_tokens(prev_turn) >= MIN or carryover_tokens(curr_turn) > MAX:
         thread.rollback()  # kind of thread.turns.pop()
 ```
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `canon.threadReuse.carryoverTokenTarget` | `10000,30000` | Target range `MIN,MAX` for carried-over tokens. |
