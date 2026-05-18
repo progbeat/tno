@@ -166,10 +166,10 @@ use crate::scope::{
     effective_ignore_patterns, is_denied_path, is_denied_path_bytes, is_strict_scope_subset,
     normalize_repo_path, sanitize_scope, sanitize_scope_for_hash, scope_is_within,
 };
+#[cfg(unix)]
+use crate::scope_hash::staged_scope_entries;
 use crate::scope_hash::ScopeHashCache;
-use crate::scope_hash::{
-    gate_head_tree_fingerprint, normalize_index_metadata, staged_scope_entries, staged_scope_hash,
-};
+use crate::scope_hash::{gate_head_tree_fingerprint, normalize_index_metadata, staged_scope_hash};
 use crate::staged_worktree::snapshot_parent_outside_worktree;
 use crate::staged_worktree::StagedWorktreeView;
 use crate::thread_reuse_config::{

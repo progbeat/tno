@@ -111,7 +111,7 @@ impl ScopeHashCache {
             .ok_or_else(|| "failed to cache staged scope entries".to_string())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn staged_scope_entries(
         &mut self,
         root: &Path,
@@ -460,7 +460,7 @@ fn hex_bytes(bytes: &[u8]) -> String {
     output
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn staged_scope_entries(root: &Path, scope: &[String]) -> Result<Vec<String>, String> {
     ScopeHashCache::new().staged_scope_entries(root, scope)
 }
@@ -482,7 +482,7 @@ pub(crate) fn head_scope_entries_for_existing_head(root: &Path) -> Result<Vec<St
     git_scope_entries(root, GitScopeListing::Head)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn staged_scope_entries_for_scope(root: &Path, scope: &[String]) -> Result<Vec<String>, String> {
     git_scope_entries(root, GitScopeListing::Index)
         .map(|entries| filter_scope_entries(&entries, scope))
