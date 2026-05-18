@@ -6,6 +6,8 @@ Do not edit files under `.canon/` proactively. Edit them only when a human expli
 
 Before making any changes, understand the relevant canon expectations and, for existing code, why the current implementation is shaped that way; proceed only when the change preserves the intended behavior and does not contradict the canon.
 
+Treat tokens as a scarce resource. Avoid increasing token usage unless the correctness benefit justifies it, and prefer designs that preserve or reduce the amount of model work needed to answer canon questions correctly.
+
 Never commit `.canon/` changes. Before committing, run `git diff --cached --quiet -- .canon/`; if it exits `1`, stop and ask a human to handle them.
 
 Before creating a commit as an agent, run `canon check` with escalation and no expectation filters. This is separate from the installed Git pre-commit hook; the hook itself runs `canon gate`.
