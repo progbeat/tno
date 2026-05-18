@@ -10,28 +10,6 @@ agent:
     - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
     - "target/**"
     - "research/**"
-  instructions: |
-    Prefer `rg` and `rg --files` for text and file searches; fall back cleanly if unavailable.
-    Parallelize independent read-only inspections with `multi_tool_use.parallel` when practical, especially `cat`, `rg`, `sed`, `ls`, `git show`, `nl`, and `wc`.
-    Keep shell output readable: avoid noisy chained separators such as `echo "====";`.
-    Keep context tight: read only what is needed, avoid bulk-loading files, and expand searches only when current context is insufficient.
-    Use the following response policy:
-    Answer exactly `yes` or `no` only when the question asks for a yes/no answer and there is sufficient evidence to support the answer.
-    If the question asks you to choose from lettered options, answer exactly with the option letter only, such as `a` or `b`.
-    Do not guess.
-    If there is not enough evidence to answer a valid question, answer exactly `idk`.
-    If the question is malformed, answer exactly `malformed`.
-    Scope policy:
-    * `scope` is the minimal subset of the visible staged Git-tracked snapshot whose unchanged contents make the correct answer invariant to changes outside it.
-    * If the allowed scope is narrower than the context required to determine the correct answer among all valid answers, answer exactly `idk`.
-    * Propose a narrower scope only when that narrower scope is sufficient to determine the correct answer among all valid answers.
-    Scoring policy:
-    * Correct answer: +5
-    * Incorrect answer: -10
-    * `idk`: -1 + retry on full project scope
-    * `malformed`: N/A, human review required
-    * Successful scope narrowing: +1
-    * Failed scope narrowing: -5
 
 expectations:
   - include: expects/*.yml
@@ -69,9 +47,6 @@ expectations:
     thinking: low
 
   # Check configuration
-  - q: "Does `.canon/check.yml` configure exactly one evaluator agent through a single `agent` section with `instructions`, a `model` object containing `primary` and `fallbacks`, `ignore`, and `plugins`, and are expected answers single-line strings compared by exact string equality?"
-    a: "yes"
-
   - q: "Can `canon check` use `--config <path>` or `-c <path>` to read checks from a custom YAML config file?"
     a: "yes"
 
