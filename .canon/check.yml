@@ -10,6 +10,7 @@ agent:
     - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
     - "target/**"
     - "research/**"
+    - "AGENTS.md"
 
 expectations:
   - include: expects/*.yml
