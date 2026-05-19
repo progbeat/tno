@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
+const RAW_PATH_HEX_PREFIX: &str = "\0raw-path-hex:";
 
 type ScopeCacheKey = (PathBuf, Vec<String>);
 
@@ -262,6 +263,11 @@ fn scope_tree_oid_from_entries(
     tree.oid(object_hash_algorithm)
 }
 
+#[cfg(test)]
+pub(crate) fn sha1_scope_tree_oid_from_entries(entries: &[String]) -> Result<String, String> {
+    scope_tree_oid_from_entries(entries, GitObjectHashAlgorithm::Sha1)
+}
+
 #[derive(Clone, Copy)]
 enum GitObjectHashAlgorithm {
     Sha1,
@@ -276,6 +282,9 @@ struct TreeNode {
 enum TreeEntry {
     File { mode: String, object_id: String },
     Directory(TreeNode),
+    // Fully covered directories reuse the tree object ID that Git reports.
+    // Child entries under this directory are redundant for the scoped tree.
+    DirectoryOid { object_id: String },
 }
 
 struct ScopeTreeEntry {
@@ -290,8 +299,12 @@ impl TreeNode {
             return Err("scope tree entry path must not be empty".to_string());
         };
         if rest.is_empty() {
-            self.entries
-                .insert(name.clone(), TreeEntry::File { mode, object_id });
+            let entry = if is_git_tree_mode(&mode) {
+                TreeEntry::DirectoryOid { object_id }
+            } else {
+                TreeEntry::File { mode, object_id }
+            };
+            self.entries.insert(name.clone(), entry);
             return Ok(());
         }
         let entry = self
@@ -300,6 +313,7 @@ impl TreeNode {
             .or_insert_with(|| TreeEntry::Directory(TreeNode::default()));
         match entry {
             TreeEntry::Directory(directory) => directory.insert(rest, mode, object_id),
+            TreeEntry::DirectoryOid { .. } => Ok(()),
             TreeEntry::File { .. } => Err(format!(
                 "scope tree path conflicts with file: {}",
                 String::from_utf8_lossy(name)
@@ -345,6 +359,12 @@ impl TreeEntry {
                 object_id: hex_object_id_bytes(&directory.oid(object_hash_algorithm)?)?,
                 is_directory: true,
             }),
+            TreeEntry::DirectoryOid { object_id } => Ok(EncodedTreeEntry {
+                name: name.to_vec(),
+                mode: "40000".to_string(),
+                object_id: hex_object_id_bytes(object_id)?,
+                is_directory: true,
+            }),
         }
     }
 }
@@ -360,9 +380,6 @@ fn parse_scope_tree_entry(entry: &str) -> Result<ScopeTreeEntry, String> {
     let (metadata, path) = entry
         .split_once('\t')
         .ok_or_else(|| "scope tree entry missing path".to_string())?;
-    if path.starts_with('\0') {
-        return Err("scope tree entry contains non-UTF-8 path bytes".to_string());
-    }
     let mut fields = metadata.split_whitespace();
     let mode = fields
         .next()
@@ -378,16 +395,41 @@ fn parse_scope_tree_entry(entry: &str) -> Result<ScopeTreeEntry, String> {
             ));
         }
     }
-    let path = path
-        .split('/')
-        .filter(|component| !component.is_empty())
-        .map(|component| component.as_bytes().to_vec())
-        .collect::<Vec<_>>();
+    let path = scope_tree_path_components(path)?;
     Ok(ScopeTreeEntry {
         mode: mode.to_string(),
         object_id: object_id.to_string(),
         path,
     })
+}
+
+fn scope_tree_path_components(path: &str) -> Result<Vec<Vec<u8>>, String> {
+    let path = if let Some(encoded) = path.strip_prefix(RAW_PATH_HEX_PREFIX) {
+        raw_path_hex_bytes(encoded)?
+    } else {
+        if path.contains('\0') {
+            return Err("scope tree entry contains invalid NUL path marker".to_string());
+        }
+        path.as_bytes().to_vec()
+    };
+    Ok(path
+        .split(|byte| *byte == b'/')
+        .filter(|component| !component.is_empty())
+        .map(|component| component.to_vec())
+        .collect())
+}
+
+fn raw_path_hex_bytes(encoded: &str) -> Result<Vec<u8>, String> {
+    if !encoded.len().is_multiple_of(2) {
+        return Err("scope tree entry has odd-length raw path hex".to_string());
+    }
+    let mut bytes = Vec::with_capacity(encoded.len() / 2);
+    for pair in encoded.as_bytes().chunks(2) {
+        let high = hex_nibble(pair[0])?;
+        let low = hex_nibble(pair[1])?;
+        bytes.push((high << 4) | low);
+    }
+    Ok(bytes)
 }
 
 fn git_tree_entry_cmp(left: &EncodedTreeEntry, right: &EncodedTreeEntry) -> std::cmp::Ordering {
@@ -422,6 +464,10 @@ fn hex_object_id_bytes(object_id: &str) -> Result<Vec<u8>, String> {
         bytes.push((high << 4) | low);
     }
     Ok(bytes)
+}
+
+fn is_git_tree_mode(mode: &str) -> bool {
+    mode == "40000" || mode == "040000"
 }
 
 fn hex_nibble(byte: u8) -> Result<u8, String> {
@@ -491,20 +537,46 @@ fn staged_scope_entries_for_scope(root: &Path, scope: &[String]) -> Result<Vec<S
 #[derive(Clone, Copy)]
 enum GitScopeListing {
     Index,
+    StagedTree,
     Head,
 }
 
 fn git_scope_entries(root: &Path, listing: GitScopeListing) -> Result<Vec<String>, String> {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(root).arg("--literal-pathspecs");
-    match listing {
-        GitScopeListing::Index => {
-            command.args(["ls-files", "-s", "-z", "--"]);
-        }
-        GitScopeListing::Head => {
-            command.args(["ls-tree", "-z", "-r", "HEAD", "--"]);
-        }
+    if let GitScopeListing::Index = listing {
+        // `git write-tree` materializes the staged tree so `ls-tree -t` can
+        // report directory object IDs as well as files.
+        let tree_oid = git_staged_tree_oid(root)?;
+        return git_tree_scope_entries(root, &tree_oid, GitScopeListing::StagedTree);
     }
+    git_tree_scope_entries(root, "HEAD", listing)
+}
+
+fn git_staged_tree_oid(root: &Path) -> Result<String, String> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root).args(["write-tree"]);
+    let output = command
+        .output()
+        .map_err(|err| format!("failed to run git write-tree: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to inspect staged scope: {}",
+            command_output_trimmed(&output.stderr, "git write-tree stderr")?
+        ));
+    }
+    command_output_trimmed(&output.stdout, "git write-tree stdout").map(str::to_string)
+}
+
+fn git_tree_scope_entries(
+    root: &Path,
+    treeish: &str,
+    listing: GitScopeListing,
+) -> Result<Vec<String>, String> {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(root)
+        .arg("--literal-pathspecs")
+        .args(["ls-tree", "-z", "-r", "-t", treeish, "--"]);
     let output = command
         .output()
         .map_err(|err| format!("failed to run {}: {}", listing.command_name(), err))?;
@@ -574,6 +646,7 @@ impl GitScopeListing {
     fn command_name(self) -> &'static str {
         match self {
             GitScopeListing::Index => "git ls-files",
+            GitScopeListing::StagedTree => "git ls-tree",
             GitScopeListing::Head => "git ls-tree",
         }
     }
@@ -581,6 +654,7 @@ impl GitScopeListing {
     fn stderr_label(self) -> &'static str {
         match self {
             GitScopeListing::Index => "git ls-files stderr",
+            GitScopeListing::StagedTree => "git ls-tree stderr",
             GitScopeListing::Head => "git ls-tree stderr",
         }
     }
@@ -588,6 +662,7 @@ impl GitScopeListing {
     fn inspect_error(self) -> &'static str {
         match self {
             GitScopeListing::Index => "failed to inspect staged scope",
+            GitScopeListing::StagedTree => "failed to inspect staged scope",
             GitScopeListing::Head => "failed to inspect HEAD scope",
         }
     }
@@ -595,6 +670,7 @@ impl GitScopeListing {
     fn malformed_entry(self) -> &'static str {
         match self {
             GitScopeListing::Index => "git index entry",
+            GitScopeListing::StagedTree => "git tree entry",
             GitScopeListing::Head => "git tree entry",
         }
     }
@@ -640,11 +716,24 @@ fn normalize_git_scope_metadata(
                 Ok(format!("{} {} {}\t{}", mode, object, stage, path))
             }
         }
-        GitScopeListing::Head => {
-            let _kind = next_scope_metadata_field(&mut fields, listing, &path)?;
+        GitScopeListing::StagedTree | GitScopeListing::Head => {
+            let kind = next_scope_metadata_field(&mut fields, listing, &path)?;
             let object = next_scope_metadata_field(&mut fields, listing, &path)?;
-            Ok(format!("{} {}\t{}", mode, object, path))
+            Ok(format!(
+                "{} {}\t{}",
+                normalized_git_tree_mode(mode, kind),
+                object,
+                path
+            ))
         }
+    }
+}
+
+fn normalized_git_tree_mode<'a>(mode: &'a str, kind: &str) -> &'a str {
+    if is_git_tree_mode(mode) || kind == "tree" {
+        "40000"
+    } else {
+        mode
     }
 }
 
@@ -662,7 +751,7 @@ fn scope_entry_path(path: &[u8]) -> String {
     match std::str::from_utf8(path) {
         Ok(path) => path.to_string(),
         Err(_) => {
-            let mut output = String::from("\0raw-path-hex:");
+            let mut output = String::from(RAW_PATH_HEX_PREFIX);
             for byte in path {
                 output.push(HEX[(byte >> 4) as usize] as char);
                 output.push(HEX[(byte & 0x0f) as usize] as char);

@@ -53,14 +53,14 @@ pub(crate) fn finalize_query_response(
     question: &str,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationState,
+    enforced_scope: &[String],
     response: ParsedAnswer,
 ) -> Result<QueryInterrogationResult, EvaluatorError> {
-    let enforced_scope = full_scope();
-    let finalized = finalize_parsed_answer(runtime, state, &enforced_scope, response)?;
+    let finalized = finalize_parsed_answer(runtime, state, enforced_scope, response)?;
     write_parsed_answer_review_events(
         diagnostic_log,
         None,
-        &full_scope(),
+        enforced_scope,
         None,
         &finalized.response.answer,
         &finalized.response.evidence,

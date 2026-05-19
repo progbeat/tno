@@ -34,7 +34,7 @@ pub(crate) fn apply_lazy_full_scope_reset(
             "lazy_full_scope_reset",
             &[
                 ("projectSizeTokens", json!(reset.project_size_tokens)),
-                ("candidates", json!(non_selected.len())),
+                ("candidates", json!(reset.candidate_count)),
                 ("reset", json!(reset.expectations.len())),
                 (
                     "ids",
@@ -62,6 +62,7 @@ pub(crate) fn apply_lazy_full_scope_reset(
 
 pub(crate) struct LazyFullScopeResetPlan {
     pub(crate) project_size_tokens: u64,
+    pub(crate) candidate_count: usize,
     pub(crate) expectations: Vec<SelectedExpectation>,
 }
 
@@ -86,6 +87,7 @@ pub(crate) fn plan_lazy_full_scope_reset(
         lazy_full_scope_reset_count(total_tokens, project_size_tokens, seed, candidates.len());
     Ok(LazyFullScopeResetPlan {
         project_size_tokens,
+        candidate_count: candidates.len(),
         expectations: sample_reset_expectations(&candidates, reset_count, seed),
     })
 }
@@ -95,6 +97,9 @@ fn non_selected_expectations_with_current_scope(
     agent: &AgentConfig,
     non_selected: &[SelectedExpectation],
 ) -> Result<Vec<ScopedNonSelectedExpectation>, String> {
+    // `SelectedExpectation` does not store mutable answer-history scope. The
+    // policy's `e.scope` is Canon's latest reusable history scope, or full
+    // scope when no reusable answer exists.
     let mut history_cache = HistoryCache::new();
     let mut scoped = Vec::new();
     for expectation in non_selected {
@@ -180,13 +185,16 @@ pub(crate) fn lazy_full_scope_reset_count(
     seed: u64,
     candidate_count: usize,
 ) -> usize {
-    // With no staged text tokens, the policy's ratio has no defined
-    // denominator and there is no meaningful project-size budget to sample.
-    if total_tokens == 0 || project_size_tokens == 0 || candidate_count == 0 {
+    const RATIO_NUMERATOR: u128 = 5;
+    const RATIO_DENOMINATOR: u128 = 100;
+
+    // The spec's 0.05 * total_tokens / project_size_tokens ratio is defined
+    // only when the project-size denominator is positive.
+    if project_size_tokens == 0 || candidate_count == 0 {
         return 0;
     }
-    let denominator = 20u128 * project_size_tokens as u128;
-    let numerator = total_tokens as u128;
+    let numerator = (total_tokens as u128).saturating_mul(RATIO_NUMERATOR);
+    let denominator = (project_size_tokens as u128).saturating_mul(RATIO_DENOMINATOR);
     let mut count = (numerator / denominator) as usize;
     let remainder = numerator % denominator;
     if remainder != 0 {
@@ -223,6 +231,10 @@ pub(crate) fn reset_non_selected_expectation_histories(
 ) -> Result<(), String> {
     let mut history_cache = HistoryCache::new();
     for expectation in expectations {
+        // "set_scope(expectation, [\".\"])" is implemented by retiring newer
+        // narrowed answer records. That exposes an older full-scope seed, or no
+        // seed at all, without inventing a full-scope scopeTreeOid for a record
+        // that was actually answered under a narrower scope.
         reset_expectation_history_to_full_scope_seed(root, expectation, &mut history_cache)?;
     }
     Ok(())
@@ -238,22 +250,23 @@ fn reset_expectation_history_to_full_scope_seed(
         return Ok(());
     }
     let mut records = read_history_records_from_path(&path)?;
-    let Some(index) = records
-        .iter()
-        .rposition(|record| reusable_record_scope(record, expectation).is_some())
-    else {
-        return Ok(());
-    };
-    if reusable_record_scope(&records[index], expectation)
-        .is_some_and(|scope| scope == full_scope())
-    {
+    let mut removed_narrowed = false;
+    while let Some((index, scope)) = latest_reusable_record_scope(&records, expectation) {
+        if scope == full_scope() {
+            break;
+        }
+        // Lazy reset changes only the next interrogation scope seed. Removing
+        // newer narrowed answer records exposes an older full-scope seed, or no
+        // seed at all, without minting a fake full-scope cache hit. Every
+        // remaining history record keeps the scopeTreeOid that belongs to its
+        // own stored scope.
+        records.remove(index);
+        removed_narrowed = true;
+    }
+    if !removed_narrowed {
         return Ok(());
     }
 
-    // Lazy reset changes only the next interrogation scope seed. Keep the
-    // original scopeTreeOid with the old answer so exact-cache lookup cannot
-    // treat a narrowed answer as a reusable full-scope result.
-    records[index].scope = full_scope();
     let temp_path = compact_history_temp_path(&path)?;
     write_temp_file_then_replace(&temp_path, &path, |file| {
         for record in records {
@@ -266,6 +279,19 @@ fn reset_expectation_history_to_full_scope_seed(
     history_cache.records.remove(&path);
     history_cache.reusable_records.clear();
     Ok(())
+}
+
+fn latest_reusable_record_scope(
+    records: &[CheckRecord],
+    expectation: &SelectedExpectation,
+) -> Option<(usize, Vec<String>)> {
+    records
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, record)| {
+            reusable_record_scope(record, expectation).map(|scope| (index, scope))
+        })
 }
 
 fn reusable_record_scope(

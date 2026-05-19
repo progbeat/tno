@@ -53,8 +53,8 @@ use crate::check_output::{
     escape_check_output_text, pad_summary_line, render_check_output_record, render_query_output,
 };
 use crate::check_output::{
-    record_requires_human_review, write_and_flush_result_output, write_query_output,
-    write_summary_line,
+    record_requires_human_review, report_output_skipped_count, write_and_flush_result_output,
+    write_query_output, write_summary_line,
 };
 use crate::check_preflight::{
     check_interrupted, install_sigint_handler, is_canon_only_staged_change_bytes,
@@ -66,7 +66,6 @@ use crate::check_query_command::run_check_query_command;
 use crate::check_reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
 };
-use crate::check_result::report_output_skipped_count;
 use crate::check_selection::{
     expectation_identities, final_selected_expectations, initial_non_selected_expectations,
     order_expectations_by_latest_non_pass, parse_check_options, parse_cooldown,
@@ -169,7 +168,10 @@ use crate::scope::{
 #[cfg(unix)]
 use crate::scope_hash::staged_scope_entries;
 use crate::scope_hash::ScopeHashCache;
-use crate::scope_hash::{gate_head_tree_fingerprint, normalize_index_metadata, staged_scope_hash};
+use crate::scope_hash::{
+    gate_head_tree_fingerprint, normalize_index_metadata, sha1_scope_tree_oid_from_entries,
+    staged_scope_hash,
+};
 use crate::staged_worktree::snapshot_parent_outside_worktree;
 use crate::staged_worktree::StagedWorktreeView;
 use crate::thread_reuse_config::{

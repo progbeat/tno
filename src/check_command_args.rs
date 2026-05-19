@@ -8,6 +8,7 @@ use std::path::PathBuf;
 pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommandArgs, String> {
     let mut config_path = None;
     let mut query = None;
+    let mut query_scope = Vec::new();
     let mut option_args = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -37,10 +38,25 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
                 return Err("-q question must not be empty".to_string());
             }
             query = Some(value);
+        } else if arg == "--scope" || arg == "-s" {
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or_else(|| format!("{} requires a path", arg))?;
+            let value = arg_to_string(value)?;
+            query_scope.push(normalize_query_scope_path(&arg, &value)?);
+        } else if let Some(value) = arg.strip_prefix("--scope=") {
+            if value.is_empty() {
+                return Err("--scope requires a path".to_string());
+            }
+            query_scope.push(normalize_query_scope_path("--scope", value)?);
         } else {
             option_args.push(args[index].clone());
         }
         index += 1;
+    }
+    if query.is_none() && !query_scope.is_empty() {
+        return Err("canon check -s/--scope requires -q".to_string());
     }
     if query.is_some() && !option_args.is_empty() {
         return Err(
@@ -51,6 +67,7 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
     Ok(CheckCommandArgs {
         config_path: config_path.unwrap_or_else(|| PathBuf::from(CHECK_PATH)),
         query,
+        query_scope,
         option_args,
     })
 }
@@ -69,4 +86,8 @@ fn normalize_check_config_path(value: &str) -> Result<PathBuf, String> {
         return Err("--config path must name a file".to_string());
     }
     Ok(PathBuf::from(normalized))
+}
+
+fn normalize_query_scope_path(option: &str, value: &str) -> Result<String, String> {
+    normalize_repo_path(value).map_err(|err| format!("{} path: {}", option, err))
 }

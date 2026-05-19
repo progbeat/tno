@@ -33,9 +33,7 @@ fn lazy_full_scope_reset_sets_only_sampled_narrowed_history_to_full_scope() {
     );
     assert!(reset_history_path.exists());
     let reset_records = read_history_records(&root, &expectations[1]).unwrap();
-    assert_eq!(reset_records.len(), 1);
-    assert_eq!(reset_records[0].scope, full_scope());
-    assert_eq!(reset_records[0].scope_hash, second_hash);
+    assert!(reset_records.is_empty());
     assert!(
         reusable_history_record(&root, &config.agent, &expectations[1])
             .unwrap()
@@ -50,7 +48,18 @@ fn lazy_full_scope_reset_sets_only_sampled_narrowed_history_to_full_scope() {
             &mut history_cache,
         )
         .unwrap(),
-        Some(full_scope())
+        None
+    );
+    assert_eq!(
+        latest_history_scope_with_cache(
+            &root,
+            &config.agent,
+            &expectations[1],
+            &mut HistoryCache::new(),
+        )
+        .unwrap()
+        .unwrap_or_else(full_scope),
+        full_scope()
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -93,6 +102,7 @@ fn lazy_full_scope_reset_plan_samples_only_narrowed_history() {
     let plan =
         plan_lazy_full_scope_reset(&root, &config.agent, u64::MAX, &expectations, 0).unwrap();
 
+    assert_eq!(plan.candidate_count, 1);
     assert_eq!(plan.expectations.len(), 1);
     assert_eq!(plan.expectations[0].id, expectations[1].id);
     let _ = fs::remove_dir_all(root);
@@ -129,9 +139,8 @@ fn lazy_full_scope_reset_preserves_existing_full_scope_pass_when_resetting_narro
     reset_non_selected_expectation_histories(&root, std::slice::from_ref(&expectation)).unwrap();
 
     let records = read_history_records(&root, &expectation).unwrap();
-    assert_eq!(records.len(), 2);
+    assert_eq!(records.len(), 1);
     assert_eq!(records[0].scope, full_scope());
-    assert_eq!(records[1].scope, full_scope());
     assert_eq!(
         reusable_history_record(&root, &config.agent, &expectation)
             .unwrap()
@@ -285,5 +294,6 @@ fn project_size_estimate_tolerates_non_utf8_paths() {
     );
 
     assert!(estimate_staged_project_size_tokens(&root, &config.agent).is_ok());
+    assert!(staged_scope_hash(&root, &config.agent, &full_scope()).is_ok());
     let _ = fs::remove_dir_all(root);
 }

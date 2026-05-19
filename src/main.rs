@@ -85,7 +85,6 @@ mod check_preflight;
 mod check_query;
 mod check_query_command;
 mod check_reporting;
-mod check_result;
 mod check_selection;
 mod check_types;
 mod check_validation;

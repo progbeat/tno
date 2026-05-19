@@ -50,8 +50,14 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         }
     };
     if let Some(question) = command.query.as_deref() {
-        return run_check_query_command(root, &config, question, diagnostic_log)
-            .map_err(CommandError::from);
+        return run_check_query_command(
+            root,
+            &config,
+            question,
+            &command.query_scope,
+            diagnostic_log,
+        )
+        .map_err(CommandError::from);
     }
     // Compute expectation identities once for this command. Selector parsing,
     // initial skipped-set construction, and stale-cache cleanup all use this

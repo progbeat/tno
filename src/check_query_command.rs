@@ -6,7 +6,9 @@ use crate::check_reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
 };
 use crate::config_types::CheckConfig;
+use crate::hash::full_scope;
 use crate::logging::DiagnosticLogWriter;
+use crate::scope::sanitize_scope;
 use crate::scope_hash::ScopeHashCache;
 use serde_json::json;
 use std::io;
@@ -16,6 +18,7 @@ pub(crate) fn run_check_query_command(
     root: &Path,
     config: &CheckConfig,
     question: &str,
+    query_scope: &[String],
     mut diagnostic_log: DiagnosticLogWriter,
 ) -> Result<(), String> {
     // `canon check -q` is an ad-hoc interrogation mode. It loads the active
@@ -31,6 +34,13 @@ pub(crate) fn run_check_query_command(
             ],
         )
         .map_err(|err| err.to_string())?;
+    let enforced_scope = match query_enforced_scope(config, query_scope) {
+        Ok(scope) => scope,
+        Err(err) => {
+            write_query_error_finish(&mut diagnostic_log, &err)?;
+            return Err(err);
+        }
+    };
     let mut scope_hash_cache = ScopeHashCache::new();
     let mut execution = prepare_check_execution(
         root,
@@ -49,6 +59,7 @@ pub(crate) fn run_check_query_command(
     let result = run_query_with_runner(
         &runtime,
         question,
+        &enforced_scope,
         &mut execution.runner,
         Some(&mut diagnostic_log),
         &mut interrogation_state,
@@ -94,4 +105,15 @@ fn write_query_error_finish(
     err: &str,
 ) -> Result<(), String> {
     write_check_finish_event(diagnostic_log, true, Some(err))
+}
+
+fn query_enforced_scope(
+    config: &CheckConfig,
+    query_scope: &[String],
+) -> Result<Vec<String>, String> {
+    if query_scope.is_empty() {
+        Ok(full_scope())
+    } else {
+        sanitize_scope(query_scope, &config.agent).map_err(|err| format!("--scope: {}", err))
+    }
 }

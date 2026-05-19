@@ -276,6 +276,7 @@ fn query_mode_uses_agent_and_does_not_write_history() {
     let result = run_query_with_runner(
         &runtime,
         "Ad-hoc question?",
+        &full_scope(),
         &mut runner,
         Some(&mut diagnostic_log),
         &mut interrogation_state,
@@ -340,6 +341,46 @@ fn query_mode_uses_agent_and_does_not_write_history() {
 }
 
 #[test]
+fn query_mode_can_use_explicit_restricted_scope() {
+    let root = git_project("query-mode-restricted-scope");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let scope = vec!["src".to_string()];
+    let mut runner = FakeRunner::new(&[&answer(
+        "idk",
+        "needs files outside this restricted scope",
+        &["."],
+    )]);
+    let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
+    let runtime = CheckRuntime {
+        root: &root,
+        snapshot_root: &root,
+        config: &config,
+    };
+    let mut interrogation_state = InterrogationState::new();
+
+    let result = run_query_with_runner(
+        &runtime,
+        "Ad-hoc scoped question?",
+        &scope,
+        &mut runner,
+        Some(&mut diagnostic_log),
+        &mut interrogation_state,
+    )
+    .unwrap();
+
+    assert_eq!(runner.start_scopes, vec![scope.clone()]);
+    assert_eq!(runner.prompts, vec!["Ad-hoc scoped question?".to_string()]);
+    assert_eq!(result.answer.answer, "idk");
+    assert_eq!(result.answer.scope, scope);
+    assert!(result.answer.evidence.contains("widens enforced scope"));
+    assert_eq!(runner.starts, 1);
+    let log = fs::read_to_string(diagnostic_log.path()).unwrap();
+    assert!(log.contains(r#""event":"query.result""#));
+    assert!(log.contains(r#""scope":["src"]"#));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn query_and_full_scope_expectation_use_identical_first_turn_input() {
     let root = git_project("query-check-first-turn");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -356,6 +397,7 @@ fn query_and_full_scope_expectation_use_identical_first_turn_input() {
     run_query_with_runner(
         &runtime,
         &expectation.q,
+        &full_scope(),
         &mut query_runner,
         None,
         &mut query_state,

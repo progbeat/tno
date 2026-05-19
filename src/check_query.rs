@@ -4,12 +4,12 @@ use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
 use crate::check_model_fallback::run_with_model_fallbacks;
 use crate::check_types::QueryInterrogationResult;
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
-use crate::hash::full_scope;
 use crate::logging::DiagnosticLogWriter;
 
 pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     question: &str,
+    enforced_scope: &[String],
     runner: &mut R,
     diagnostic_log: Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationState,
@@ -21,7 +21,15 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
         &mut diagnostic_log,
         None,
         |state, diagnostic_log, model| {
-            interrogate_query_with_model(runtime, question, runner, diagnostic_log, state, model)
+            interrogate_query_with_model(
+                runtime,
+                question,
+                enforced_scope,
+                runner,
+                diagnostic_log,
+                state,
+                model,
+            )
         },
     )
 }
@@ -29,6 +37,7 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
 pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     question: &str,
+    enforced_scope: &[String],
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationState,
@@ -36,10 +45,9 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
 ) -> Result<QueryInterrogationResult, EvaluatorError> {
     let config = runtime.config;
     // Query mode has no expectation ID and no history-derived scope seed. Its
-    // enforced scope is therefore always the full staged snapshot; when normal
-    // expectation mode is also run with full scope, both paths send the same
-    // developer instructions and the same question text into the first turn.
-    let enforced_scope = full_scope();
+    // caller supplies the enforced scope explicitly; the default command path
+    // still uses the full staged snapshot, preserving the normal first-turn
+    // parity with expectation mode.
     let prompt = question.to_string();
     let response = ask_with_reused_thread(
         runtime,
@@ -47,12 +55,19 @@ pub(crate) fn interrogate_query_with_model<R: EvaluatorRunner>(
         diagnostic_log,
         state,
         ThreadTurnRequest {
-            enforced_scope: &enforced_scope,
+            enforced_scope,
             model,
             thinking: &config.agent.thinking,
             expectation_id: None,
             prompt: &prompt,
         },
     )?;
-    finalize_query_response(runtime, question, diagnostic_log, state, response.answer)
+    finalize_query_response(
+        runtime,
+        question,
+        diagnostic_log,
+        state,
+        enforced_scope,
+        response.answer,
+    )
 }

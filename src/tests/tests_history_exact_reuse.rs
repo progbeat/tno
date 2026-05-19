@@ -516,9 +516,31 @@ fn scope_hash_treats_git_pathspec_magic_as_literal_path() {
 fn scope_hash_entry_encodes_non_utf8_path_bytes() {
     let entry = normalize_index_metadata(
         "100644 0123456789012345678901234567890123456789 0",
-        b"nonutf8-\xff.txt",
+        b"dir/nonutf8-\xff.txt",
     )
     .unwrap();
 
     assert!(entry.contains("\0raw-path-hex:"));
+    assert_eq!(
+        sha1_scope_tree_oid_from_entries(&[entry]).unwrap().len(),
+        40
+    );
+}
+
+#[test]
+fn scope_hash_reuses_fully_covered_directory_oid() {
+    let directory_oid = "1111111111111111111111111111111111111111";
+    let child_oid = "2222222222222222222222222222222222222222";
+    let dir_entry = format!("40000 {}\tdir", directory_oid);
+    let child_entry = format!("100644 {}\tdir/file.txt", child_oid);
+    let dir_only = sha1_scope_tree_oid_from_entries(std::slice::from_ref(&dir_entry)).unwrap();
+
+    assert_eq!(
+        dir_only,
+        sha1_scope_tree_oid_from_entries(&[dir_entry.clone(), child_entry.clone()]).unwrap()
+    );
+    assert_eq!(
+        dir_only,
+        sha1_scope_tree_oid_from_entries(&[child_entry, dir_entry]).unwrap()
+    );
 }

@@ -183,6 +183,10 @@ pub(crate) struct CheckRecordOutcome {
 }
 
 impl CheckRecord {
+    pub(crate) fn passed(&self) -> bool {
+        self.result == CheckResult::Pass
+    }
+
     pub(crate) fn current_from_expectation(
         agent: &AgentConfig,
         expectation: &SelectedExpectation,
@@ -246,6 +250,7 @@ pub(crate) struct CheckOptions {
 pub(crate) struct CheckCommandArgs {
     pub(crate) config_path: PathBuf,
     pub(crate) query: Option<String>,
+    pub(crate) query_scope: Vec<String>,
     pub(crate) option_args: Vec<OsString>,
 }
 

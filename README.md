@@ -128,9 +128,11 @@ accepted.
 
 ```sh
 canon check -q "Does the app still have Undo?"
+canon check -q "Does the app still have Undo?" -s src/app
 ```
 
-Ask one uncached ad-hoc question.
+Ask one uncached ad-hoc question. Add one or more `-s`/`--scope` paths to
+debug the same question under a narrower evaluator scope.
 
 ```sh
 canon check --ignore-cache
