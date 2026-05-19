@@ -1,10 +1,12 @@
 use crate::check_order_state::latest_recorded_non_pass_timestamp_with_cache;
-use crate::check_types::{CheckOptions, Cooldown, SelectedExpectation};
+use crate::check_types::{CheckOptions, Cooldown, RawCheckOptions, SelectedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::hash::expectation_id;
 use crate::history::HistoryCache;
 use crate::history_reuse::cooldown_history_record;
 use crate::time::parse_record_timestamp;
+use clap::builder::OsStringValueParser;
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::Path;
@@ -15,72 +17,16 @@ pub(crate) fn parse_check_options(
     args: &[OsString],
 ) -> Result<CheckOptions, String> {
     let identities = expectation_identities(config)?;
-    parse_check_options_with_identities(config, &identities, args)
+    let options = parse_raw_check_options(args)?;
+    resolve_check_options_with_identities(config, &identities, &options)
 }
 
-pub(crate) fn parse_check_options_with_identities(
+pub(crate) fn resolve_check_options_with_identities(
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
-    args: &[OsString],
+    options: &RawCheckOptions,
 ) -> Result<CheckOptions, String> {
-    let mut check_all = false;
-    let mut ignore_cache = false;
-    let mut ignore_cooldown = false;
-    let mut break_after_tokens = None;
-    let mut selectors = Vec::new();
-    let mut parsing_options = true;
-    let mut index = 0;
-    while index < args.len() {
-        let arg = &args[index];
-        if parsing_options && arg.to_str() == Some("--") {
-            parsing_options = false;
-        } else if parsing_options && arg.to_str() == Some("--all") {
-            if check_all {
-                return Err("duplicate --all".to_string());
-            }
-            check_all = true;
-        } else if parsing_options && arg.to_str() == Some("--ignore-cache") {
-            if ignore_cache {
-                return Err("duplicate --ignore-cache".to_string());
-            }
-            ignore_cache = true;
-        } else if parsing_options && arg.to_str() == Some("--ignore-cooldown") {
-            if ignore_cooldown {
-                return Err("duplicate --ignore-cooldown".to_string());
-            }
-            ignore_cooldown = true;
-        } else if parsing_options && arg.to_str() == Some("--break-after-tokens") {
-            if break_after_tokens.is_some() {
-                return Err("duplicate --break-after-tokens".to_string());
-            }
-            index += 1;
-            let value = args
-                .get(index)
-                .ok_or_else(|| "--break-after-tokens requires a token limit".to_string())?;
-            let value = value
-                .to_str()
-                .ok_or_else(|| "--break-after-tokens must be valid UTF-8".to_string())?;
-            break_after_tokens = Some(parse_break_after_tokens(value)?);
-        } else if parsing_options
-            && arg
-                .to_str()
-                .and_then(|text| text.strip_prefix("--break-after-tokens="))
-                .is_some()
-        {
-            if break_after_tokens.is_some() {
-                return Err("duplicate --break-after-tokens".to_string());
-            }
-            let value = arg
-                .to_str()
-                .and_then(|text| text.strip_prefix("--break-after-tokens="))
-                .unwrap_or_default();
-            break_after_tokens = Some(parse_break_after_tokens(value)?);
-        } else {
-            selectors.push(arg.clone());
-        }
-        index += 1;
-    }
-    let selected = select_expectations_with_identities(config, identities, &selectors)?;
+    let selected = select_expectations_with_identities(config, identities, &options.selectors)?;
     let non_selected =
         initial_non_selected_expectations_with_identities(config, identities, &selected)?;
     let skipped = config.expectations.len().saturating_sub(selected.len());
@@ -88,11 +34,83 @@ pub(crate) fn parse_check_options_with_identities(
         selected,
         non_selected,
         skipped,
-        check_all,
-        ignore_cache,
-        ignore_cooldown,
-        break_after_tokens,
+        check_all: options.check_all,
+        ignore_cache: options.ignore_cache,
+        ignore_cooldown: options.ignore_cooldown,
+        break_after_tokens: options.break_after_tokens,
     })
+}
+
+#[cfg(test)]
+fn parse_raw_check_options(args: &[OsString]) -> Result<RawCheckOptions, String> {
+    let matches = add_check_option_args(check_options_parser())
+        .try_get_matches_from(args)
+        .map_err(|err| err.to_string())?;
+    raw_check_options_from_matches(&matches)
+}
+
+#[cfg(test)]
+fn check_options_parser() -> Command {
+    Command::new("check-options")
+        .no_binary_name(true)
+        .disable_help_flag(true)
+        .disable_version_flag(true)
+}
+
+pub(crate) fn add_check_option_args(command: Command) -> Command {
+    command
+        .arg(Arg::new("all").long("all").action(ArgAction::SetTrue))
+        .arg(
+            Arg::new("ignore_cache")
+                .long("ignore-cache")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("ignore_cooldown")
+                .long("ignore-cooldown")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("break_after_tokens")
+                .long("break-after-tokens")
+                .num_args(1)
+                .allow_hyphen_values(true)
+                .value_parser(OsStringValueParser::new()),
+        )
+        .arg(
+            Arg::new("selectors")
+                .num_args(0..)
+                .action(ArgAction::Append)
+                .value_parser(OsStringValueParser::new()),
+        )
+}
+
+pub(crate) fn raw_check_options_from_matches(
+    matches: &ArgMatches,
+) -> Result<RawCheckOptions, String> {
+    let break_after_tokens = match matches.get_one::<OsString>("break_after_tokens") {
+        Some(value) => {
+            let value = value
+                .to_str()
+                .ok_or_else(|| "--break-after-tokens must be valid UTF-8".to_string())?;
+            Some(parse_break_after_tokens(value)?)
+        }
+        None => None,
+    };
+    Ok(RawCheckOptions {
+        check_all: matches.get_flag("all"),
+        ignore_cache: matches.get_flag("ignore_cache"),
+        ignore_cooldown: matches.get_flag("ignore_cooldown"),
+        break_after_tokens,
+        selectors: matched_os_values(matches, "selectors"),
+    })
+}
+
+fn matched_os_values(matches: &ArgMatches, id: &str) -> Vec<OsString> {
+    matches
+        .get_many::<OsString>(id)
+        .map(|values| values.cloned().collect())
+        .unwrap_or_default()
 }
 
 fn parse_break_after_tokens(value: &str) -> Result<u64, String> {

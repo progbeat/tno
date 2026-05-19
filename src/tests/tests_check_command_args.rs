@@ -10,10 +10,8 @@ fn check_command_accepts_custom_config_option() {
     ])
     .unwrap();
     assert_eq!(parsed.config_path, PathBuf::from("alt.yml"));
-    assert_eq!(
-        parsed.option_args,
-        vec![OsString::from("--all"), OsString::from("2")]
-    );
+    assert!(parsed.options.check_all);
+    assert_eq!(parsed.options.selectors, vec![OsString::from("2")]);
 
     let parsed = parse_check_command_args(&["-c".into(), "old.yml".into()]).unwrap();
     assert_eq!(parsed.config_path, PathBuf::from("old.yml"));
@@ -30,12 +28,24 @@ fn check_command_accepts_custom_config_option() {
 }
 
 #[test]
+fn check_command_accepts_attached_short_option_values() {
+    let parsed = parse_check_command_args(&["-calt.yml".into()]).unwrap();
+    assert_eq!(parsed.config_path, PathBuf::from("alt.yml"));
+
+    let parsed = parse_check_command_args(&["-qQuestion?".into(), "-ssrc".into()]).unwrap();
+    assert_eq!(parsed.config_path, PathBuf::from(CHECK_PATH));
+    assert_eq!(parsed.query.as_deref(), Some("Question?"));
+    assert_eq!(parsed.query_scope, vec!["src".to_string()]);
+    assert!(parsed.options.is_empty());
+}
+
+#[test]
 fn check_command_accepts_query_mode() {
     let parsed = parse_check_command_args(&["-q".into(), "Question?".into()]).unwrap();
     assert_eq!(parsed.query.as_deref(), Some("Question?"));
     assert!(parsed.query_scope.is_empty());
     assert_eq!(parsed.config_path, PathBuf::from(CHECK_PATH));
-    assert!(parsed.option_args.is_empty());
+    assert!(parsed.options.is_empty());
 
     let parsed = parse_check_command_args(&[
         "--config".into(),
@@ -86,7 +96,7 @@ fn check_command_accepts_query_scope_option() {
             "README.md".to_string()
         ]
     );
-    assert!(parsed.option_args.is_empty());
+    assert!(parsed.options.is_empty());
 
     assert!(parse_check_command_args(&["-q".into(), "Question?".into(), "-s".into()]).is_err());
     assert!(

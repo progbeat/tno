@@ -9,7 +9,7 @@ use crate::check_query_command::run_check_query_command;
 use crate::check_reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
 };
-use crate::check_selection::{expectation_identities, parse_check_options_with_identities};
+use crate::check_selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check_types::{CheckRecord, CheckRunReport};
 use crate::check_validation::check_config_loads_plugins;
 use crate::cli::CommandError;
@@ -69,7 +69,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     // Check-specific options are parsed with the active config so selectors can
     // be resolved against expectation IDs.
     let options =
-        match parse_check_options_with_identities(&config, &identities, &command.option_args) {
+        match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
             Err(err) => {
                 return fail_check_before_selection(&mut diagnostic_log, None, false, 0, err)

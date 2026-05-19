@@ -247,11 +247,30 @@ pub(crate) struct CheckOptions {
     pub(crate) break_after_tokens: Option<u64>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RawCheckOptions {
+    pub(crate) check_all: bool,
+    pub(crate) ignore_cache: bool,
+    pub(crate) ignore_cooldown: bool,
+    pub(crate) break_after_tokens: Option<u64>,
+    pub(crate) selectors: Vec<OsString>,
+}
+
+impl RawCheckOptions {
+    pub(crate) fn is_empty(&self) -> bool {
+        !self.check_all
+            && !self.ignore_cache
+            && !self.ignore_cooldown
+            && self.break_after_tokens.is_none()
+            && self.selectors.is_empty()
+    }
+}
+
 pub(crate) struct CheckCommandArgs {
     pub(crate) config_path: PathBuf,
     pub(crate) query: Option<String>,
     pub(crate) query_scope: Vec<String>,
-    pub(crate) option_args: Vec<OsString>,
+    pub(crate) options: RawCheckOptions,
 }
 
 pub(crate) struct InterrogationResult {

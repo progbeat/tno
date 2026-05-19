@@ -60,6 +60,8 @@ fn check_options_accept_all_with_selected_selectors() {
     .is_err());
     assert!(parse_check_options(&config, &["--break-after-tokens".into()]).is_err());
     assert!(parse_check_options(&config, &["--break-after-tokens".into(), "0".into()]).is_err());
+
+    assert!(parse_check_options(&config, &["--all=true".into()]).is_err());
 }
 
 #[test]

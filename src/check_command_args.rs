@@ -1,64 +1,45 @@
+use crate::check_selection::{add_check_option_args, raw_check_options_from_matches};
 use crate::check_types::CheckCommandArgs;
 use crate::notes_cli::arg_to_string;
 use crate::scope::normalize_repo_path;
 use crate::CHECK_PATH;
+use clap::builder::OsStringValueParser;
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommandArgs, String> {
+    let matches = check_command_args_parser()
+        .try_get_matches_from(args)
+        .map_err(|err| err.to_string())?;
+
     let mut config_path = None;
-    let mut query = None;
-    let mut query_scope = Vec::new();
-    let mut option_args = Vec::new();
-    let mut index = 0;
-    while index < args.len() {
-        let arg = arg_to_string(&args[index])?;
-        if arg == "--config" || arg == "-c" {
-            index += 1;
-            let value = args
-                .get(index)
-                .ok_or_else(|| format!("{} requires a path", arg))?;
-            let value = arg_to_string(value)?;
-            set_check_config_path(&mut config_path, &value)?;
-        } else if let Some(value) = arg.strip_prefix("--config=") {
-            if value.is_empty() {
-                return Err("--config requires a path".to_string());
-            }
-            set_check_config_path(&mut config_path, value)?;
-        } else if arg == "-q" {
-            if query.is_some() {
-                return Err("duplicate -q".to_string());
-            }
-            index += 1;
-            let value = args
-                .get(index)
-                .ok_or_else(|| "-q requires a question".to_string())?;
+    if let Some(value) = matches.get_one::<OsString>("config") {
+        set_check_config_path(&mut config_path, &arg_to_string(value)?)?;
+    }
+
+    let query = match matches.get_one::<OsString>("query") {
+        Some(value) => {
             let value = arg_to_string(value)?;
             if value.trim().is_empty() {
                 return Err("-q question must not be empty".to_string());
             }
-            query = Some(value);
-        } else if arg == "--scope" || arg == "-s" {
-            index += 1;
-            let value = args
-                .get(index)
-                .ok_or_else(|| format!("{} requires a path", arg))?;
-            let value = arg_to_string(value)?;
-            query_scope.push(normalize_query_scope_path(&arg, &value)?);
-        } else if let Some(value) = arg.strip_prefix("--scope=") {
-            if value.is_empty() {
-                return Err("--scope requires a path".to_string());
-            }
-            query_scope.push(normalize_query_scope_path("--scope", value)?);
-        } else {
-            option_args.push(args[index].clone());
+            Some(value)
         }
-        index += 1;
+        None => None,
+    };
+
+    let mut query_scope = Vec::new();
+    for value in matched_os_values(&matches, "scope") {
+        let value = arg_to_string(&value)?;
+        query_scope.push(normalize_query_scope_path("--scope", &value)?);
     }
+    let options = raw_check_options_from_matches(&matches)?;
+
     if query.is_none() && !query_scope.is_empty() {
         return Err("canon check -s/--scope requires -q".to_string());
     }
-    if query.is_some() && !option_args.is_empty() {
+    if query.is_some() && !options.is_empty() {
         return Err(
             "canon check -q cannot be combined with expectation selectors, --all, or --ignore-cache"
                 .to_string(),
@@ -68,8 +49,38 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
         config_path: config_path.unwrap_or_else(|| PathBuf::from(CHECK_PATH)),
         query,
         query_scope,
-        option_args,
+        options,
     })
+}
+
+fn check_command_args_parser() -> Command {
+    let command = Command::new("check")
+        .no_binary_name(true)
+        .disable_help_flag(true)
+        .disable_version_flag(true)
+        .arg(check_value_arg("config").short('c').long("config"))
+        .arg(check_value_arg("query").short('q'))
+        .arg(
+            check_value_arg("scope")
+                .short('s')
+                .long("scope")
+                .action(ArgAction::Append),
+        );
+    add_check_option_args(command)
+}
+
+fn matched_os_values(matches: &ArgMatches, id: &str) -> Vec<OsString> {
+    matches
+        .get_many::<OsString>(id)
+        .map(|values| values.cloned().collect())
+        .unwrap_or_default()
+}
+
+fn check_value_arg(name: &'static str) -> Arg {
+    Arg::new(name)
+        .num_args(1)
+        .allow_hyphen_values(true)
+        .value_parser(OsStringValueParser::new())
 }
 
 fn set_check_config_path(config_path: &mut Option<PathBuf>, value: &str) -> Result<(), String> {
