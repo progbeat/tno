@@ -1,9 +1,7 @@
-use crate::git::git_path_from_raw_bytes;
 use crate::logging::append_runtime_log_event;
 use crate::project::command_output_trimmed;
 use crate::scope_hash::ScopeHashCache;
 use crate::staged_worktree_git::run_git_command;
-use crate::staged_worktree_hooks::copy_local_hook_metadata;
 use crate::staged_worktree_paths::create_snapshot_root;
 #[cfg(test)]
 pub(crate) use crate::staged_worktree_paths::snapshot_parent_outside_worktree;
@@ -64,12 +62,11 @@ impl Drop for StagedWorktreeView {
 fn materialize_staged_snapshot(
     root: &Path,
     snapshot_root: &Path,
-    scope_hash_cache: &mut ScopeHashCache,
+    _scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<(), String> {
-    initialize_snapshot_git_repo(root, snapshot_root, scope_hash_cache)?;
-    clear_snapshot_worktree(snapshot_root)?;
+    initialize_snapshot_git_repo(snapshot_root)?;
     checkout_staged_index(root, snapshot_root)?;
-    mark_staged_additions_intent_to_add(root, snapshot_root)?;
+    stage_snapshot_index(snapshot_root)?;
     validate_snapshot_contains_no_symlinks(snapshot_root)
 }
 
@@ -85,11 +82,7 @@ fn checkout_staged_index(root: &Path, snapshot_root: &Path) -> Result<(), String
     )
 }
 
-fn initialize_snapshot_git_repo(
-    root: &Path,
-    snapshot_root: &Path,
-    scope_hash_cache: &mut ScopeHashCache,
-) -> Result<(), String> {
+fn initialize_snapshot_git_repo(snapshot_root: &Path) -> Result<(), String> {
     let template = snapshot_root.join(".canon-empty-git-template");
     fs::create_dir(&template).map_err(|err| {
         format!(
@@ -116,15 +109,7 @@ fn initialize_snapshot_git_repo(
     ] {
         set_snapshot_git_config(snapshot_root, key, value)?;
     }
-
-    if !scope_hash_cache.git_has_head(root)? {
-        copy_local_hook_metadata(root, snapshot_root, scope_hash_cache)?;
-        return Ok(());
-    }
-
-    checkout_head_tree(root, snapshot_root)?;
-    commit_snapshot_baseline(snapshot_root)?;
-    copy_local_hook_metadata(root, snapshot_root, scope_hash_cache)
+    Ok(())
 }
 
 fn set_snapshot_git_config(snapshot_root: &Path, key: &str, value: &str) -> Result<(), String> {
@@ -136,33 +121,6 @@ fn set_snapshot_git_config(snapshot_root: &Path, key: &str, value: &str) -> Resu
         "git config",
         "failed to configure staged snapshot Git metadata",
     )
-}
-
-fn checkout_head_tree(root: &Path, snapshot_root: &Path) -> Result<(), String> {
-    let temp_index = snapshot_root.join(".git").join("canon-head.index");
-    let read_tree = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["read-tree", "HEAD"])
-        .env("GIT_INDEX_FILE", &temp_index)
-        .output()
-        .map_err(|err| format!("failed to run git read-tree: {}", err))?;
-    if !read_tree.status.success() {
-        let _ = fs::remove_file(&temp_index);
-        return Err(format!(
-            "failed to prepare staged snapshot Git baseline: {}",
-            command_output_trimmed(&read_tree.stderr, "git read-tree stderr")?
-        ));
-    }
-
-    let checkout = checkout_index_into_snapshot(
-        root,
-        snapshot_root,
-        Some(&temp_index),
-        "failed to materialize staged snapshot Git baseline",
-    );
-    let _ = fs::remove_file(&temp_index);
-    checkout
 }
 
 fn checkout_index_into_snapshot(
@@ -198,119 +156,15 @@ fn checkout_index_into_snapshot(
     Ok(())
 }
 
-fn commit_snapshot_baseline(snapshot_root: &Path) -> Result<(), String> {
+fn stage_snapshot_index(snapshot_root: &Path) -> Result<(), String> {
     run_git_command(
         Command::new("git")
             .arg("-C")
             .arg(snapshot_root)
-            .args(["add", "--all"]),
+            .args(["add", "--all", "--force"]),
         "git add",
-        "failed to stage snapshot Git baseline",
-    )?;
-    run_git_command(
-        Command::new("git").arg("-C").arg(snapshot_root).args([
-            "-c",
-            "user.name=Canon Snapshot",
-            "-c",
-            "user.email=canon@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "--quiet",
-            "--allow-empty",
-            "-m",
-            "canon snapshot baseline",
-        ]),
-        "git commit",
-        "failed to commit snapshot Git baseline",
+        "failed to stage snapshot Git index",
     )
-}
-
-fn clear_snapshot_worktree(snapshot_root: &Path) -> Result<(), String> {
-    for entry in fs::read_dir(snapshot_root).map_err(|err| {
-        format!(
-            "failed to read staged snapshot directory {}: {}",
-            snapshot_root.display(),
-            err
-        )
-    })? {
-        let entry = entry.map_err(|err| {
-            format!(
-                "failed to read staged snapshot directory {}: {}",
-                snapshot_root.display(),
-                err
-            )
-        })?;
-        if entry.file_name() == ".git" {
-            continue;
-        }
-        let path = entry.path();
-        let file_type = entry.file_type().map_err(|err| {
-            format!(
-                "failed to inspect staged snapshot entry {}: {}",
-                path.display(),
-                err
-            )
-        })?;
-        if file_type.is_dir() {
-            fs::remove_dir_all(&path)
-                .map_err(|err| format!("failed to remove {}: {}", path.display(), err))?;
-        } else {
-            fs::remove_file(&path)
-                .map_err(|err| format!("failed to remove {}: {}", path.display(), err))?;
-        }
-    }
-    Ok(())
-}
-
-fn mark_staged_additions_intent_to_add(root: &Path, snapshot_root: &Path) -> Result<(), String> {
-    let paths = staged_new_path_bytes(root)?;
-    if paths.is_empty() {
-        return Ok(());
-    }
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(snapshot_root)
-        .arg("--literal-pathspecs")
-        .args(["add", "-N", "-f", "--"]);
-    for path in paths {
-        command.arg(git_path_from_raw_bytes(&path)?);
-    }
-    run_git_command(
-        &mut command,
-        "git add",
-        "failed to mark staged additions in snapshot Git metadata",
-    )
-}
-
-fn staged_new_path_bytes(root: &Path) -> Result<Vec<Vec<u8>>, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args([
-            "diff",
-            "--cached",
-            "--name-only",
-            "--diff-filter=ACR",
-            "-z",
-            "--",
-        ])
-        .output()
-        .map_err(|err| format!("failed to run git diff: {}", err))?;
-    if !output.status.success() {
-        return Err(format!(
-            "failed to inspect staged additions: {}",
-            command_output_trimmed(&output.stderr, "git diff stderr")?
-        ));
-    }
-    let mut paths = Vec::new();
-    for path in output.stdout.split(|byte| *byte == 0) {
-        if !path.is_empty() {
-            paths.push(path.to_vec());
-        }
-    }
-    Ok(paths)
 }
 
 fn checkout_index_prefix(snapshot_root: &Path) -> Result<String, String> {

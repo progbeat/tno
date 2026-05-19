@@ -117,7 +117,7 @@ fn check_config_rejects_untracked_default_config() {
         .load_check_config(&root, Path::new(CHECK_PATH))
         .unwrap_err();
 
-    assert!(err.contains("failed to read staged .canon/check.yml"));
+    assert!(err.contains("No canon check config found at .canon/check.yml"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -300,7 +300,7 @@ fn check_config_staged_delete_does_not_fall_back_to_worktree() {
         .load_check_config(&root, Path::new(CHECK_PATH))
         .unwrap_err();
 
-    assert!(err.contains("failed to read staged .canon/check.yml"));
+    assert!(err.contains("No canon check config found at .canon/check.yml"));
     let _ = fs::remove_dir_all(root);
 }
 

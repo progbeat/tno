@@ -8,7 +8,10 @@ use crate::history_compaction::compact_history_temp_path;
 use crate::history_reuse::latest_history_scope_with_cache;
 use crate::logging::render_check_log_record;
 use crate::logging::DiagnosticLogWriter;
-use crate::scope::{is_denied_path_bytes, sanitize_scope_for_hash};
+use crate::scope::{
+    normalized_ignore_pattern, path_matches_pattern_bytes, sanitize_scope_for_hash,
+    MANDATORY_EVALUATOR_DENY_PATTERNS,
+};
 use crate::token_usage_types::TokenUsage;
 use serde_json::json;
 use std::io::Write;
@@ -47,7 +50,7 @@ pub(crate) fn apply_lazy_full_scope_reset(
             ],
         )
         .map_err(|err| err.to_string())?;
-    if let Err(error) = reset_non_selected_expectation_histories(root, &reset.expectations) {
+    if let Err(error) = set_non_selected_expectation_scopes_to_full(root, &reset.expectations) {
         diagnostic_log
             .write_event(
                 "error",
@@ -129,7 +132,7 @@ pub(crate) fn estimate_staged_project_size_tokens(
 ) -> Result<u64, String> {
     let staged_files = staged_tracked_files(root)?
         .into_iter()
-        .filter(|file| !is_denied_path_bytes(agent, &file.path))
+        .filter(|file| is_counted_project_size_path(agent, &file.path))
         .collect::<Vec<_>>();
     let object_ids = staged_files
         .iter()
@@ -149,6 +152,20 @@ pub(crate) fn estimate_staged_project_size_tokens(
         tokens = tokens.saturating_add(estimate_text_tokens(text));
     }
     Ok(tokens)
+}
+
+fn is_counted_project_size_path(agent: &AgentConfig, path: &[u8]) -> bool {
+    !matches_project_size_ignore(agent, path)
+}
+
+fn matches_project_size_ignore(agent: &AgentConfig, path: &[u8]) -> bool {
+    MANDATORY_EVALUATOR_DENY_PATTERNS
+        .iter()
+        .any(|pattern| path_matches_pattern_bytes(path, pattern.as_bytes()))
+        || agent.ignore.iter().any(|pattern| {
+            let pattern = normalized_ignore_pattern(pattern);
+            path_matches_pattern_bytes(path, pattern.as_bytes())
+        })
 }
 
 fn estimate_text_tokens(text: &str) -> u64 {
@@ -188,22 +205,30 @@ pub(crate) fn lazy_full_scope_reset_count(
     const RATIO_NUMERATOR: u128 = 5;
     const RATIO_DENOMINATOR: u128 = 100;
 
-    // The spec's 0.05 * total_tokens / project_size_tokens ratio is defined
-    // only when the project-size denominator is positive.
-    if project_size_tokens == 0 || candidate_count == 0 {
+    let ratio = (RATIO_NUMERATOR as f64 * total_tokens as f64)
+        / (RATIO_DENOMINATOR as f64 * project_size_tokens as f64);
+    let count = stochastic_round(ratio, seed);
+    std::cmp::min(count, candidate_count)
+}
+
+fn stochastic_round(value: f64, seed: u64) -> usize {
+    if value.is_nan() || value <= 0.0 {
         return 0;
     }
-    let numerator = (total_tokens as u128).saturating_mul(RATIO_NUMERATOR);
-    let denominator = (project_size_tokens as u128).saturating_mul(RATIO_DENOMINATOR);
-    let mut count = (numerator / denominator) as usize;
-    let remainder = numerator % denominator;
-    if remainder != 0 {
+    if value >= usize::MAX as f64 {
+        return usize::MAX;
+    }
+    let floor = value.floor();
+    let mut count = floor as usize;
+    let probability = value - floor;
+    if probability > 0.0 {
         let mut rng = ResetRng::new(seed);
-        if rng.next_bounded_u128(denominator) < remainder {
+        let draw = (rng.next_u64() as f64) / (u64::MAX as f64 + 1.0);
+        if draw < probability {
             count += 1;
         }
     }
-    std::cmp::min(count, candidate_count)
+    count
 }
 
 pub(crate) fn sample_reset_expectations(
@@ -225,26 +250,26 @@ pub(crate) fn sample_reset_expectations(
     sampled
 }
 
-pub(crate) fn reset_non_selected_expectation_histories(
+pub(crate) fn set_non_selected_expectation_scopes_to_full(
     root: &Path,
     expectations: &[SelectedExpectation],
 ) -> Result<(), String> {
     let mut history_cache = HistoryCache::new();
     for expectation in expectations {
-        // "set_scope(expectation, [\".\"])" is implemented by retiring newer
-        // narrowed answer records. That exposes an older full-scope seed, or no
-        // seed at all, without inventing a full-scope scopeTreeOid for a record
-        // that was actually answered under a narrower scope.
-        reset_expectation_history_to_full_scope_seed(root, expectation, &mut history_cache)?;
+        set_expectation_scope_to_full_for_next_check(root, expectation, &mut history_cache)?;
     }
     Ok(())
 }
 
-fn reset_expectation_history_to_full_scope_seed(
+fn set_expectation_scope_to_full_for_next_check(
     root: &Path,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
 ) -> Result<(), String> {
+    // `SelectedExpectation` does not store a mutable scope field. Canon's
+    // set_scope(expectation, ["."]) operation is persisted by removing newer
+    // narrowed answer records, which exposes an older full-scope seed or no
+    // reusable seed for the next `canon check`.
     let path = history_cache.path(root, expectation)?;
     if !path.exists() {
         return Ok(());

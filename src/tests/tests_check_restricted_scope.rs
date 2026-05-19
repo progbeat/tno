@@ -520,7 +520,7 @@ fn check_runner_does_not_widen_restricted_answer_mismatch() {
 }
 
 #[test]
-fn check_runner_rejects_restricted_scope_widening_without_full_scope_retry() {
+fn check_runner_retries_full_scope_for_restricted_answer_widening() {
     let root = git_project("check-restricted-widening");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -552,13 +552,13 @@ fn check_runner_rejects_restricted_scope_widening_without_full_scope_retry() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
-    assert!(records.records[0]
-        .evidence
-        .contains("widens enforced scope"));
-    assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
-    assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
+    assert_eq!(records.records[0].scope, vec!["."]);
+    assert_eq!(
+        runner.start_scopes,
+        vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
+    );
     let _ = fs::remove_dir_all(root);
 }
 

@@ -25,7 +25,7 @@ fn lazy_full_scope_reset_sets_only_sampled_narrowed_history_to_full_scope() {
     append_history_record(&root, &expectations[1], &narrowed_record).unwrap();
     let reset_history_path = history_path(&root, &expectations[1]).unwrap();
 
-    reset_non_selected_expectation_histories(&root, &[expectations[1].clone()]).unwrap();
+    set_non_selected_expectation_scopes_to_full(&root, &[expectations[1].clone()]).unwrap();
 
     assert_eq!(
         read_history_records(&root, &expectations[0]).unwrap().len(),
@@ -69,6 +69,7 @@ fn lazy_full_scope_reset_count_uses_token_ratio_and_candidate_cap() {
     assert_eq!(lazy_full_scope_reset_count(0, 10, 1, 5), 0);
     assert_eq!(lazy_full_scope_reset_count(400, 10, 1, 5), 2);
     assert_eq!(lazy_full_scope_reset_count(1_000, 10, 1, 3), 3);
+    assert_eq!(lazy_full_scope_reset_count(400, 0, 1, 5), 5);
 }
 
 #[test]
@@ -136,7 +137,7 @@ fn lazy_full_scope_reset_preserves_existing_full_scope_pass_when_resetting_narro
     narrowed_record.scope = narrowed_scope;
     append_history_record(&root, &expectation, &narrowed_record).unwrap();
 
-    reset_non_selected_expectation_histories(&root, std::slice::from_ref(&expectation)).unwrap();
+    set_non_selected_expectation_scopes_to_full(&root, std::slice::from_ref(&expectation)).unwrap();
 
     let records = read_history_records(&root, &expectation).unwrap();
     assert_eq!(records.len(), 1);
@@ -190,6 +191,41 @@ expectations:
 }
 
 #[test]
+fn project_size_estimate_excludes_agent_ignored_staged_text() {
+    let root = git_project("check-lazy-reset-ignored-size");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore:
+    - ignored/**
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    let baseline = estimate_staged_project_size_tokens(&root, &config.agent).unwrap();
+    fs::create_dir_all(root.join("ignored")).unwrap();
+    fs::write(root.join("ignored/large.txt"), "12345678 12345678").unwrap();
+    fs::write(root.join("visible.txt"), "12345678").unwrap();
+    let add = Command::new("git")
+        .args(["add", "ignored/large.txt", "visible.txt"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(add.status.success());
+
+    assert_eq!(
+        estimate_staged_project_size_tokens(&root, &config.agent).unwrap(),
+        baseline + 2
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 #[cfg(unix)]
 fn project_size_estimate_reads_staged_colon_prefixed_paths() {
     let root = git_project("check-lazy-reset-colon-path");
@@ -222,7 +258,7 @@ fn lazy_full_scope_reset_does_not_create_missing_history_files() {
     let expectation = check_options(&config, &[], false, true).selected[0].clone();
     let path = history_path(&root, &expectation).unwrap();
 
-    reset_non_selected_expectation_histories(&root, &[expectation]).unwrap();
+    set_non_selected_expectation_scopes_to_full(&root, &[expectation]).unwrap();
 
     assert!(!path.exists());
     let _ = fs::remove_dir_all(root);
@@ -257,7 +293,7 @@ expectations:
     append_history_record(&root, &expectation, &record).unwrap();
     let reset_history_path = history_path(&root, &expectation).unwrap();
 
-    reset_non_selected_expectation_histories(&root, std::slice::from_ref(&expectation)).unwrap();
+    set_non_selected_expectation_scopes_to_full(&root, std::slice::from_ref(&expectation)).unwrap();
 
     assert!(reset_history_path.exists());
     assert_eq!(read_history_records(&root, &expectation).unwrap().len(), 1);

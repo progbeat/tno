@@ -1,3 +1,4 @@
+use crate::fs_util::reject_symlink;
 use crate::logging_error::{log_io_error, DiagnosticLogResult};
 use crate::logging_fs::remove_file_if_exists;
 use std::fs;
@@ -84,6 +85,8 @@ fn diagnostic_log_lock_token() -> String {
 }
 
 fn diagnostic_log_lock_is_stale(path: &Path) -> DiagnosticLogResult<bool> {
+    reject_symlink(path)
+        .map_err(|message| log_io_error("inspect", path, io::Error::other(message)))?;
     let metadata = match path.metadata() {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),

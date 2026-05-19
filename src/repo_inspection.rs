@@ -6,6 +6,7 @@ use crate::config_types::{CheckConfig, RawExpectationItem};
 use crate::git::{
     git_path_bytes, read_git_blobs, resolve_git_path, staged_tracked_files, StagedTrackedFile,
 };
+use crate::CHECK_PATH;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -109,12 +110,9 @@ impl RepoInspectionCache {
     ) -> Result<String, String> {
         let raw_path = git_path_bytes(path)?;
         let contents = self.staged_blob_contents(root)?;
-        let content = contents.get(&raw_path).ok_or_else(|| {
-            format!(
-                "failed to read staged {}: path is not in the staged index",
-                path.display()
-            )
-        })?;
+        let content = contents
+            .get(&raw_path)
+            .ok_or_else(|| missing_staged_file_message(path))?;
         String::from_utf8(content.clone())
             .map_err(|_| format!("staged {} must be valid UTF-8", path.display()))
     }
@@ -194,4 +192,25 @@ impl RepoInspectionCache {
         self.included_expectations.insert(key, parsed.clone());
         parsed
     }
+}
+
+fn missing_staged_file_message(path: &Path) -> String {
+    if path == Path::new(CHECK_PATH) {
+        return format!(
+            "No canon check config found at {CHECK_PATH}\n\
+             ▷ If the human asked you to use any `canon-*` skill in this project, \
+             treat the missing config as permission to set up canon rather than asking \
+             for confirmation. Run `canon init`, inspect the current project enough to \
+             understand its purpose, public behavior, and important invariants, then \
+             draft a minimal `.canon/check.yml` that the human can grow over time. Use \
+             canon's own `.canon/check.yml` as a reference for structure and style: \
+             `https://raw.githubusercontent.com/progbeat/canon/main/.canon/check.yml`. \
+             Start with a few simple, objective expectations that protect important \
+             user-facing behavior."
+        );
+    }
+    format!(
+        "failed to read staged {}: path is not in the staged index",
+        path.display()
+    )
 }

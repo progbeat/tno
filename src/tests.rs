@@ -41,7 +41,7 @@ use crate::check_interrogation_state::{
 };
 use crate::check_lazy_reset::{
     estimate_staged_project_size_tokens, lazy_full_scope_reset_count, plan_lazy_full_scope_reset,
-    reset_non_selected_expectation_histories,
+    set_non_selected_expectation_scopes_to_full,
 };
 use crate::check_model_fallback::{
     interrogate_expectation_with_model_fallbacks, run_with_model_fallbacks,
@@ -109,6 +109,7 @@ use crate::evaluator_turn::{
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::fs_util::{ensure_dir, for_each_nonempty_line, replace_file_with_temp};
 use crate::gate::*;
+#[cfg(unix)]
 use crate::git::git_path_from_raw_bytes;
 use crate::git::resolve_git_path;
 use crate::hash::{expectation_id, fnv64_with_seed, full_scope, hash_120, hash_key};
@@ -182,11 +183,11 @@ use crate::token_usage_types::{
     reference_token_cost, ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
 };
 use crate::{
-    AGENTS_PATH, APP_SERVER_TURN_TIMEOUT_SECS, CHECK_PATH, DEFAULT_AGENTS_TEMPLATE,
-    DEFAULT_CHECK_TEMPLATE, DEFAULT_PRE_COMMIT_HOOK, EMPTY_EVIDENCE_OBSERVED, GIT_CANON_CACHE_DIR,
-    GIT_CANON_LOG_DIR, GIT_HOOKS_PATH, HISTORY_COMPACT_CHANCE_DENOMINATOR,
-    HISTORY_COMPACT_KEEP_RECORDS, MALFORMED_REVIEW_WARNING, OBSERVED_IDK, OBSERVED_MALFORMED,
-    PRE_COMMIT_HOOK_PATH, RESULT_FAIL, RESULT_PASS, UNPARSEABLE_OBSERVED,
+    AGENTS_PATH, APP_SERVER_TURN_TIMEOUT_SECS, CHECK_PATH, DEFAULT_CHECK_TEMPLATE,
+    DEFAULT_PRE_COMMIT_HOOK, EMPTY_EVIDENCE_OBSERVED, GIT_CANON_CACHE_DIR, GIT_CANON_LOG_DIR,
+    GIT_HOOKS_PATH, HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS,
+    MALFORMED_REVIEW_WARNING, OBSERVED_IDK, OBSERVED_MALFORMED, PRE_COMMIT_HOOK_PATH, RESULT_FAIL,
+    RESULT_PASS, UNPARSEABLE_OBSERVED,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

@@ -1,9 +1,61 @@
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
+#[cfg(test)]
 pub(crate) fn ensure_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|err| format!("failed to create {}: {}", path.display(), err))
+}
+
+pub(crate) fn ensure_dir_without_symlinks(path: &Path) -> Result<(), String> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
+            Component::RootDir => {
+                current.push(component.as_os_str());
+                continue;
+            }
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                return Err(format!(
+                    "refusing to create directory through parent component {}",
+                    path.display()
+                ));
+            }
+            Component::Normal(part) => current.push(part),
+        }
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(format!("refusing to use symlink {}", current.display()));
+                }
+                if !metadata.is_dir() {
+                    return Err(format!(
+                        "{} exists but is not a directory",
+                        current.display()
+                    ));
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => fs::create_dir(&current)
+                .map_err(|err| format!("failed to create {}: {}", current.display(), err))?,
+            Err(err) => {
+                return Err(format!("failed to inspect {}: {}", current.display(), err));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn reject_symlink(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(format!("refusing to use symlink {}", path.display()))
+        }
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("failed to inspect {}: {}", path.display(), err)),
+    }
 }
 
 pub(crate) fn for_each_nonempty_line(
@@ -49,7 +101,14 @@ pub(crate) fn write_temp_file_then_replace(
     path: &Path,
     write_content: impl FnOnce(&mut fs::File) -> Result<(), String>,
 ) -> Result<(), String> {
-    let mut file = fs::File::create(temp_path)
+    if let Some(parent) = path.parent() {
+        ensure_dir_without_symlinks(parent)?;
+    }
+    reject_symlink(path)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temp_path)
         .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
     write_content(&mut file)?;
     file.flush()

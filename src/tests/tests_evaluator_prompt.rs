@@ -70,6 +70,7 @@ expectations:
     assert!(instructions.contains("Correct answer: +5"));
     assert!(instructions.contains(response_format_block()));
     assert!(instructions.contains("project-relative refs enclosed in backticks"));
+    assert!(instructions.contains("Never include a path outside the enforced scope"));
     assert!(instructions.contains(answer_policy));
     assert!(instructions.contains("\"your dev instructions\" mean only this rendered evaluator"));
     assert!(instructions.contains("excludes repository agent-instruction file contents"));

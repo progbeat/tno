@@ -1,4 +1,4 @@
-use crate::fs_util::ensure_dir;
+use crate::fs_util::ensure_dir_without_symlinks;
 use crate::git::resolve_git_path;
 use crate::output::write_stdout_line;
 use crate::project_types::Config;
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) fn print_root(config: &Config) -> Result<(), String> {
-    ensure_dir(&config.root)?;
+    ensure_dir_without_symlinks(&config.root)?;
     write_stdout_line(&config.root.display().to_string())
 }
 

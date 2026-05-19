@@ -273,10 +273,10 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
 
         let record_scope = interrogation.record.scope.clone();
         // Interrogation finalization rejects evaluator-proposed widening before
-        // this point: non-idk widening becomes an unparseable review record,
-        // while restricted idk rejects the proposed scope and returns an
-        // enforced-scope non-answer so full-scope retry can decide whether the
-        // restricted context was insufficient.
+        // this point. Restricted widening becomes an enforced-scope `idk` so
+        // full-scope retry can decide whether the restricted context was
+        // insufficient; full-scope malformed/unparseable states remain review
+        // records.
         debug_assert!(scope_is_within(&record_scope, &enforced_scope));
         // Cache-spec narrowing verification applies only to verified answers.
         // Non-answer states (`idk`, `malformed`, unparseable) are never reusable
@@ -348,7 +348,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         }
         // Correct and incorrect parsed answers are reusable for every
         // expectation shape, including free-form exact strings. Human-review
-        // states such as idk, malformed, and rejected widened scopes are not
+        // states such as idk, malformed, and unparseable responses are not
         // written to history.
         if is_reusable_history_record(&interrogation.record) {
             run_try!(append_history_record_with_cache(

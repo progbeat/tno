@@ -50,7 +50,6 @@ pub(crate) fn render_evaluator_turn_input(input: &Value) -> Result<String, Strin
 pub(crate) fn print_help() -> Result<(), String> {
     write_stdout(
         "canon - AI linter for project expectations\n\n\
-Usage:\n  canon init\n  canon hook install\n  canon check [-c|--config <path>] [--all] [--ignore-cache] [expectation selectors...]\n  canon check -q <question> [-s|--scope <path>...]\n  canon gate [expectation selectors...]\n\n\
-Experimental thread notes:\n  canon | canon pwd\n  canon p|path <key>\n  canon r|read <key>\n  canon w|write <key> [text]\n  canon a|append <key> [text]\n  canon d|del|delete|rm <key>\n  canon rg|g <pattern> [rg args...]\n"
+Usage:\n  canon init\n  canon hook install\n  canon hook uninstall\n  canon check [-c|--config <path>] [--all] [--ignore-cache] [--ignore-cooldown] [expectation selectors...]\n  canon check -q <question> [-s|--scope <path>...]\n  canon gate [expectation selectors...]\n"
     )
 }

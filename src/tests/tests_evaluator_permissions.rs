@@ -61,6 +61,10 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
         .values()
         .all(|permission| permission != "write"));
     assert_eq!(config["history"]["persistence"], "none");
+    assert_eq!(config["include_environment_context"], json!(false));
+    assert_eq!(config["include_permissions_instructions"], json!(false));
+    assert_eq!(config["include_apps_instructions"], json!(false));
+    assert_eq!(config["project_doc_max_bytes"], json!(0));
     assert!(config.get("plugins").is_none());
 }
 
@@ -150,6 +154,18 @@ fn app_server_starts_with_plugins_disabled_by_default() {
     assert!(disabled
         .windows(2)
         .any(|pair| pair == ["-c", "model_reasoning_effort=\"medium\""]));
+    assert!(disabled
+        .windows(2)
+        .any(|pair| pair == ["-c", "include_environment_context=false"]));
+    assert!(disabled
+        .windows(2)
+        .any(|pair| pair == ["-c", "include_permissions_instructions=false"]));
+    assert!(disabled
+        .windows(2)
+        .any(|pair| pair == ["-c", "include_apps_instructions=false"]));
+    assert!(disabled
+        .windows(2)
+        .any(|pair| pair == ["-c", "project_doc_max_bytes=0"]));
     let filesystem_arg = disabled
         .windows(2)
         .find_map(|pair| {

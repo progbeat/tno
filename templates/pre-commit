@@ -6,11 +6,7 @@ cd "$repo_root"
 
 canon_bin="${CANON_BIN:-}"
 if [ -z "$canon_bin" ]; then
-  if [ -x "$repo_root/target/debug/canon" ] &&
-    [ -f "$repo_root/.codex-plugin/plugin.json" ] &&
-    grep -q '"name"[[:space:]]*:[[:space:]]*"canon"' "$repo_root/.codex-plugin/plugin.json"; then
-    canon_bin="$repo_root/target/debug/canon"
-  elif command -v canon >/dev/null 2>&1; then
+  if command -v canon >/dev/null 2>&1; then
     canon_bin="$(command -v canon)"
   fi
 fi

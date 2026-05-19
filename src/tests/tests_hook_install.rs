@@ -16,6 +16,8 @@ fn hook_install_creates_reusable_pre_commit_hook() {
         DEFAULT_PRE_COMMIT_HOOK.matches("canon gate failed").count(),
         1
     );
+    assert!(!DEFAULT_PRE_COMMIT_HOOK.contains("target/debug/canon"));
+    assert!(!DEFAULT_PRE_COMMIT_HOOK.contains(".codex-plugin"));
     assert!(!DEFAULT_PRE_COMMIT_HOOK.contains("run canon check before committing"));
     #[cfg(unix)]
     {
@@ -43,7 +45,7 @@ fn hook_install_refuses_non_exact_existing_canon_pre_commit_hook() {
 
     let err = run_hook_install(&root).unwrap_err();
 
-    assert!(err.contains("already exists with different content"));
+    assert!(err.contains("Can't safely install pre-commit hook"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -78,7 +80,7 @@ fn hook_install_refuses_nonstandard_git_hooks_path() {
 
     let err = run_hook_install(&root).unwrap_err();
 
-    assert!(err.contains("core.hooksPath is already set to .githooks"));
+    assert!(err.contains("Can't safely install pre-commit hook"));
     assert!(!root.join(PRE_COMMIT_HOOK_PATH).exists());
     let _ = fs::remove_dir_all(root);
 }
@@ -91,8 +93,48 @@ fn hook_install_refuses_different_existing_pre_commit_hook() {
     fs::write(&hook_path, "custom hook").unwrap();
 
     let err = run_hook_install(&root).unwrap_err();
-    assert!(err.contains("already exists with different content"));
+    assert!(err.contains("Can't safely install pre-commit hook"));
     assert!(!root.join(CHECK_PATH).exists());
     assert!(!root.join(".gitignore").exists());
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_uninstall_removes_reusable_hook_and_unsets_hooks_path() {
+    let root = git_project("hook-uninstall");
+    run_hook_install(&root).unwrap();
+
+    run_hook_uninstall(&root).unwrap();
+
+    assert!(!root.join(PRE_COMMIT_HOOK_PATH).exists());
+    assert_eq!(current_git_hooks_path_for_worktree(&root).unwrap(), None);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn hook_install_refuses_symlinked_reusable_pre_commit_hook() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let root = git_project("hook-install-symlink");
+    let target_root = temp_home("hook-install-symlink-target");
+    let target = target_root.join("outside-pre-commit");
+    fs::write(&target, DEFAULT_PRE_COMMIT_HOOK).unwrap();
+    let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
+    fs::create_dir_all(hook_path.parent().unwrap()).unwrap();
+    symlink(&target, &hook_path).unwrap();
+
+    let err = run_hook_install(&root).unwrap_err();
+
+    assert!(err.contains("refusing to chmod symlink"));
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        DEFAULT_PRE_COMMIT_HOOK
+    );
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o111,
+        0
+    );
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(target_root);
 }

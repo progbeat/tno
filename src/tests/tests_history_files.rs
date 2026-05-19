@@ -140,6 +140,61 @@ fn append_history_record_updates_in_memory_cache() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[cfg(unix)]
+#[test]
+fn append_history_record_refuses_symlinked_history_file() {
+    use std::os::unix::fs::symlink;
+
+    let root = git_project("history-append-symlink");
+    let outside = temp_home("history-append-symlink-target");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+    let path = history_path(&root, &expectation).unwrap();
+    ensure_dir(path.parent().unwrap()).unwrap();
+    let target = outside.join("target.txt");
+    fs::write(&target, "outside\n").unwrap();
+    symlink(&target, &path).unwrap();
+    let record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+    );
+
+    let err = append_history_record(&root, &expectation, &record).unwrap_err();
+
+    assert!(err.contains("refusing to use symlink"), "{err}");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "outside\n");
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(outside);
+}
+
+#[cfg(unix)]
+#[test]
+fn latest_non_pass_record_refuses_symlinked_state_file() {
+    use std::os::unix::fs::symlink;
+
+    let root = git_project("latest-non-pass-symlink");
+    let outside = temp_home("latest-non-pass-symlink-target");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+    let history = history_path(&root, &expectation).unwrap();
+    let path = history.parent().unwrap().join("latest-non-pass.json");
+    ensure_dir(path.parent().unwrap()).unwrap();
+    let target = outside.join("target.txt");
+    fs::write(&target, "outside\n").unwrap();
+    symlink(&target, &path).unwrap();
+    let record = sample_record(1, "fail");
+
+    let err = write_latest_non_pass_record(&root, &expectation, &record).unwrap_err();
+
+    assert!(err.contains("refusing to use symlink"), "{err}");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "outside\n");
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(outside);
+}
+
 #[test]
 fn history_compaction_uses_one_in_fifteen_chance() {
     assert!(should_compact_history_for_seed(0));

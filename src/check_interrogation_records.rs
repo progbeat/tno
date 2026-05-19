@@ -96,6 +96,7 @@ fn finalize_parsed_answer(
 ) -> Result<FinalizedParsedAnswer, EvaluatorError> {
     let mut response = enforce_response_scope(response, enforced_scope);
     response = normalize_empty_evidence_response(response, enforced_scope);
+    response = reject_absent_response_scope(runtime, state, enforced_scope, response)?;
     if response.answer == UNPARSEABLE_OBSERVED {
         response.scope = enforced_scope.to_vec();
     }
@@ -110,6 +111,32 @@ fn finalize_parsed_answer(
     })
 }
 
+fn reject_absent_response_scope(
+    runtime: &CheckRuntime<'_>,
+    state: &mut InterrogationState,
+    enforced_scope: &[String],
+    response: ParsedAnswer,
+) -> Result<ParsedAnswer, EvaluatorError> {
+    if response.answer == UNPARSEABLE_OBSERVED {
+        return Ok(response);
+    }
+    let missing = state
+        .scope_hash_cache
+        .missing_staged_scope_paths(runtime.root, &response.scope)?;
+    if missing.is_empty() {
+        return Ok(response);
+    }
+    let message = format!(
+        "evaluator response scope entries are absent from the staged snapshot: {}",
+        missing.join(", ")
+    );
+    Ok(ParsedAnswer {
+        answer: UNPARSEABLE_OBSERVED.to_string(),
+        evidence: response_evidence_with_message(&response.evidence, &message),
+        scope: enforced_scope.to_vec(),
+    })
+}
+
 pub(crate) fn enforce_response_scope(
     response: ParsedAnswer,
     enforced_scope: &[String],
@@ -117,14 +144,14 @@ pub(crate) fn enforce_response_scope(
     if response.answer == UNPARSEABLE_OBSERVED || scope_is_within(&response.scope, enforced_scope) {
         return response;
     }
-    if response.answer == OBSERVED_IDK {
-        // Reject the evaluator-proposed widened scope, but keep the restricted
-        // `idk` non-answer so the caller can perform the interrogation-policy
-        // full-scope retry instead of treating the rejected scope as reusable
-        // cache narrowing history.
+    if enforced_scope != full_scope() {
+        // Reject the evaluator-proposed widened scope, but turn the restricted
+        // response into an `idk` non-answer so the caller can perform the
+        // interrogation-policy full-scope retry instead of converting a scope
+        // formatting mistake into a terminal review record.
         let evidence = rejected_widened_scope_evidence(&response, enforced_scope);
         return ParsedAnswer {
-            answer: response.answer,
+            answer: OBSERVED_IDK.to_string(),
             evidence,
             scope: enforced_scope.to_vec(),
         };
@@ -138,11 +165,7 @@ pub(crate) fn enforce_response_scope(
 
 fn rejected_widened_scope_evidence(response: &ParsedAnswer, enforced_scope: &[String]) -> String {
     let message = rejected_widened_scope_message(&response.scope, enforced_scope);
-    if response.evidence.trim().is_empty() {
-        message
-    } else {
-        format!("{}\n{}", response.evidence, message)
-    }
+    response_evidence_with_message(&response.evidence, &message)
 }
 
 fn rejected_widened_scope_message(response_scope: &[String], enforced_scope: &[String]) -> String {
@@ -150,6 +173,14 @@ fn rejected_widened_scope_message(response_scope: &[String], enforced_scope: &[S
         "evaluator response scope {:?} widens enforced scope {:?}",
         response_scope, enforced_scope
     )
+}
+
+fn response_evidence_with_message(evidence: &str, message: &str) -> String {
+    if evidence.trim().is_empty() {
+        message.to_string()
+    } else {
+        format!("{}\n{}", evidence, message)
+    }
 }
 
 fn normalize_empty_evidence_response(

@@ -4,17 +4,14 @@
 [![Audit Status](https://github.com/progbeat/canon/actions/workflows/audit.yml/badge.svg)](https://github.com/progbeat/canon/actions/workflows/audit.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-AI agents can move fast, but they can also blur the original goal. The painful part is not just that they may rewrite working code or adjust tests, but that everything can still look “green” while the original intent is no longer protected, turning development into chasing regressions instead of validating progress.
-
-With `canon`, the human writes down what must stay true. Then the agent can be
-asked to fix the project and commit. Chasing the regressions becomes the
-agent's job.
+When an AI agent misses the mark, there is always a human expectation it
+violated. `canon` lets the human write those expectations down and make AI
+agents iterate until all of them are satisfied.
 
 That is how this project was built: no human-written implementation code,
 just Codex working against `canon` until the repo satisfied its own canon.
 
-See the canon for canon in [`.canon/check.yml`](.canon/check.yml).
-For terminology used by the CLI and docs, see the [Glossary](docs/GLOSSARY.md).
+See canon's own canon in [`.canon/check.yml`](.canon/check.yml).
 
 ## Install
 
@@ -24,74 +21,25 @@ Requires Git, Rust/Cargo, and the Codex CLI.
 cargo install --git https://github.com/progbeat/canon
 ```
 
-Cargo is the recommended install path on macOS, Linux, and Windows. Release
-binaries are planned.
+Cargo is the recommended install path on macOS, Linux, and Windows. Prebuilt
+release binaries are not published yet.
 
-## Quick Start
+To install the Codex skills, ask Codex:
 
-Initialize canon in your project's Git repository:
-
-```sh
-canon init
+```text
+Install the Codex skills from https://github.com/progbeat/canon/tree/main/skills.
 ```
 
-Edit `.canon/check.yml`, stage the project state you want checked, then run:
-
-```sh
-git add README.md src
-canon check
-```
-
-After `canon check` has recorded passing expectations for the staged project,
-install the pre-commit hook:
-
-```sh
-canon hook install
-```
-
-`canon hook install` installs a pre-commit hook that runs `canon gate`, blocking
-staged changes that turn a previously passing canon expectation into a failing
-one.
+Restart Codex after installing the skills.
 
 ## Workflow
 
-Do not try to write the whole canon upfront. Grow it from real misses.
+1. Ask Codex to implement a feature using `$canon-warden`.
 
-1. Notice that something important is missing, regressed, or almost slipped
-   through. For example, there is no Undo button, but the project should have
-   one.
-2. Add the expectation to `.canon/check.yml` with the answer the project should
-   satisfy:
+2. If something is off, add the violated expectation to `.canon/check.yml`,
+   then ask Codex to fix the project against the updated canon.
 
-   ```yaml
-   expectations:
-     - q: "Is there an Undo button?"
-       a: "yes"
-   ```
-
-3. Ask the agent to fix the project and commit.
-
-The agent runs `canon check` while working. When a check fails, `canon check`
-prints the observed answer and evidence, so the next fix has a concrete target
-instead of just a red light.
-
-> [!WARNING]
-> `canon check` evaluates staged Git-tracked content from a temporary snapshot.
-> Unstaged and untracked working tree files are not part of that evaluator
-> snapshot.
-
-You can also add a generator item to `.canon/check.yml` so `canon check`
-expands Markdown specs under `.canon/specs` into additional expectations.
-
-Keep `.canon/**` policy changes separate from implementation changes.
-`canon gate` rejects staged changes that mix them.
-
-For commits that clearly cannot affect canon expectations, such as a TODO or
-`.gitignore` change, bypass the hook deliberately:
-
-```sh
-git commit -n -m "Update TODO"
-```
+3. Iterate.
 
 ## How It Scales
 
@@ -118,18 +66,17 @@ Create `.canon/check.yml`.
 canon check
 ```
 
-Run all expectations from `.canon/check.yml`.
+Evaluate configured expectations against the staged project state.
 
 ```sh
 canon check a7F K9m
 ```
 
-Run selected expectations by unique ID prefix. Full expectation IDs are also
-accepted.
+Run selected expectations by unique ID prefix.
 
 ```sh
-canon check -q "Does the app still have Undo?"
-canon check -q "Does the app still have Undo?" -s src/app
+canon check -q "Can you find any practically exploitable security vulnerability?"
+canon check -q "Does README.md sound clear?" -s README.md
 ```
 
 Ask one uncached ad-hoc question. Add one or more `-s`/`--scope` paths to
@@ -137,26 +84,33 @@ debug the same question under a narrower evaluator scope.
 
 ```sh
 canon check --ignore-cache
+canon check --ignore-cooldown
 canon check --all
 canon check --config other-check.yml
 canon check -c other-check.yml
 ```
 
-Force fresh evaluation, continue after a failed expectation, or use another config.
-By default, `canon check` stops after the first final non-pass result.
+Bypass exact cached answer reuse, recheck fresh cooldown passes, continue after a
+failed expectation, or use another config. By default, `canon check` stops after
+the first final non-pass result.
 
 ```sh
 canon gate
-canon gate a7F K9m
 ```
 
-Run the pre-commit gate manually for all or selected expectations.
+Run the pre-commit gate manually.
 
 ```sh
 canon hook install
 ```
 
 Install the local pre-commit hook.
+
+```sh
+canon hook uninstall
+```
+
+Remove the local pre-commit hook.
 
 ## License
 

@@ -1,4 +1,4 @@
-use crate::fs_util::{crossed_size_compaction_bucket, ensure_dir};
+use crate::fs_util::{crossed_size_compaction_bucket, ensure_dir_without_symlinks, reject_symlink};
 use crate::hash::hash_key;
 use crate::notes_header::{
     header, initial_content, normalize_body, validate_note_key, verify_note_key,
@@ -125,6 +125,7 @@ fn upsert_note_index_after_create(config: &Config, key: &str, note: &Note) -> Re
 }
 
 fn append_note_log_record(path: &std::path::Path, record: &NoteRecord) -> Result<u64, String> {
+    reject_symlink(path)?;
     let previous_size = fs::metadata(path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
@@ -155,6 +156,7 @@ fn write_compacted_note_record(note: &Note, record: NoteRecord) -> Result<(), St
 }
 
 fn maybe_compact_note_log(note: &Note, previous_size: u64) -> Result<(), String> {
+    reject_symlink(&note.path)?;
     let size = fs::metadata(&note.path)
         .map_err(|err| format!("failed to inspect {}: {}", note.path.display(), err))?
         .len();
@@ -290,7 +292,7 @@ pub(crate) fn delete_note(config: &Config, key: &str) -> Result<(), String> {
 }
 
 fn writable_note_state(config: &Config, key: &str) -> Result<(Note, bool), String> {
-    ensure_dir(&config.root)?;
+    ensure_dir_without_symlinks(&config.root)?;
     note_existing_state(config, key)
 }
 
@@ -298,6 +300,7 @@ fn read_note_data<T>(
     note: &Note,
     read: impl FnOnce(&std::path::Path) -> std::io::Result<T>,
 ) -> Result<T, String> {
+    reject_symlink(&note.path)?;
     read(&note.path).map_err(|err| format!("failed to read {}: {}", note.path.display(), err))
 }
 

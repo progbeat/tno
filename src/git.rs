@@ -1,4 +1,5 @@
 use crate::project::{command_output_trimmed, path_from_git_stdout};
+#[cfg(all(test, unix))]
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -196,16 +197,9 @@ pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
         .to_vec())
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 pub(crate) fn git_path_from_raw_bytes(path: &[u8]) -> Result<OsString, String> {
     use std::os::unix::ffi::OsStrExt;
 
     Ok(std::ffi::OsStr::from_bytes(path).to_os_string())
-}
-
-#[cfg(not(unix))]
-pub(crate) fn git_path_from_raw_bytes(path: &[u8]) -> Result<OsString, String> {
-    String::from_utf8(path.to_vec())
-        .map(OsString::from)
-        .map_err(|_| "git path must be valid UTF-8 on this platform".to_string())
 }

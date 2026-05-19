@@ -1,5 +1,5 @@
 use crate::check_types::{CheckRecord, SelectedExpectation};
-use crate::fs_util::ensure_dir;
+use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink};
 use crate::history::{read_history_records_from_path, HistoryCache};
 use crate::history_compaction::{compact_history, should_compact_history};
 use crate::logging::{render_check_log_record, DiagnosticLogError};
@@ -41,7 +41,7 @@ fn append_history_record_with_cache_inner(
 ) -> Result<(), HistoryAppendError> {
     let path = history_cache.path(root, expectation)?;
     if let Some(parent) = path.parent() {
-        ensure_dir(parent)?;
+        ensure_dir_without_symlinks(parent)?;
     }
     let mut file = open_history_append_file(&path)?;
     let line = render_check_log_record(record)?;
@@ -73,6 +73,8 @@ fn append_history_record_with_cache_inner(
 }
 
 fn open_history_append_file(path: &Path) -> Result<fs::File, PathIoError> {
+    reject_symlink(path)
+        .map_err(|message| PathIoError::new("inspect", path, std::io::Error::other(message)))?;
     fs::OpenOptions::new()
         .create(true)
         .append(true)

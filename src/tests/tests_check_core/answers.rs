@@ -64,8 +64,8 @@ expectations:
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[&answer(
         "Rust",
-        "Cargo.toml declares a Rust crate",
-        &["Cargo.toml"],
+        "README.md is a staged fixture path for this exact-string answer test",
+        &["README.md"],
     )]);
 
     let records =
@@ -104,7 +104,7 @@ expectations:
     let mut runner = FakeRunner::new(&[&answer(
         "Python",
         "The evaluator returned a parsed single-line exact-string answer",
-        &["Cargo.toml"],
+        &["README.md"],
     )]);
 
     let records =
@@ -119,5 +119,41 @@ expectations:
             .len(),
         1
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_reviews_reserved_tokens_for_free_form_exact_answers() {
+    let root = git_project("check-free-form-answer-reserved-token");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: Answer from files only.
+  ignore:
+    - "target/**"
+  plugins: []
+expectations:
+  - q: "What is this project implemented in?"
+    a: "Rust"
+"#,
+    )
+    .unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let mut runner = FakeRunner::new(&[&answer(
+        "malformed",
+        "The evaluator marked the question as malformed",
+        &["."],
+    )]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, "malformed");
+    assert!(record_requires_human_review(&records.records[0]));
+    assert!(read_history_records(&root, &options.selected[0])
+        .unwrap()
+        .is_empty());
     let _ = fs::remove_dir_all(root);
 }

@@ -1,13 +1,11 @@
 use crate::config_types::AgentConfig;
-use crate::git::{git_head_tree_exists, resolve_git_path};
+use crate::git::git_head_tree_exists;
 use crate::hash::full_scope;
 use crate::project::command_output_trimmed;
 use crate::scope::{sanitize_scope_for_hash, scope_contains};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::collections::BTreeMap;
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -26,18 +24,6 @@ pub(crate) struct ScopeHashCache {
     gate_head_all_entries: BTreeMap<PathBuf, Option<Vec<String>>>,
     head_exists: BTreeMap<PathBuf, bool>,
     object_hash_algorithms: BTreeMap<PathBuf, GitObjectHashAlgorithm>,
-    // Staged scope tree IDs intentionally use only tracked staged Git entries.
-    // Local Git files are still cached here because staged snapshot creation
-    // copies hook metadata, but they are not part of scopeTreeOid cache keys.
-    local_git_files: BTreeMap<LocalGitFileCacheKey, Result<Option<LocalGitFileSnapshot>, String>>,
-}
-
-type LocalGitFileCacheKey = (PathBuf, String);
-
-#[derive(Clone)]
-pub(crate) struct LocalGitFileSnapshot {
-    pub(crate) content: Vec<u8>,
-    pub(crate) permissions: fs::Permissions,
 }
 
 impl ScopeHashCache {
@@ -53,6 +39,26 @@ impl ScopeHashCache {
     ) -> Result<String, String> {
         self.staged_scope_hash_option(root, agent, scope)?
             .ok_or("failed to hash staged scope".to_string())
+    }
+
+    pub(crate) fn missing_staged_scope_paths(
+        &mut self,
+        root: &Path,
+        scope: &[String],
+    ) -> Result<Vec<String>, String> {
+        let scope = sanitize_scope_for_hash(scope)?;
+        if scope == full_scope() {
+            return Ok(Vec::new());
+        }
+        let entries = self.staged_all_scope_entries(root)?;
+        Ok(scope
+            .into_iter()
+            .filter(|base| {
+                !entries
+                    .iter()
+                    .any(|entry| scope_contains(base, scope_entry_from_normalized_entry(entry)))
+            })
+            .collect())
     }
 
     fn staged_scope_hash_option(
@@ -195,32 +201,6 @@ impl ScopeHashCache {
         self.object_hash_algorithms
             .insert(root.to_path_buf(), algorithm);
         Ok(algorithm)
-    }
-
-    pub(crate) fn local_git_file_snapshot(
-        &mut self,
-        root: &Path,
-        git_path: &str,
-    ) -> Result<Option<LocalGitFileSnapshot>, String> {
-        let key = (root.to_path_buf(), git_path.to_string());
-        if let Some(cached) = self.local_git_files.get(&key) {
-            return cached.clone();
-        }
-        let path = resolve_git_path(root, git_path)?;
-        let snapshot = match fs::read(&path) {
-            Ok(content) => {
-                let metadata = fs::metadata(&path)
-                    .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
-                Ok(Some(LocalGitFileSnapshot {
-                    content,
-                    permissions: metadata.permissions(),
-                }))
-            }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(format!("failed to read {}: {}", path.display(), err)),
-        };
-        self.local_git_files.insert(key, snapshot.clone());
-        snapshot
     }
 }
 

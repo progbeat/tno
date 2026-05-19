@@ -140,7 +140,15 @@ pub(crate) fn evaluator_base_config(
             Value::String(reasoning_effort.to_string()),
         );
     }
+    insert_evaluator_context_isolation_config(&mut config);
     Value::Object(config)
+}
+
+fn insert_evaluator_context_isolation_config(config: &mut Map<String, Value>) {
+    config.insert("include_environment_context".to_string(), json!(false));
+    config.insert("include_permissions_instructions".to_string(), json!(false));
+    config.insert("include_apps_instructions".to_string(), json!(false));
+    config.insert("project_doc_max_bytes".to_string(), json!(0));
 }
 
 pub(crate) fn evaluator_runtime_permissions() -> Vec<(String, String)> {
@@ -210,12 +218,20 @@ pub(crate) fn app_server_startup_config_args(
         );
     }
     push_config_arg(&mut args, "permissions.canon_check.network.enabled=false");
+    push_evaluator_context_isolation_args(&mut args);
     push_config_arg(&mut args, &app_server_startup_filesystem_arg(agent));
     push_config_arg(
         &mut args,
         &thread_reuse_carryover_token_target_arg(&thread_reuse),
     );
     Ok(args)
+}
+
+fn push_evaluator_context_isolation_args(args: &mut Vec<String>) {
+    push_config_arg(args, "include_environment_context=false");
+    push_config_arg(args, "include_permissions_instructions=false");
+    push_config_arg(args, "include_apps_instructions=false");
+    push_config_arg(args, "project_doc_max_bytes=0");
 }
 
 pub(crate) fn thread_reuse_carryover_token_target_arg(config: &ThreadReuseConfig) -> String {

@@ -1,3 +1,4 @@
+use crate::fs_util::reject_symlink;
 use crate::logging_config::{active_log_max_bytes, diagnostic_log_files};
 use crate::logging_error::{
     log_io_error, log_rename_error, DiagnosticLogError, DiagnosticLogResult,
@@ -9,6 +10,8 @@ use std::io::{self, Write};
 use std::path::Path;
 
 pub(crate) fn open_runtime_log_file(path: &Path) -> DiagnosticLogResult<fs::File> {
+    reject_symlink(path)
+        .map_err(|message| log_io_error("inspect", path, io::Error::other(message)))?;
     fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -49,6 +52,8 @@ pub(crate) fn rotate_diagnostic_logs_with_config(
 }
 
 pub(crate) fn active_log_size(path: &Path) -> DiagnosticLogResult<u64> {
+    reject_symlink(path)
+        .map_err(|message| log_io_error("inspect", path, io::Error::other(message)))?;
     match path.metadata() {
         Ok(metadata) => Ok(metadata.len()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(0),
@@ -103,6 +108,8 @@ fn diagnostic_log_dir_size(
     let mut total = 0u64;
     for file_name in diagnostic_log_files(config)? {
         let path = log_dir.join(file_name);
+        reject_symlink(&path)
+            .map_err(|message| log_io_error("inspect", &path, io::Error::other(message)))?;
         let size = match path.metadata() {
             Ok(metadata) => metadata.len(),
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,

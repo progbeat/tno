@@ -81,10 +81,9 @@ impl std::fmt::Display for CommandError {
                 formatter.write_str("pwd does not accept arguments")
             }
             CommandError::UnknownOption(option) => write!(formatter, "unknown option: {option}"),
-            CommandError::UnknownCommand(command) => write!(
-                formatter,
-                "unknown command: {command} (use `canon p <key>` to print a note path)"
-            ),
+            CommandError::UnknownCommand(command) => {
+                write!(formatter, "unknown command: {command}")
+            }
             CommandError::CheckFailed => formatter.write_str("canon check failed"),
             CommandError::GateFailed => formatter.write_str("canon gate failed"),
         }
@@ -97,7 +96,7 @@ pub(crate) fn main() {
             // `run` returns a CommandError only as the terminal result of the
             // command path. Once that final stderr piece is computed, write it
             // through the flushing output helper before exiting.
-            let _ = write_stderr_line(&format!("canon: {}", err));
+            let _ = write_stderr_line(&format!("Error: {}", err));
         }
         process::exit(1);
     }

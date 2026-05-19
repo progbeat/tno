@@ -10,6 +10,13 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+// This module owns shared check data types and answer-state classification only.
+// It is not the whole interrogation policy: response key order is enforced in
+// evaluator_json.rs, per-turn record finalization is in evaluator_turn.rs,
+// thread reuse is in check_interrogation.rs, and retry/narrowing/history
+// orchestration is in check.rs and check_interrogation_records.rs. A verdict on
+// the full interrogation policy cannot be made from this file in isolation.
+
 pub(crate) fn contains_line_break(value: &str) -> bool {
     value.chars().any(is_line_break_char)
 }
@@ -74,11 +81,11 @@ impl ObservedAnswerState {
         if state != ObservedAnswerState::Answer {
             return state;
         }
-        // The JSON parser remains vocabulary-neutral because only the expectation
-        // tells us whether the answer should be yes/no, an option token, or a
-        // free-form exact string. Enforce the closed vocabularies here; free-form
-        // expectations still accept any parsed single-line answer for exact
-        // pass/fail comparison.
+        // Reserved non-answer tokens are classified above before considering the
+        // expectation shape, so even free-form exact-string expectations never
+        // reuse `idk`, `malformed`, unparseable, or empty-evidence responses as
+        // ordinary exact answers. The expectation only decides which remaining
+        // single-line answer vocabulary is valid for pass/fail comparison.
         if is_yes_no_token(expected) {
             if is_yes_no_token(observed) {
                 ObservedAnswerState::Answer

@@ -101,6 +101,7 @@ pub(crate) fn is_denied_path(agent: &AgentConfig, path: &str) -> bool {
         .any(|pattern| path_matches_pattern(path, pattern))
 }
 
+#[cfg(test)]
 pub(crate) fn is_denied_path_bytes(agent: &AgentConfig, path: &[u8]) -> bool {
     effective_ignore_patterns(agent)
         .iter()
@@ -111,7 +112,7 @@ pub(crate) fn path_matches_pattern(path: &str, pattern: &str) -> bool {
     path_matches_pattern_bytes(path.as_bytes(), pattern.as_bytes())
 }
 
-fn path_matches_pattern_bytes(path: &[u8], pattern: &[u8]) -> bool {
+pub(crate) fn path_matches_pattern_bytes(path: &[u8], pattern: &[u8]) -> bool {
     let path = trim_dot_slash_bytes(path);
     let pattern = trim_dot_slash_bytes(pattern);
     if path == pattern {

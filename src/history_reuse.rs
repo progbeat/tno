@@ -122,9 +122,13 @@ pub(crate) fn latest_history_scope_with_cache(
 ) -> Result<Option<Vec<String>>, String> {
     // This returns only an enforced-scope seed for a fresh interrogation. It is
     // not a cached check result and does not let callers skip evaluator work.
-    // The Interrogation Policy defines this seed as the latest answer-history
-    // scope, regardless of whether that answer still matches the current staged
-    // tree for cache reuse.
+    // The Interrogation Policy's "latest accepted scope" means the latest
+    // reusable answer-history scope, not the latest passing scope. Verified
+    // correct and incorrect answers both have accepted scopes; non-answer review
+    // states such as `idk`, `malformed`, and unparseable responses do not.
+    // This is only the starting scope for a fresh interrogation, regardless of
+    // whether that old answer still matches the current staged tree for cache
+    // reuse.
     scan_latest_history_records(root, expectation, history_cache, |record| {
         let Some(scope) = sanitized_reusable_history_scope(&record, &expectation.a) else {
             return Ok(HistoryRecordScan::Continue);

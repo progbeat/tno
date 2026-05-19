@@ -1,4 +1,4 @@
-use crate::fs_util::ensure_dir;
+use crate::fs_util::ensure_dir_without_symlinks;
 use crate::notes_header::validate_note_key;
 use crate::output::{write_stderr_bytes, write_stdout_bytes};
 use crate::project_types::Config;
@@ -54,7 +54,7 @@ pub(crate) fn run_rg(config: &Config, rg_args: &[OsString]) -> Result<(), String
     if rg_args.is_empty() {
         return Err("missing rg pattern".to_string());
     }
-    ensure_dir(&config.root)?;
+    ensure_dir_without_symlinks(&config.root)?;
     let mut command = Command::new("rg");
     command.args(rg_args);
     command.arg("--");

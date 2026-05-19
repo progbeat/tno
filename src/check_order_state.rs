@@ -1,5 +1,5 @@
 use crate::check_types::{CheckRecord, SelectedExpectation};
-use crate::fs_util::ensure_dir;
+use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink};
 use crate::history::HistoryCache;
 use crate::time::parse_record_timestamp;
 use serde::Deserialize;
@@ -28,6 +28,7 @@ pub(crate) fn latest_recorded_non_pass_timestamp_with_cache(
     if let Some(timestamp) = history_cache.latest_non_pass.get(&path) {
         return Ok(*timestamp);
     }
+    reject_symlink(&path)?;
     if !path.exists() {
         history_cache.latest_non_pass.insert(path, None);
         return Ok(None);
@@ -67,8 +68,9 @@ pub(crate) fn write_latest_non_pass_record_with_cache(
     }
     let path = latest_non_pass_path(root, expectation, history_cache)?;
     if let Some(parent) = path.parent() {
-        ensure_dir(parent)?;
+        ensure_dir_without_symlinks(parent)?;
     }
+    reject_symlink(&path)?;
     let mut file = fs::OpenOptions::new()
         .create(true)
         .write(true)

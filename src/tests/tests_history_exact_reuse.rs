@@ -118,6 +118,10 @@ fn free_form_observed_history_answers_are_reusable() {
     assert!(!record_requires_human_review(&record));
     assert!(is_reusable_history_record(&record));
 
+    record.observed = "malformed".to_string();
+    assert!(record_requires_human_review(&record));
+    assert!(!is_reusable_history_record(&record));
+
     record.observed = "yes\nno".to_string();
     assert!(record_requires_human_review(&record));
     assert!(!is_reusable_history_record(&record));

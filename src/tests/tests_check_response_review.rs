@@ -169,6 +169,30 @@ fn check_runner_marks_unparseable_after_response_parse_fails() {
 }
 
 #[test]
+fn check_runner_marks_absent_response_scope_unparseable() {
+    let root = git_project("check-absent-response-scope");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let mut runner = FakeRunner::new(&[&answer(
+        "yes",
+        "missing.rs would be enough if it existed",
+        &["missing.rs"],
+    )]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
+    assert!(records.records[0].evidence.contains("missing.rs"));
+    assert_eq!(records.records[0].scope, vec![".".to_string()]);
+    assert!(read_history_records(&root, &options.selected[0])
+        .unwrap()
+        .is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_retries_full_scope_for_restricted_idk_non_answer() {
     let root = git_project("check-narrow-idk");
     let config = parse_check_config(check_config_yaml()).unwrap();

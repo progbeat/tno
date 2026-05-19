@@ -1,5 +1,5 @@
 use crate::check_types::CheckRecord;
-use crate::fs_util::ensure_dir;
+use crate::fs_util::ensure_dir_without_symlinks;
 use crate::logging_config::{active_log_file_name, diagnostic_log_files};
 use crate::logging_error::{external_log_error, DiagnosticLogResult};
 use crate::logging_lock::acquire_diagnostic_log_lock;
@@ -151,7 +151,7 @@ fn prepare_diagnostic_log(
     let log_dir = cache
         .git_path(root, GIT_CANON_LOG_DIR)
         .map_err(|message| external_log_error("resolve diagnostic log directory", message))?;
-    ensure_dir(&log_dir)
+    ensure_dir_without_symlinks(&log_dir)
         .map_err(|message| external_log_error("create diagnostic log directory", message))?;
     let config = diagnostic_log_config(root)?;
     let path = log_dir.join(active_log_file_name(&config)?);

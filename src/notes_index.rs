@@ -1,5 +1,6 @@
 use crate::fs_util::{
-    crossed_size_compaction_bucket, ensure_dir, for_each_nonempty_line, replace_file_with_temp,
+    crossed_size_compaction_bucket, ensure_dir_without_symlinks, for_each_nonempty_line,
+    reject_symlink, replace_file_with_temp,
 };
 use crate::notes_cli::INDEX_LOCK_STALE_AFTER_SECS;
 use crate::notes_header::validate_note_key;
@@ -14,7 +15,7 @@ pub(crate) const INDEX_COMPACT_MIN_BYTES: u64 = 64 * 1024;
 
 pub(crate) fn upsert_index(config: &Config, hash: &str, key: &str) -> Result<(), String> {
     validate_index_entry(hash, key)?;
-    ensure_dir(&config.root)?;
+    ensure_dir_without_symlinks(&config.root)?;
     let _lock = lock_index(config)?;
     let path = config.root.join("index.tsv");
     append_index_record(&path, Some(hash), key)
@@ -22,7 +23,7 @@ pub(crate) fn upsert_index(config: &Config, hash: &str, key: &str) -> Result<(),
 
 pub(crate) fn remove_index(config: &Config, _hash: &str, key: &str) -> Result<(), String> {
     validate_note_key(key)?;
-    ensure_dir(&config.root)?;
+    ensure_dir_without_symlinks(&config.root)?;
     let _lock = lock_index(config)?;
     let path = config.root.join("index.tsv");
     append_index_record(&path, None, key)
@@ -43,6 +44,7 @@ pub(crate) fn stale_index_lock_age(age: Duration) -> bool {
 }
 
 pub(crate) fn index_lock_is_stale(path: &Path) -> Result<bool, String> {
+    reject_symlink(path)?;
     let metadata = fs::metadata(path)
         .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
     let modified = metadata
@@ -75,7 +77,7 @@ pub(crate) fn remove_stale_index_lock(path: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn lock_index(config: &Config) -> Result<IndexLock, String> {
-    ensure_dir(&config.root)?;
+    ensure_dir_without_symlinks(&config.root)?;
     let path = config.root.join("index.tsv.lock");
     match create_index_lock(&path) {
         Ok(()) => Ok(IndexLock { path }),
@@ -159,8 +161,9 @@ fn append_index_record(path: &Path, hash: Option<&str>, key: &str) -> Result<(),
     .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
 
     if let Some(parent) = path.parent() {
-        ensure_dir(parent)?;
+        ensure_dir_without_symlinks(parent)?;
     }
+    reject_symlink(path)?;
     let previous_size = fs::metadata(path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
@@ -177,6 +180,7 @@ fn append_index_record(path: &Path, hash: Option<&str>, key: &str) -> Result<(),
 }
 
 fn maybe_compact_index(path: &Path, previous_size: u64) -> Result<(), String> {
+    reject_symlink(path)?;
     let size = fs::metadata(path)
         .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?
         .len();
@@ -215,14 +219,22 @@ fn render_materialized_index(entries: &[(String, String)], path: &Path) -> Resul
 
 pub(crate) fn write_file_atomically(path: &Path, content: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        ensure_dir(parent)?;
+        ensure_dir_without_symlinks(parent)?;
     }
+    reject_symlink(path)?;
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| format!("invalid file path: {}", path.display()))?;
     let temp_path = path.with_file_name(format!(".{}.{}.tmp", file_name, process::id()));
-    fs::write(&temp_path, content)
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
         .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+    file.write_all(content)
+        .and_then(|()| file.flush())
+        .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+    drop(file);
     replace_file_with_temp(&temp_path, path)
 }
