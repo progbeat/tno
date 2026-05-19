@@ -1,6 +1,7 @@
 # canon
 
 [![CI](https://github.com/progbeat/canon/actions/workflows/ci.yml/badge.svg)](https://github.com/progbeat/canon/actions/workflows/ci.yml)
+[![Audit Status](https://github.com/progbeat/canon/actions/workflows/audit.yml/badge.svg)](https://github.com/progbeat/canon/actions/workflows/audit.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 AI agents can move fast, but they can also blur the original goal. The painful part is not just that they may rewrite working code or adjust tests, but that everything can still look “green” while the original intent is no longer protected, turning development into chasing regressions instead of validating progress.
