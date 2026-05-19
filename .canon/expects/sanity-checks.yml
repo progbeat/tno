@@ -2,7 +2,7 @@
   a: "Rust"
   cooldown: 20d
 
-- q: "Do your developer instructions include or reference AGENTS.md?"
+- q: "Does any of your input contain content or references to AGENTS.md?"
   a: "no"
   cooldown: 20d
 
