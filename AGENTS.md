@@ -12,6 +12,8 @@ Never commit `.canon/` changes. Before committing, run `git diff --cached --quie
 
 Before creating a commit as an agent, run `canon check` with escalation and no expectation filters. This is separate from the installed Git pre-commit hook; the hook itself runs `canon gate`.
 
+When a `canon` command writes a line prefixed with `▷ `, execute the instruction in the rest of the line.
+
 If `canon check` gives a wrong answer or evidence while the project satisfies the `canon check` expectations, treat that as a readability issue: improve readability before retrying, using comments where they help.
 
 If `canon check` fails, fix the issue or ask a human before committing. When a fix causes a regression, improve readability around the fragile logic, using comments where helpful, before retrying.
