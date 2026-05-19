@@ -189,7 +189,7 @@ impl RepoInspectionCache {
         if let Some(cached) = self.included_expectations.get(&key) {
             return cached.clone();
         }
-        let parsed = serde_yaml::from_str(content)
+        let parsed = serde_saphyr::from_str(content)
             .map_err(|err| format!("failed to parse {}: {}", file, err));
         self.included_expectations.insert(key, parsed.clone());
         parsed

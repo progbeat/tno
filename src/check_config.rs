@@ -68,6 +68,6 @@ fn parse_check_config_content_with_root_and_source(
 }
 
 fn parse_raw_check_config(config_path: &Path, content: &str) -> Result<RawCheckConfig, String> {
-    serde_yaml::from_str(content)
+    serde_saphyr::from_str(content)
         .map_err(|err| format!("failed to parse {}: {}", config_path.display(), err))
 }

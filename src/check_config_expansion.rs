@@ -190,7 +190,7 @@ impl RawExpectationExpansion<'_> {
     ) -> Result<Vec<RawExpectationItem>, String> {
         match self.cache.as_deref_mut() {
             Some(cache) => cache.included_expectation_items(file, content),
-            None => serde_yaml::from_str(content)
+            None => serde_saphyr::from_str(content)
                 .map_err(|err| format!("failed to parse {}: {}", file, err)),
         }
     }

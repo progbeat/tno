@@ -89,6 +89,9 @@ pub(crate) struct RawIncludeExpectation {
 }
 
 #[derive(Debug, Deserialize)]
+// Expectation items intentionally omit `deny_unknown_fields`: the expectations
+// spec allows extra fields so external IDs or annotations can stay in check files
+// without affecting canon's explicit/generator/include expansion.
 struct RawExpectationFields {
     #[serde(default)]
     q: Option<String>,
