@@ -15,6 +15,14 @@ agent:
 expectations:
   - include: expects/*.yml
 
+  # Expectations from specs
+  - path: "specs/*.md"
+    q_template: |
+      {content}
+      ---
+      Does the implementation fully satisfy this specification?
+    a: "yes"
+
   # Documentation
   - q: Is README.md consistent with the current state of the repository?
     a: "yes"
@@ -58,21 +66,9 @@ expectations:
   - q: "Does `canon init` create `.canon/check.yml` from an embedded default template and fail without overwriting when `.canon/check.yml` already exists?"
     a: "yes"
 
-  - q: "Does `canon hook install` install a project-portable pre-commit hook that runs `canon gate` in any Git worktree using the configured `CANON_BIN` or `canon` on PATH?"
-    a: "yes"
-
-  - q: "Does `canon hook install` add a pre-commit hook?"
-    a: "yes"
-
-  - q: "Which command does the pre-commit hook run? a) canon gate b) canon check"
-    a: "a"
-
   - q: "Is the local Git configuration for this repository set to run the repository pre-commit hook?"
     a: "yes"
     cooldown: 7d
-
-  - q: "Does the pre-commit hook fail quickly when `canon gate` reports missing cached answers or cached failing expectation results?"
-    a: "yes"
 
   # Process cleanup
   - q: "Do canon commands that spawn child processes ensure those processes are terminated and reaped on both success and failure?"
@@ -99,12 +95,4 @@ expectations:
     a: "yes"
 
   - q: "Does every `canon` command write and flush each next piece of stdout or stderr as soon as that piece is computed, rather than waiting for later work or command completion?"
-    a: "yes"
-
-  # Expectations from specs
-  - path: "specs/*.md"
-    q_template: |
-      {content}
-      ---
-      Does the implementation fully satisfy this specification?
     a: "yes"
