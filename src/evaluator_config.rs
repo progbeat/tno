@@ -1,15 +1,43 @@
 use crate::check_validation::codex_reasoning_effort;
 use crate::config_types::AgentConfig;
+use crate::fs_util::write_temp_file_then_replace;
+use crate::git::resolve_git_path;
 use crate::hash::full_scope;
 use crate::scope::{effective_ignore_patterns, normalize_repo_path};
 use crate::thread_reuse_config::{thread_reuse_config, ThreadReuseConfig};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-const EVALUATOR_SKILL_SCAN_MAX_DEPTH: usize = 12;
+const EVALUATOR_MODEL_CATALOG_DIR: &str = "canon/evaluator-model-catalogs";
+// Evaluators should see only Canon's own instructions plus the essential
+// shell-command read/exec path governed by the read-only permission profile.
+const EVALUATOR_DISABLED_FEATURES: &[&str] = &[
+    "apps",
+    "browser_use",
+    "browser_use_external",
+    "computer_use",
+    "fast_mode",
+    "guardian_approval",
+    "hooks",
+    "image_generation",
+    "in_app_browser",
+    "multi_agent",
+    "personality",
+    "plugin_hooks",
+    "shell_snapshot",
+    "skill_mcp_dependency_install",
+    "terminal_resize_reflow",
+    "tool_call_mcp_elicitation",
+    "tool_search",
+    "tool_suggest",
+    "unavailable_dummy_tools",
+    "unified_exec",
+    "workspace_dependencies",
+];
 
 pub(crate) fn evaluator_thread_config(
     agent: &AgentConfig,
@@ -152,6 +180,11 @@ fn insert_evaluator_context_isolation_config(config: &mut Map<String, Value>) {
     config.insert("include_permissions_instructions".to_string(), json!(false));
     config.insert("include_apps_instructions".to_string(), json!(false));
     config.insert("include_apply_patch_tool".to_string(), json!(false));
+    config.insert(
+        "experimental_use_freeform_apply_patch".to_string(),
+        json!(false),
+    );
+    config.insert("features".to_string(), evaluator_disabled_features_value());
     config.insert("project_doc_max_bytes".to_string(), json!(0));
 }
 
@@ -197,14 +230,24 @@ pub(crate) fn app_server_args(
     agent: &AgentConfig,
 ) -> Result<Vec<String>, String> {
     let mut args = vec!["app-server".to_string()];
-    if !load_plugins {
+    for feature in evaluator_disabled_app_server_features(load_plugins) {
         args.push("--disable".to_string());
-        args.push("plugins".to_string());
+        args.push(feature.to_string());
     }
     args.extend(app_server_startup_config_args(root, agent)?);
     args.push("--listen".to_string());
     args.push("stdio://".to_string());
     Ok(args)
+}
+
+fn evaluator_disabled_app_server_features(load_plugins: bool) -> Vec<&'static str> {
+    let mut features = Vec::new();
+    if !load_plugins {
+        features.push("plugins");
+    }
+    features.extend(EVALUATOR_DISABLED_FEATURES.iter().copied());
+    features.push("apply_patch_freeform");
+    features
 }
 
 pub(crate) fn app_server_startup_config_args(
@@ -221,6 +264,9 @@ pub(crate) fn app_server_startup_config_args(
             &format!("model_reasoning_effort={}", toml_string(reasoning_effort)),
         );
     }
+    if let Some(model_catalog_arg) = evaluator_model_catalog_config_arg(root, agent)? {
+        push_config_arg(&mut args, &model_catalog_arg);
+    }
     push_config_arg(&mut args, "permissions.canon_check.network.enabled=false");
     push_evaluator_context_isolation_args(&mut args);
     push_config_arg(&mut args, &app_server_startup_filesystem_arg(agent));
@@ -231,15 +277,120 @@ pub(crate) fn app_server_startup_config_args(
     Ok(args)
 }
 
+pub(crate) fn evaluator_model_catalog_config_arg(
+    root: &Path,
+    agent: &AgentConfig,
+) -> Result<Option<String>, String> {
+    let models = evaluator_model_catalog_slugs(agent);
+    if models.is_empty() {
+        return Ok(None);
+    }
+    let path = write_evaluator_model_catalog(root, &models)?;
+    Ok(Some(format!(
+        "model_catalog_json={}",
+        toml_string(&path.to_string_lossy())
+    )))
+}
+
+fn evaluator_model_catalog_slugs(agent: &AgentConfig) -> Vec<String> {
+    let mut models = Vec::new();
+    if let Some(model) = agent.model.primary.as_deref() {
+        push_unique_model_slug(&mut models, model);
+    }
+    for model in &agent.model.fallbacks {
+        push_unique_model_slug(&mut models, model);
+    }
+    models
+}
+
+fn push_unique_model_slug(models: &mut Vec<String>, model: &str) {
+    if !models.iter().any(|existing| existing == model) {
+        models.push(model.to_string());
+    }
+}
+
+fn write_evaluator_model_catalog(root: &Path, models: &[String]) -> Result<PathBuf, String> {
+    let dir = resolve_git_path(root, EVALUATOR_MODEL_CATALOG_DIR)?;
+    let path = dir.join(format!("{}.json", std::process::id()));
+    let temp_path = dir.join(format!(
+        "{}.{}.tmp",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| format!("failed to read system time: {}", err))?
+            .as_nanos()
+    ));
+    let catalog = evaluator_model_catalog_json(models)?;
+    write_temp_file_then_replace(&temp_path, &path, |file| {
+        file.write_all(catalog.as_bytes())
+            .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))
+    })?;
+    Ok(path)
+}
+
+pub(crate) fn evaluator_model_catalog_json(models: &[String]) -> Result<String, String> {
+    let entries = models
+        .iter()
+        .map(|model| evaluator_model_catalog_entry(model))
+        .collect::<Vec<_>>();
+    serde_json::to_string(&json!({ "models": entries }))
+        .map_err(|err| format!("failed to encode evaluator model catalog: {}", err))
+}
+
+fn evaluator_model_catalog_entry(model: &str) -> Value {
+    json!({
+        "slug": model,
+        "display_name": model,
+        "description": "Canon evaluator model",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": [
+            { "effort": "low", "description": "Low" },
+            { "effort": "medium", "description": "Medium" },
+            { "effort": "high", "description": "High" },
+            { "effort": "xhigh", "description": "Extra high" }
+        ],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": 0,
+        "base_instructions": "",
+        "supports_reasoning_summaries": true,
+        "default_reasoning_summary": "none",
+        "support_verbosity": true,
+        "default_verbosity": "low",
+        "apply_patch_tool_type": null,
+        "truncation_policy": { "mode": "tokens", "limit": 10000 },
+        "supports_parallel_tool_calls": true,
+        "supports_image_detail_original": true,
+        "context_window": 272000,
+        "max_context_window": 1000000,
+        "effective_context_window_percent": 95,
+        "experimental_supported_tools": [],
+        "input_modalities": ["text"],
+        "supports_search_tool": false
+    })
+}
+
 fn push_evaluator_context_isolation_args(args: &mut Vec<String>) {
     push_config_arg(args, "include_environment_context=false");
     push_config_arg(args, "include_permissions_instructions=false");
     push_config_arg(args, "include_apps_instructions=false");
     push_config_arg(args, "include_apply_patch_tool=false");
-    push_config_arg(args, "project_doc_max_bytes=0");
-    if let Some(skills_config) = evaluator_disabled_skills_config_arg() {
-        push_config_arg(args, &skills_config);
+    push_config_arg(args, "experimental_use_freeform_apply_patch=false");
+    for feature in EVALUATOR_DISABLED_FEATURES {
+        push_config_arg(args, &format!("features.{}=false", feature));
     }
+    push_config_arg(args, "features.apply_patch_freeform=false");
+    push_config_arg(args, "project_doc_max_bytes=0");
+}
+
+fn evaluator_disabled_features_value() -> Value {
+    let mut features = Map::new();
+    for feature in EVALUATOR_DISABLED_FEATURES {
+        features.insert((*feature).to_string(), json!(false));
+    }
+    features.insert("apply_patch_freeform".to_string(), json!(false));
+    Value::Object(features)
 }
 
 pub(crate) fn thread_reuse_carryover_token_target_arg(config: &ThreadReuseConfig) -> String {
@@ -273,75 +424,6 @@ pub(crate) fn app_server_startup_filesystem_arg(agent: &AgentConfig) -> String {
         "permissions.canon_check.filesystem={{{}}}",
         entries.join(",")
     )
-}
-
-pub(crate) fn evaluator_disabled_skills_config_arg() -> Option<String> {
-    disabled_skills_config_arg(evaluator_skill_paths())
-}
-
-pub(crate) fn disabled_skills_config_arg<I>(skill_paths: I) -> Option<String>
-where
-    I: IntoIterator<Item = PathBuf>,
-{
-    let mut paths = skill_paths
-        .into_iter()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths.dedup();
-    if paths.is_empty() {
-        return None;
-    }
-    let entries = paths
-        .into_iter()
-        .map(|path| format!("{{path={},enabled=false}}", toml_string(&path)))
-        .collect::<Vec<_>>();
-    Some(format!("skills.config=[{}]", entries.join(",")))
-}
-
-fn evaluator_skill_paths() -> Vec<PathBuf> {
-    let Some(codex_home) = codex_home_path() else {
-        return Vec::new();
-    };
-    let mut paths = Vec::new();
-    collect_skill_paths(
-        &codex_home.join("skills"),
-        EVALUATOR_SKILL_SCAN_MAX_DEPTH,
-        &mut paths,
-    );
-    collect_skill_paths(
-        &codex_home.join("plugins").join("cache"),
-        EVALUATOR_SKILL_SCAN_MAX_DEPTH,
-        &mut paths,
-    );
-    paths
-}
-
-fn codex_home_path() -> Option<PathBuf> {
-    env::var_os("CODEX_HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
-}
-
-fn collect_skill_paths(root: &Path, remaining_depth: usize, paths: &mut Vec<PathBuf>) {
-    if remaining_depth == 0 {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_file() && entry.file_name() == "SKILL.md" {
-            paths.push(path);
-        } else if file_type.is_dir() {
-            collect_skill_paths(&path, remaining_depth - 1, paths);
-        }
-    }
 }
 
 pub(crate) fn push_config_arg(args: &mut Vec<String>, value: &str) {

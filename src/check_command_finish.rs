@@ -17,8 +17,11 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::path::Path;
 
+const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed. Commit is allowed.";
+const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
+
 // Success and error reports share cleanup, finish logging, and the post-summary
-// improvement notice. The optional error only changes the finish log payload
+// message to the agent. The optional error only changes the finish log payload
 // and final command result.
 pub(crate) struct CheckReportFinishContext<'a, 'b> {
     pub(crate) root: &'a Path,
@@ -38,8 +41,8 @@ pub(crate) fn finish_check_report(
     // Per-expectation output, the public token-usage line, and the public
     // summary are written and flushed before this finish step is called. This
     // function only handles pieces that become computable after those steps:
-    // the optional pass-improvement notice, lazy reset, and finish lifecycle log.
-    write_pass_improvement_notice_if_needed(
+    // the agent message, lazy reset, and finish lifecycle log.
+    write_check_agent_message(
         context.root,
         context.config,
         context.identities,
@@ -61,9 +64,9 @@ pub(crate) fn finish_check_report(
 pub(crate) fn pass_improvement_notice(count: usize) -> Option<String> {
     match count {
         0 => None,
-        1 => Some("▷ +1 pass compared to HEAD. Commit staged changes!".to_string()),
+        1 => Some("▷ +1 pass compared to HEAD. Commit the staged changes!".to_string()),
         count => Some(format!(
-            "▷ +{} passes compared to HEAD. Commit staged changes!",
+            "▷ +{} passes compared to HEAD. Commit the staged changes!",
             count
         )),
     }
@@ -113,7 +116,7 @@ fn staged_passes_not_pass_at_head_count_with_cache(
     Ok(count)
 }
 
-fn write_pass_improvement_notice_if_needed(
+fn write_check_agent_message(
     root: &Path,
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
@@ -121,19 +124,40 @@ fn write_pass_improvement_notice_if_needed(
     output: &mut dyn Write,
     caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
-    let Some(notice) = pass_improvement_notice_if_gate_passes(
+    let message = check_agent_message(
         root,
         config,
         identities,
         report,
         &mut caches.history,
         &mut caches.scope_hash,
-    )?
-    else {
-        return Ok(());
-    };
-    write_stdout_line_record(output, &notice, "check pass-improvement notice")?;
+    )?;
+    write_stdout_line_record(output, &message, "check agent message")?;
     Ok(())
+}
+
+pub(crate) fn check_agent_message(
+    root: &Path,
+    config: &CheckConfig,
+    identities: &[ExpectationIdentity],
+    report: &CheckRunReport,
+    history_cache: &mut HistoryCache,
+    scope_hash_cache: &mut ScopeHashCache,
+) -> Result<String, String> {
+    if let Some(notice) = pass_improvement_notice_if_gate_passes(
+        root,
+        config,
+        identities,
+        report,
+        history_cache,
+        scope_hash_cache,
+    )? {
+        return Ok(notice);
+    }
+    if report.records.iter().all(|record| record.passed()) {
+        return Ok(ALL_CHECKS_PASSED_MESSAGE.to_string());
+    }
+    Ok(FIX_ISSUES_MESSAGE.to_string())
 }
 
 fn pass_improvement_notice_if_gate_passes(

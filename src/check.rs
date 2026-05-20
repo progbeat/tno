@@ -290,7 +290,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             narrowing.attempted += 1;
             // A narrower scope from one evaluator response becomes reusable
             // only when an independent interrogation with that same canonical
-            // scope preserves the observed answer.
+            // scope returns either the same answer or an incorrect answer.
             let initial_record = interrogation.record.clone();
             let narrowed = run_try!(interrogate_or_error_record(
                 InterrogationCall {

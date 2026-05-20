@@ -50,8 +50,7 @@ fn evaluator_turn_uses_strict_json_output_schema() {
 #[test]
 fn evaluator_base_instructions_define_dev_instruction_boundary() {
     assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("developerInstructions payload"));
-    assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("apply_patch"));
-    assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("tool/bootstrap"));
+    assert!(!EVALUATOR_BASE_INSTRUCTIONS.contains("apply_patch"));
 }
 
 #[test]

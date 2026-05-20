@@ -235,6 +235,9 @@ fn scope_tree_oid_from_entries(
     entries: &[String],
     object_hash_algorithm: GitObjectHashAlgorithm,
 ) -> Result<String, String> {
+    // `scopeTreeOid` is a Git-compatible tree object ID. We rebuild the scoped
+    // tree from Git-reported modes/object IDs, then hash the canonical `tree
+    // <len>\0<body>` bytes with the repository's object hash algorithm.
     let mut tree = TreeNode::default();
     for entry in entries {
         let parsed = parse_scope_tree_entry(entry)?;
@@ -464,6 +467,8 @@ fn git_object_id(
     kind: &str,
     body: &[u8],
 ) -> Result<String, String> {
+    // Match Git object IDs exactly: hash `"<kind> <len>\0<body>"` with the
+    // repository's object format. This is not Canon's base64url `hash_120`.
     let mut object = Vec::new();
     object.extend_from_slice(kind.as_bytes());
     object.push(b' ');

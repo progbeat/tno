@@ -5,8 +5,9 @@ use crate::evaluator_types::EvaluatorError;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
+use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
@@ -14,11 +15,25 @@ use std::thread::{self, JoinHandle};
 #[cfg(unix)]
 use std::io;
 #[cfg(unix)]
+use std::os::unix::fs::symlink;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 #[cfg(unix)]
 use std::process::ExitStatus;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
+
+const EVALUATOR_CODEX_HOME_AUTH_FILES: &[&str] = &["auth.json", "installation_id", "version.json"];
+const SYSTEM_SKILLS_MARKER: &str = ".codex-system-skills.marker";
+const EVALUATOR_CODEX_HOME_RESET_DIRS: &[&str] =
+    &["mcp", "memories", "plugins", "sessions", "skills"];
+const EVALUATOR_CODEX_HOME_RESET_FILES: &[&str] = &[
+    "AGENTS.md",
+    "config.json",
+    "config.toml",
+    "instructions.md",
+    "preferences.json",
+];
 
 pub(crate) fn spawn_app_server_reader(
     stdout: std::process::ChildStdout,
@@ -56,6 +71,10 @@ impl AppServerRunner {
     ) -> Result<AppServerRunner, EvaluatorError> {
         let mut command = Command::new("codex");
         command.args(app_server_args(root, load_plugins, agent)?);
+        if !load_plugins {
+            let codex_home = prepare_evaluator_codex_home(root).map_err(EvaluatorError::message)?;
+            command.env("CODEX_HOME", &codex_home);
+        }
         // `canon check` can itself run inside a Codex thread. The evaluator
         // app-server must create independent invocation-local threads, not
         // attach to the parent conversation through inherited thread identity.
@@ -105,6 +124,124 @@ impl AppServerRunner {
         )?;
         Ok(runner)
     }
+}
+
+pub(crate) fn prepare_evaluator_codex_home(_root: &Path) -> Result<PathBuf, String> {
+    let codex_home = evaluator_codex_home_path();
+    ensure_evaluator_codex_home_dir(&codex_home)?;
+    for file in EVALUATOR_CODEX_HOME_RESET_FILES {
+        remove_existing_codex_home_entry(&codex_home.join(file))?;
+    }
+    for dir in EVALUATOR_CODEX_HOME_RESET_DIRS {
+        remove_existing_codex_home_entry(&codex_home.join(dir))?;
+    }
+    for dir in [
+        ".tmp", "cache", "log", "mcp", "memories", "plugins", "sessions", "skills",
+    ] {
+        ensure_evaluator_codex_home_dir(&codex_home.join(dir))?;
+    }
+    let source_home = source_codex_home();
+    write_empty_system_skills_marker(source_home.as_deref(), &codex_home)?;
+    if let Some(source_home) = source_home {
+        if source_home != codex_home {
+            for file_name in EVALUATOR_CODEX_HOME_AUTH_FILES {
+                mirror_codex_home_file(&source_home, &codex_home, file_name)?;
+            }
+        }
+    }
+    Ok(codex_home)
+}
+
+fn evaluator_codex_home_path() -> PathBuf {
+    env::temp_dir().join("canon").join(".codex")
+}
+
+fn ensure_evaluator_codex_home_dir(path: &Path) -> Result<(), String> {
+    fs::create_dir_all(path).map_err(|err| format!("failed to create {}: {}", path.display(), err))
+}
+
+fn write_empty_system_skills_marker(
+    source_home: Option<&Path>,
+    target_home: &Path,
+) -> Result<(), String> {
+    let system_dir = target_home.join("skills").join(".system");
+    ensure_evaluator_codex_home_dir(&system_dir)?;
+    let target = system_dir.join(SYSTEM_SKILLS_MARKER);
+    if let Some(source) = source_home.map(|source_home| {
+        source_home
+            .join("skills")
+            .join(".system")
+            .join(SYSTEM_SKILLS_MARKER)
+    }) {
+        if source.is_file() {
+            fs::copy(&source, &target).map_err(|err| {
+                format!(
+                    "failed to copy evaluator system skills marker {} from {}: {}",
+                    target.display(),
+                    source.display(),
+                    err
+                )
+            })?;
+            return Ok(());
+        }
+    }
+    fs::write(&target, b"canon-empty-system-skills\n")
+        .map_err(|err| format!("failed to write {}: {}", target.display(), err))
+}
+
+fn source_codex_home() -> Option<PathBuf> {
+    env::var_os("CODEX_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
+}
+
+fn mirror_codex_home_file(
+    source_home: &Path,
+    target_home: &Path,
+    file_name: &str,
+) -> Result<(), String> {
+    let source = source_home.join(file_name);
+    if !source.is_file() {
+        return Ok(());
+    }
+    let target = target_home.join(file_name);
+    remove_existing_codex_home_entry(&target)?;
+    #[cfg(unix)]
+    {
+        symlink(&source, &target).map_err(|err| {
+            format!(
+                "failed to symlink evaluator CODEX_HOME file {} to {}: {}",
+                target.display(),
+                source.display(),
+                err
+            )
+        })?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::copy(&source, &target).map_err(|err| {
+            format!(
+                "failed to copy evaluator CODEX_HOME file {} from {}: {}",
+                target.display(),
+                source.display(),
+                err
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn remove_existing_codex_home_entry(path: &Path) -> Result<(), String> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+    .map_err(|err| format!("failed to replace {}: {}", path.display(), err))
 }
 
 impl Drop for AppServerRunner {

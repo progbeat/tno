@@ -7,7 +7,9 @@ pub(crate) fn full_scope() -> Vec<String> {
 }
 
 pub(crate) fn expectation_id(prompt: &str, expected: &str) -> String {
-    hash_119_base62(format!("q\0{}\0a\0{}", prompt, expected).as_bytes())
+    // Expectation IDs are the Cache spec's 20-character base62 IDs. The
+    // base64url `hash_120` helper below is for other cache keys, not IDs.
+    expectation_id_base62_20(format!("q\0{}\0a\0{}", prompt, expected).as_bytes())
 }
 
 pub(crate) fn hash_key(key: &str) -> String {
@@ -28,7 +30,7 @@ pub(crate) fn hash_120(input: &[u8]) -> String {
     encode_base64url_no_pad(&bytes)
 }
 
-fn hash_119_base62(input: &[u8]) -> String {
+fn expectation_id_base62_20(input: &[u8]) -> String {
     let first = fnv64_with_seed(FNV_OFFSET, input);
     let second = fnv64_with_seed(FNV_OFFSET ^ 0x9e37_79b9_7f4a_7c15, input);
     let value = (((first & 0x7fff_ffff_ffff_ffff) as u128) << 56) | ((second >> 8) as u128);

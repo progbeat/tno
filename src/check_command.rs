@@ -19,6 +19,7 @@ use crate::logging::DiagnosticLogWriter;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::scope_hash::ScopeHashCache;
 use crate::staged_worktree::StagedWorktreeView;
+use crate::token_usage_types::TokenUsage;
 use crate::{CHECK_INTERRUPTED, GIT_CANON_CACHE_DIR};
 use serde_json::json;
 use std::ffi::OsString;
@@ -146,19 +147,15 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             error: Some(err.error),
         },
     };
-    let usage = match collect_check_token_usage(&mut execution.runner).and_then(|usage| {
-        // Token usage is the next public stderr piece after per-expectation
-        // output. Print and flush it immediately; the following stdout summary
-        // is then rendered and flushed before internal finish logging resumes.
-        print_token_usage_summary(Some(usage))?;
-        Ok(usage)
-    }) {
+    let usage = match collect_and_print_token_usage(&mut execution.runner) {
         Ok(usage) => usage,
         Err(err) => return fail_check_after_start(&mut diagnostic_log, false, 1, err),
     };
-    // The summary line is rendered only here, after the required stderr token
-    // usage line has already been flushed, so its elapsed time and public order
-    // match the check-output contract.
+    // Do not render the summary before token usage. In the public check-output
+    // order, token usage is the next piece after the final expectation record;
+    // the summary becomes the next stdout piece only after that stderr line is
+    // written and flushed. `write_summary_line` renders, writes, and flushes
+    // the summary before any later finish work runs.
     write_summary_line(&mut *result_output, &completed.report, started.elapsed())?;
     finish_check_report(
         CheckReportFinishContext {
@@ -236,6 +233,16 @@ fn write_check_error_finish_event(
 pub(crate) struct PreparedCheckExecution {
     pub(crate) staged_view: StagedWorktreeView,
     pub(crate) runner: LazyAppServerRunner,
+}
+
+fn collect_and_print_token_usage(runner: &mut LazyAppServerRunner) -> Result<TokenUsage, String> {
+    let usage = collect_check_token_usage(runner)?;
+    // Token usage is the next public stderr piece after per-expectation output.
+    // `print_token_usage_summary` writes and flushes it immediately; the caller
+    // intentionally waits to compute the following stdout summary until this
+    // required earlier piece has been emitted.
+    print_token_usage_summary(Some(usage))?;
+    Ok(usage)
 }
 
 pub(crate) fn prepare_check_execution(

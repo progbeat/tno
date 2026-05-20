@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 
 use crate::app_server::{AppServerRunner, LazyAppServerRunner};
+use crate::app_server_process::prepare_evaluator_codex_home;
 use crate::app_server_protocol::{app_server_error_message, app_server_failure_from_message};
 use crate::app_server_protocol::{
     app_server_error_value, app_server_failure_from_value, app_server_message,
@@ -19,7 +20,7 @@ use crate::check_command::prepare_check_execution;
 use crate::check_command::run_check_command;
 use crate::check_command_args::parse_check_command_args;
 use crate::check_command_finish::{
-    pass_improvement_notice, staged_pass_notice_count_if_gate_passes,
+    check_agent_message, pass_improvement_notice, staged_pass_notice_count_if_gate_passes,
     staged_passes_not_pass_at_head_count,
 };
 use crate::check_config::{
@@ -91,11 +92,9 @@ use crate::evaluator::{
     evaluator_response_output_schema, evaluator_turn_input, render_evaluator_turn_input,
 };
 use crate::evaluator_config::{
-    app_server_args, app_server_model_key, disabled_skills_config_arg, evaluator_thread_config,
-};
-use crate::evaluator_config::{
-    app_server_startup_filesystem_arg, evaluator_thread_root_permissions,
-    thread_reuse_carryover_token_target_arg,
+    app_server_args, app_server_model_key, app_server_startup_filesystem_arg,
+    evaluator_model_catalog_json, evaluator_thread_config, evaluator_thread_root_permissions,
+    thread_reuse_carryover_token_target_arg, toml_string,
 };
 use crate::evaluator_json::validate_evaluator_response_key_order;
 use crate::evaluator_prompt::{

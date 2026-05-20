@@ -65,12 +65,61 @@ fn pass_improvement_notice_uses_specified_pluralization() {
     assert_eq!(pass_improvement_notice(0), None);
     assert_eq!(
         pass_improvement_notice(1).as_deref(),
-        Some("▷ +1 pass compared to HEAD. Commit staged changes!")
+        Some("▷ +1 pass compared to HEAD. Commit the staged changes!")
     );
     assert_eq!(
         pass_improvement_notice(2).as_deref(),
-        Some("▷ +2 passes compared to HEAD. Commit staged changes!")
+        Some("▷ +2 passes compared to HEAD. Commit the staged changes!")
     );
+}
+
+#[test]
+fn check_agent_message_uses_required_all_pass_and_fallback_text() {
+    let root = git_project("check-agent-message");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let identities = expectation_identities(&config).unwrap();
+    let pass_report = CheckRunReport {
+        records: Vec::new(),
+        non_selected: Vec::new(),
+        selected: 0,
+        skipped: 0,
+        silent: 0,
+        narrowing: NarrowingStats::default(),
+    };
+    assert_eq!(
+        check_agent_message(
+            &root,
+            &config,
+            &identities,
+            &pass_report,
+            &mut HistoryCache::new(),
+            &mut ScopeHashCache::new(),
+        )
+        .unwrap(),
+        "✓ All checks passed. Commit is allowed."
+    );
+
+    let fail_report = CheckRunReport {
+        records: vec![sample_record(1, "fail")],
+        non_selected: Vec::new(),
+        selected: 1,
+        skipped: 0,
+        silent: 0,
+        narrowing: NarrowingStats::default(),
+    };
+    assert_eq!(
+        check_agent_message(
+            &root,
+            &config,
+            &identities,
+            &fail_report,
+            &mut HistoryCache::new(),
+            &mut ScopeHashCache::new(),
+        )
+        .unwrap(),
+        "▷ Fix the issues and run `canon check` again!"
+    );
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
