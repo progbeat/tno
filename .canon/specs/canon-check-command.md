@@ -85,26 +85,25 @@ not match the expected answer.
 human review.
 `skipped` is the number of non-selected expectations.
 
-## Message to Agent
+## Instructions to Agent
 
-Then stdout contains exactly one message line for the agent that ran
-`canon check`.
-
-If all expectations are OK:
+Assuming no Ctrl-C or other interruption, the check run may emit instructions
+for the agent that ran `canon check` like this:
 
 ```
-✓ All checks passed. Commit is allowed.
-```
-
-If some expectations are not OK, but `canon gate` would allow the commit and at least
-one expectation changed from non-OK to OK compared to HEAD:
-```
-▷ +<n> passes compared to HEAD. Commit the staged changes and continue fixing the remaining issues!
-```
-or `+1 pass` if `n` is `1`.
-
-Otherwise (there are non-OK expectations and no progress compared to HEAD):
-
-```
-▷ Fix the issues and commit!
+def print_agent_messages(num_failed, num_fixes, num_regressions):
+    """
+    num_failed: The number of expectations that failed in this run.
+    num_fixes: The number of expectations that changed from non-OK to OK compared to HEAD.
+    num_regressions: The number of expectations that changed from OK to non-OK compared to HEAD.
+    """
+    if num_regressions > 0 or num_failed > 0 and num_fixes == 0:
+        print(f"▷ Fix the issues and run `canon check` again!")
+        return
+    if num_failed == 0 and num_fixes == 0:
+        print("✓ All checks passed. Commit is allowed.")
+        return
+    assert num_fixes > 0
+    passes_msg = f'1 pass' if num_fixes == 1 else f'{num_fixes} passes'
+    print(f"▷ +{passes_msg} compared to HEAD. Commit the staged changes!")
 ```
