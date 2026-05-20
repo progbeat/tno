@@ -36,6 +36,17 @@ pub(crate) fn write_query_output(
     write_stdout_record(result_output, output.as_bytes(), "query result")
 }
 
+pub(crate) fn write_stdout_line_record(
+    writer: &mut dyn Write,
+    line: &str,
+    description: &str,
+) -> Result<(), String> {
+    let mut output = String::with_capacity(line.len() + 1);
+    output.push_str(line);
+    output.push('\n');
+    write_stdout_record(writer, output.as_bytes(), description)
+}
+
 fn write_stdout_record(
     writer: &mut dyn Write,
     bytes: &[u8],

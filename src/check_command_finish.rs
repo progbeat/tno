@@ -1,5 +1,6 @@
 use crate::check::CheckRunCaches;
 use crate::check_lazy_reset::apply_lazy_full_scope_reset;
+use crate::check_output::write_stdout_line_record;
 use crate::check_reporting::write_check_finish_event;
 use crate::check_selection::ExpectationIdentity;
 use crate::check_types::{CheckRecord, CheckRunReport, SelectedExpectation};
@@ -120,24 +121,42 @@ fn write_pass_improvement_notice_if_needed(
     output: &mut dyn Write,
     caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
-    // The notice is knowable only after simulating `canon gate`, because the
-    // public output contract suppresses it unless the staged tree would pass.
-    // Once the count is known, write and flush the public line before returning
-    // to any internal finish work.
-    let count = staged_pass_notice_count_if_gate_passes(
+    let Some(notice) = pass_improvement_notice_if_gate_passes(
         root,
         config,
         identities,
         report,
         &mut caches.history,
         &mut caches.scope_hash,
-    )?;
-    if let Some(notice) = pass_improvement_notice(count) {
-        writeln!(output, "{}", notice)
-            .and_then(|()| output.flush())
-            .map_err(|err| format!("failed to write check result to stdout: {}", err))?;
-    }
+    )?
+    else {
+        return Ok(());
+    };
+    write_stdout_line_record(output, &notice, "check pass-improvement notice")?;
     Ok(())
+}
+
+fn pass_improvement_notice_if_gate_passes(
+    root: &Path,
+    config: &CheckConfig,
+    identities: &[ExpectationIdentity],
+    report: &CheckRunReport,
+    history_cache: &mut HistoryCache,
+    scope_hash_cache: &mut ScopeHashCache,
+) -> Result<Option<String>, String> {
+    // This check computes the public notice text. The line is not a stdout
+    // piece until this returns `Some`, and the caller writes and flushes that
+    // `Some` value before any later finish work.
+    Ok(pass_improvement_notice(
+        staged_pass_notice_count_if_gate_passes(
+            root,
+            config,
+            identities,
+            report,
+            history_cache,
+            scope_hash_cache,
+        )?,
+    ))
 }
 
 pub(crate) fn staged_pass_notice_count_if_gate_passes(

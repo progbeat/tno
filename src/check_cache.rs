@@ -82,7 +82,6 @@ pub(crate) fn write_cache_hit(
                 ("id", json!(hit.record.id)),
                 ("result", json!(hit.record.result)),
                 ("scope", json!(hit.record.scope)),
-                ("scopeTreeOid", json!(hit.record.scope_hash)),
             ],
         )
         .map_err(|err| err.to_string())?;

@@ -39,7 +39,7 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[
-        &answer("yes", "full scope supports it", &["src/main.rs"]),
+        &answer("no", "full scope fails it", &["src/main.rs"]),
         &answer("no", "src/main.rs still fails it", &["src/main.rs"]),
     ]);
     let records =
@@ -53,6 +53,30 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
             .len(),
         1
     );
+    let _ = fs::remove_dir_all(root);
+
+    let root = git_project("check-narrowing-rejected-changed-incorrect");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "full scope supports it", &["src/main.rs"]),
+        &answer(
+            "no",
+            "src/main.rs changes to a failing answer",
+            &["src/main.rs"],
+        ),
+    ]);
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
+    assert_eq!(records.records[0].evidence, "full scope supports it");
+    assert_eq!(records.records[0].scope, vec!["."]);
+    let history = read_history_records(&root, &options.selected[0]).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].observed, "yes");
+    assert_eq!(history[0].evidence, "full scope supports it");
+    assert_eq!(history[0].scope, vec!["."]);
     let _ = fs::remove_dir_all(root);
 
     let root = git_project("check-narrowing-rejected");

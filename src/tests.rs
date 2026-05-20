@@ -82,7 +82,7 @@ use crate::check_validation::{
 };
 use crate::check_validation::{validate_optional_model, validate_plugin_config_key};
 use crate::cli::CommandError;
-use crate::cli::{command_error_needs_main_print, run};
+use crate::cli::{command_error_has_public_diagnostic, run};
 use crate::config_types::ModelConfig;
 use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, RawCheckConfig, RawExpectationItem,
@@ -90,13 +90,17 @@ use crate::config_types::{
 use crate::evaluator::{
     evaluator_response_output_schema, evaluator_turn_input, render_evaluator_turn_input,
 };
-use crate::evaluator_config::{app_server_args, app_server_model_key, evaluator_thread_config};
+use crate::evaluator_config::{
+    app_server_args, app_server_model_key, disabled_skills_config_arg, evaluator_thread_config,
+};
 use crate::evaluator_config::{
     app_server_startup_filesystem_arg, evaluator_thread_root_permissions,
     thread_reuse_carryover_token_target_arg,
 };
 use crate::evaluator_json::validate_evaluator_response_key_order;
-use crate::evaluator_prompt::{developer_instructions, response_format_block};
+use crate::evaluator_prompt::{
+    developer_instructions, response_format_block, EVALUATOR_BASE_INSTRUCTIONS,
+};
 use crate::evaluator_response::parse_evaluator_response;
 use crate::evaluator_response_cache::{response_excerpt, EvaluatorResponseParseCache};
 use crate::evaluator_scope::parse_scope_json;
@@ -183,11 +187,11 @@ use crate::token_usage_types::{
     reference_token_cost, ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
 };
 use crate::{
-    AGENTS_PATH, APP_SERVER_TURN_TIMEOUT_SECS, CHECK_PATH, DEFAULT_CHECK_TEMPLATE,
-    DEFAULT_PRE_COMMIT_HOOK, EMPTY_EVIDENCE_OBSERVED, GIT_CANON_CACHE_DIR, GIT_CANON_LOG_DIR,
-    GIT_HOOKS_PATH, HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS,
-    MALFORMED_REVIEW_WARNING, OBSERVED_IDK, OBSERVED_MALFORMED, PRE_COMMIT_HOOK_PATH, RESULT_FAIL,
-    RESULT_PASS, UNPARSEABLE_OBSERVED,
+    APP_SERVER_TURN_TIMEOUT_SECS, CHECK_PATH, DEFAULT_CHECK_TEMPLATE, DEFAULT_PRE_COMMIT_HOOK,
+    EMPTY_EVIDENCE_OBSERVED, GIT_CANON_CACHE_DIR, GIT_CANON_LOG_DIR, GIT_HOOKS_PATH,
+    HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS, MALFORMED_REVIEW_WARNING,
+    OBSERVED_IDK, OBSERVED_MALFORMED, PRE_COMMIT_HOOK_PATH, RESULT_FAIL, RESULT_PASS,
+    UNPARSEABLE_OBSERVED,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

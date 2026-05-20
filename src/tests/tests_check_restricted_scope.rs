@@ -563,6 +563,54 @@ fn check_runner_retries_full_scope_for_restricted_answer_widening() {
 }
 
 #[test]
+fn check_runner_does_not_retry_restricted_widened_empty_evidence() {
+    let root = git_project("check-restricted-widened-empty-evidence");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, false);
+    let expectation = options.selected[0].clone();
+    append_src_main_pass_history(&root, &config, &expectation);
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "", &["."]),
+        &answer("yes", "late full-scope answer", &["."]),
+    ]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(!records.records[0].passed());
+    assert!(record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
+    assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
+    assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
+    assert_eq!(runner.prompts.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_does_not_retry_restricted_widened_malformed_answer() {
+    let root = git_project("check-restricted-widened-malformed");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, false);
+    let expectation = options.selected[0].clone();
+    append_src_main_pass_history(&root, &config, &expectation);
+    let mut runner = FakeRunner::new(&[
+        &answer("malformed", "", &["."]),
+        &answer("yes", "late full-scope answer", &["."]),
+    ]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(!records.records[0].passed());
+    assert!(record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, "malformed");
+    assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
+    assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
+    assert_eq!(runner.prompts.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_does_not_widen_restricted_unparseable_response() {
     let root = git_project("check-restricted-unparseable");
     let config = parse_check_config(check_config_yaml()).unwrap();

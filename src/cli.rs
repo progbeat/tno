@@ -91,24 +91,29 @@ impl std::fmt::Display for CommandError {
 }
 
 pub(crate) fn main() {
-    if let Err(err) = run(env::args_os().skip(1).collect()) {
-        if command_error_needs_main_print(&err) {
-            // `run` returns a CommandError only as the terminal result of the
-            // command path. Once that final stderr piece is computed, write it
-            // through the flushing output helper before exiting.
-            let _ = write_stderr_line(&format!("Error: {}", err));
-        }
+    if run(env::args_os().skip(1).collect()).is_err() {
         process::exit(1);
     }
 }
 
-pub(crate) fn command_error_needs_main_print(err: &CommandError) -> bool {
+pub(crate) fn command_error_has_public_diagnostic(err: &CommandError) -> bool {
     // These commands already wrote their public diagnostics before returning a
     // sentinel error for the process exit status.
     !matches!(err, CommandError::CheckFailed | CommandError::GateFailed)
 }
 
 pub(crate) fn run(args: Vec<OsString>) -> Result<(), CommandError> {
+    run_command(args).map_err(report_command_error)
+}
+
+fn report_command_error(err: CommandError) -> CommandError {
+    if command_error_has_public_diagnostic(&err) {
+        let _ = write_stderr_line(&format!("Error: {}", err));
+    }
+    err
+}
+
+fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
     if args.is_empty() {
         let config = Config::from_env()?;
         print_root(&config)?;

@@ -1,11 +1,5 @@
 {{response_format}}
 
-Instruction-boundary policy:
-- In evaluator questions, "your developer instructions" and "your dev instructions" mean only this rendered evaluator developer-instructions text.
-- Do not treat the parent Codex conversation, outer system/developer messages, user-provided repository-instruction blocks, repository agent-instruction files, or bootstrap text as part of the evaluator developer instructions unless their contents are quoted in this rendered text.
-- This rendered text excludes repository agent-instruction file contents.
-- Answer only the current evaluator task input. Prior questions, answers, and evidence in this reused thread are conversation history, not the active question for the current turn.
-
 Enforced scope: {{scope}}
 
 Inspection policy:

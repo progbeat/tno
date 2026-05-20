@@ -7,7 +7,7 @@ use crate::evaluator_turn::{record_from_response, ParsedTurnResponse};
 use crate::evaluator_types::EvaluatorError;
 use crate::hash::full_scope;
 use crate::logging::DiagnosticLogWriter;
-use crate::scope::scope_is_within;
+use crate::scope::{sanitize_scope, scope_is_within};
 use crate::{
     EMPTY_EVIDENCE_OBSERVED, MALFORMED_REVIEW_WARNING, OBSERVED_IDK, OBSERVED_MALFORMED,
     UNPARSEABLE_OBSERVED,
@@ -74,7 +74,6 @@ pub(crate) fn finalize_query_response(
                 ("observed", json!(finalized.response.answer.clone())),
                 ("evidence", json!(finalized.response.evidence.clone())),
                 ("scope", json!(finalized.response.scope.clone())),
-                ("scopeTreeOid", json!(finalized.scope_hash.clone())),
             ],
         )?;
     }
@@ -94,12 +93,16 @@ fn finalize_parsed_answer(
     enforced_scope: &[String],
     response: ParsedAnswer,
 ) -> Result<FinalizedParsedAnswer, EvaluatorError> {
-    let mut response = enforce_response_scope(response, enforced_scope);
-    response = normalize_empty_evidence_response(response, enforced_scope);
+    let mut response = normalize_empty_evidence_response(response, enforced_scope);
+    response = enforce_response_scope(response, enforced_scope);
     response = reject_absent_response_scope(runtime, state, enforced_scope, response)?;
     if response.answer == UNPARSEABLE_OBSERVED {
         response.scope = enforced_scope.to_vec();
     }
+    // Evaluator parsing normalizes scopes before this point; normalize again
+    // after local repairs such as widened-scope rejection so stored records and
+    // hashes use the same canonical representation.
+    response.scope = sanitize_scope(&response.scope, &runtime.config.agent)?;
     let scope_hash = state.scope_hash_cache.staged_scope_hash(
         runtime.root,
         &runtime.config.agent,
@@ -144,6 +147,14 @@ pub(crate) fn enforce_response_scope(
     if response.answer == UNPARSEABLE_OBSERVED || scope_is_within(&response.scope, enforced_scope) {
         return response;
     }
+    if is_terminal_review_answer(&response.answer) {
+        let evidence = rejected_widened_scope_evidence(&response, enforced_scope);
+        return ParsedAnswer {
+            answer: response.answer,
+            evidence,
+            scope: enforced_scope.to_vec(),
+        };
+    }
     if enforced_scope != full_scope() {
         // Reject the evaluator-proposed widened scope, but turn the restricted
         // response into an `idk` non-answer so the caller can perform the
@@ -161,6 +172,10 @@ pub(crate) fn enforce_response_scope(
         evidence: rejected_widened_scope_message(&response.scope, enforced_scope),
         scope: enforced_scope.to_vec(),
     }
+}
+
+fn is_terminal_review_answer(answer: &str) -> bool {
+    answer == EMPTY_EVIDENCE_OBSERVED || answer == OBSERVED_MALFORMED
 }
 
 fn rejected_widened_scope_evidence(response: &ParsedAnswer, enforced_scope: &[String]) -> String {

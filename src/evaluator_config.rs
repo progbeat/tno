@@ -6,7 +6,10 @@ use crate::thread_reuse_config::{thread_reuse_config, ThreadReuseConfig};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::env;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+const EVALUATOR_SKILL_SCAN_MAX_DEPTH: usize = 12;
 
 pub(crate) fn evaluator_thread_config(
     agent: &AgentConfig,
@@ -148,6 +151,7 @@ fn insert_evaluator_context_isolation_config(config: &mut Map<String, Value>) {
     config.insert("include_environment_context".to_string(), json!(false));
     config.insert("include_permissions_instructions".to_string(), json!(false));
     config.insert("include_apps_instructions".to_string(), json!(false));
+    config.insert("include_apply_patch_tool".to_string(), json!(false));
     config.insert("project_doc_max_bytes".to_string(), json!(0));
 }
 
@@ -231,7 +235,11 @@ fn push_evaluator_context_isolation_args(args: &mut Vec<String>) {
     push_config_arg(args, "include_environment_context=false");
     push_config_arg(args, "include_permissions_instructions=false");
     push_config_arg(args, "include_apps_instructions=false");
+    push_config_arg(args, "include_apply_patch_tool=false");
     push_config_arg(args, "project_doc_max_bytes=0");
+    if let Some(skills_config) = evaluator_disabled_skills_config_arg() {
+        push_config_arg(args, &skills_config);
+    }
 }
 
 pub(crate) fn thread_reuse_carryover_token_target_arg(config: &ThreadReuseConfig) -> String {
@@ -265,6 +273,75 @@ pub(crate) fn app_server_startup_filesystem_arg(agent: &AgentConfig) -> String {
         "permissions.canon_check.filesystem={{{}}}",
         entries.join(",")
     )
+}
+
+pub(crate) fn evaluator_disabled_skills_config_arg() -> Option<String> {
+    disabled_skills_config_arg(evaluator_skill_paths())
+}
+
+pub(crate) fn disabled_skills_config_arg<I>(skill_paths: I) -> Option<String>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let mut paths = skill_paths
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        return None;
+    }
+    let entries = paths
+        .into_iter()
+        .map(|path| format!("{{path={},enabled=false}}", toml_string(&path)))
+        .collect::<Vec<_>>();
+    Some(format!("skills.config=[{}]", entries.join(",")))
+}
+
+fn evaluator_skill_paths() -> Vec<PathBuf> {
+    let Some(codex_home) = codex_home_path() else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    collect_skill_paths(
+        &codex_home.join("skills"),
+        EVALUATOR_SKILL_SCAN_MAX_DEPTH,
+        &mut paths,
+    );
+    collect_skill_paths(
+        &codex_home.join("plugins").join("cache"),
+        EVALUATOR_SKILL_SCAN_MAX_DEPTH,
+        &mut paths,
+    );
+    paths
+}
+
+fn codex_home_path() -> Option<PathBuf> {
+    env::var_os("CODEX_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
+}
+
+fn collect_skill_paths(root: &Path, remaining_depth: usize, paths: &mut Vec<PathBuf>) {
+    if remaining_depth == 0 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_file() && entry.file_name() == "SKILL.md" {
+            paths.push(path);
+        } else if file_type.is_dir() {
+            collect_skill_paths(&path, remaining_depth - 1, paths);
+        }
+    }
 }
 
 pub(crate) fn push_config_arg(args: &mut Vec<String>, value: &str) {

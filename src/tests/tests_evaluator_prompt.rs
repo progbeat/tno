@@ -48,6 +48,13 @@ fn evaluator_turn_uses_strict_json_output_schema() {
 }
 
 #[test]
+fn evaluator_base_instructions_define_dev_instruction_boundary() {
+    assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("developerInstructions payload"));
+    assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("apply_patch"));
+    assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("tool/bootstrap"));
+}
+
+#[test]
 fn developer_instructions_include_builtin_policy_and_optional_agent_instructions() {
     let config = parse_check_config(
         r#"
@@ -72,8 +79,7 @@ expectations:
     assert!(instructions.contains("project-relative refs enclosed in backticks"));
     assert!(instructions.contains("Never include a path outside the enforced scope"));
     assert!(instructions.contains(answer_policy));
-    assert!(instructions.contains("\"your dev instructions\" mean only this rendered evaluator"));
-    assert!(instructions.contains("excludes repository agent-instruction file contents"));
+    assert!(!instructions.contains("Instruction-boundary policy"));
 }
 
 #[test]

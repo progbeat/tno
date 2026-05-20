@@ -23,7 +23,7 @@ When `canon check` writes an instruction prefixed with `▷ `, execute it.
 
 If `canon check` gives a wrong answer or evidence while the project satisfies the `canon check` expectations, treat that as a readability issue: improve readability before retrying, using comments where they help.
 
-If `canon check` fails, fix the issue or ask a human before committing. When a fix causes a regression, improve readability around the fragile logic, using comments where helpful, before retrying.
+Whenever `canon check` fails, don't stop until the issue is fixed. When a fix causes a regression, improve readability around the fragile logic, using comments where helpful, before retrying.
 
 ## Committing
 

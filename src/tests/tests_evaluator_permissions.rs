@@ -64,6 +64,7 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
     assert_eq!(config["include_environment_context"], json!(false));
     assert_eq!(config["include_permissions_instructions"], json!(false));
     assert_eq!(config["include_apps_instructions"], json!(false));
+    assert_eq!(config["include_apply_patch_tool"], json!(false));
     assert_eq!(config["project_doc_max_bytes"], json!(0));
     assert!(config.get("plugins").is_none());
 }
@@ -165,6 +166,9 @@ fn app_server_starts_with_plugins_disabled_by_default() {
         .any(|pair| pair == ["-c", "include_apps_instructions=false"]));
     assert!(disabled
         .windows(2)
+        .any(|pair| pair == ["-c", "include_apply_patch_tool=false"]));
+    assert!(disabled
+        .windows(2)
         .any(|pair| pair == ["-c", "project_doc_max_bytes=0"]));
     let filesystem_arg = disabled
         .windows(2)
@@ -198,6 +202,23 @@ fn app_server_starts_with_plugins_disabled_by_default() {
     assert!(!enabled.iter().any(|arg| arg == "--disable"));
     assert_eq!(&enabled[enabled.len() - 2..], ["--listen", "stdio://"]);
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn app_server_startup_config_can_disable_skills_by_path() {
+    let arg = disabled_skills_config_arg([
+        PathBuf::from("/tmp/zeta/SKILL.md"),
+        PathBuf::from("/tmp/alpha/SKILL.md"),
+        PathBuf::from("/tmp/alpha/SKILL.md"),
+        PathBuf::from("/tmp/quote\"skill/SKILL.md"),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        arg,
+        r#"skills.config=[{path="/tmp/alpha/SKILL.md",enabled=false},{path="/tmp/quote\"skill/SKILL.md",enabled=false},{path="/tmp/zeta/SKILL.md",enabled=false}]"#
+    );
+    assert!(disabled_skills_config_arg(Vec::<PathBuf>::new()).is_none());
 }
 
 #[test]

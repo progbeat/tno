@@ -19,8 +19,6 @@ const HISTORY_COMPACT_KEEP_RECORDS: usize = 5;
 const HISTORY_COMPACT_CHANCE_DENOMINATOR: u64 = 15;
 const APP_SERVER_TURN_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_CHECK_TEMPLATE: &str = include_str!("../templates/check.yml");
-#[cfg(test)]
-const AGENTS_PATH: &str = "AGENTS.md";
 const GIT_HOOKS_PATH: &str = ".git/hooks";
 const PRE_COMMIT_HOOK_PATH: &str = ".git/hooks/pre-commit";
 const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../templates/pre-commit");
