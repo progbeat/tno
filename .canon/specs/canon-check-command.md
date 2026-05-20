@@ -2,7 +2,7 @@
 
 Evaluator agent sessions do not have read access to `LOGS_DIR`.
 
-`canon check` writes human-readable check output to stdout.
+`canon check` writes human-readable output to stdout.
 
 This section specifies the stdout and stderr format for check runs that process
 expectations. It is not an exhaustive output contract for modes that do not
@@ -11,13 +11,13 @@ process expectations.
 For each passing expectation that is written to stdout, stdout contains exactly
 one line:
 
-```text
+```
 P. OK
 ```
 
 For each failed expectation, stdout contains exactly six lines:
 
-```text
+```
 P. FAILED
 <escaped question>
 Expected: <escaped expected>
@@ -28,7 +28,7 @@ Scope: <compact JSON array>
 
 For each errored expectation, stdout contains exactly five lines:
 
-```text
+```
 P. ERROR
 <escaped question>
 Expected: <escaped expected>
@@ -49,17 +49,21 @@ lines.
 Skipped expectations emit no per-expectation stdout. Failing results are never
 skipped.
 
+## Token Usage Line
+
 Then stderr contains exactly one token usage line:
 
-```text
+```
 Token usage: total=<n> input=<n> (+ <n> cached) output=<n> (reasoning <n>)
 ```
 
 If token usage data is unavailable, every numeric field is `0`.
 
-Then stdout contains exactly one summary line:
+## Summary Line
 
-```text
+Then stdout contains one summary line:
+
+```
 ============================= <outcome-list> in <duration>s =============================
 ```
 
@@ -81,51 +85,26 @@ not match the expected answer.
 human review.
 `skipped` is the number of non-selected expectations.
 
-At the end of a `canon check` run, if `canon gate` checks would pass, and at
-least one selected expectation has `pass` in the staged tree while the same
-expectation's result at `HEAD` is not `pass`, then `canon check` writes this
-line to stdout:
+## Message to Agent
 
-```text
-▷ +<n> pass compared to HEAD. Commit staged changes!
+Then stdout contains exactly one message line for the agent that ran
+`canon check`.
+
+If all expectations are OK:
+
+```
+✓ All checks passed. Commit is allowed.
 ```
 
-For more than one pass, `pass` is pluralized.
-
-Warnings, model fallback notices, review-required diagnostics, timestamps,
-hashes, and internal diagnostics are recorded in [[Logs]] rather than stdout or
-stderr.
-Early command-line, configuration, and preflight errors may use normal CLI error
-output when `canon check` has not started writing check output.
-
-Example stdout for a check run with one passing expectation and one failing
-expectation:
-
-```text
-a7F. OK
-K9m. FAILED
-Does `canon check` write stdout in the format specified by [[Check Output]]?
-Expected: yes
-Observed: no
-Evidence: specs/check-output.md requires human-readable stdout\nsrc/check.rs still writes render_check_log_record(record) to stdout
-Scope: ["specs/check-output.md","src/check.rs"]
-========================= 1 failed, 1 passed in 0.42s =========================
+If some expectations are not OK, but `canon gate` would allow the commit and at least
+one expectation changed from non-OK to OK compared to HEAD:
 ```
-
-Example stderr for the same check run:
-
-```text
-Token usage: total=170,522 input=166,088 (+ 132,352 cached) output=4,434 (reasoning 3,723)
+▷ +<n> passes compared to HEAD. Commit the staged changes and continue fixing the remaining issues!
 ```
+or `+1 pass` if `n` is `1`.
 
-Example summary with a skipped expectation:
+Otherwise (there are non-OK expectations and no progress compared to HEAD):
 
-```text
-===================== 1 failed, 1 passed, 1 skipped in 0.42s =====================
 ```
-
-Example summary with an errored expectation:
-
-```text
-====================== 1 failed, 1 error, 1 passed in 0.42s ======================
+▷ Fix the issues and commit!
 ```
