@@ -2,7 +2,7 @@
   a: "Rust"
   cooldown: 20d
 
-- q: "Do any of your dev instructions before this question mention modifying files?"
+- q: "Do any of your dev instructions before this question describe how to use an operation specifically meant for changing files?"
   a: "no"
   cooldown: 20d
 
